@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const an5_adapters_1 = require("@an5/adapters");
+const adapters_1 = require("@an5/adapters");
 const rootDir = process.cwd();
 let config = {};
 try {
@@ -22,7 +22,7 @@ const schemaDir = path_1.default.resolve(rootDir, config.schemaDir || "an5Schema
 let _adapter = null;
 async function getDb() {
     if (!_adapter) {
-        _adapter = new an5_adapters_1.An5Adapter({ connectionString: process.env.DATABASE_URL });
+        _adapter = new adapters_1.An5Adapter({ connectionString: process.env.DATABASE_URL });
         await _adapter.$connect();
     }
     return _adapter;
@@ -41,6 +41,75 @@ const AN5_TYPES = new Set([
 function parseSqlType(raw) {
     const match = raw.match(/^(\w+)/);
     return match ? match[1].toUpperCase() : raw.toUpperCase();
+}
+function parseTableName(raw) {
+    const cleaned = raw.replace(/[\[\]"]/g, "");
+    const parts = cleaned.split(".").filter(Boolean);
+    if (parts.length >= 2) {
+        return { schema: parts[parts.length - 2], name: parts[parts.length - 1] };
+    }
+    return { name: cleaned };
+}
+function tableKey(raw) {
+    const table = parseTableName(raw);
+    return `${table.schema || "dbo"}.${table.name}`.toLowerCase();
+}
+function tableSqlName(raw) {
+    const table = parseTableName(raw);
+    return table.schema ? `[${table.schema}].[${table.name}]` : `[${table.name}]`;
+}
+function tableObjectName(raw) {
+    const table = parseTableName(raw);
+    return table.schema ? `${table.schema}.${table.name}` : table.name;
+}
+function safeIdentifierName(raw) {
+    return raw.replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+}
+async function dropTablesNotInSchema(models) {
+    var _a;
+    if (!((_a = config.push) === null || _a === void 0 ? void 0 : _a.dropTables)) {
+        return;
+    }
+    const validTableKeys = new Set(models.map(model => tableKey(model.tableName)));
+    const dbTables = await (await getDb()).$queryRawUnsafe(`
+    SELECT s.name AS schemaName, t.name AS tableName
+    FROM sys.tables t
+    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+    WHERE t.is_ms_shipped = 0
+  `);
+    const tablesToDrop = dbTables.filter(table => !validTableKeys.has(`${table.schemaName}.${table.tableName}`.toLowerCase()));
+    if (tablesToDrop.length === 0) {
+        console.log("✅ No extra tables to drop.");
+        return;
+    }
+    console.warn(`⚠️ Dropping ${tablesToDrop.length} table(s) not present in schema because push.dropTables=true.`);
+    const dropKeys = new Set(tablesToDrop.map(table => `${table.schemaName}.${table.tableName}`.toLowerCase()));
+    const foreignKeys = await (await getDb()).$queryRawUnsafe(`
+    SELECT
+      fk.name AS constraintName,
+      ps.name AS parentSchema,
+      pt.name AS parentTable,
+      rs.name AS referencedSchema,
+      rt.name AS referencedTable
+    FROM sys.foreign_keys fk
+    INNER JOIN sys.tables pt ON pt.object_id = fk.parent_object_id
+    INNER JOIN sys.schemas ps ON ps.schema_id = pt.schema_id
+    INNER JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
+    INNER JOIN sys.schemas rs ON rs.schema_id = rt.schema_id
+  `);
+    for (const fk of foreignKeys) {
+        const parentKey = `${fk.parentSchema}.${fk.parentTable}`.toLowerCase();
+        const referencedKey = `${fk.referencedSchema}.${fk.referencedTable}`.toLowerCase();
+        if (dropKeys.has(parentKey) || dropKeys.has(referencedKey)) {
+            console.log(`Dropping foreign key [${fk.constraintName}] on [${fk.parentSchema}].[${fk.parentTable}]...`);
+            await (await getDb()).$executeRawUnsafe(`ALTER TABLE [${fk.parentSchema}].[${fk.parentTable}] DROP CONSTRAINT [${fk.constraintName}]`);
+        }
+    }
+    for (const table of tablesToDrop) {
+        console.log(`Dropping table [${table.schemaName}].[${table.tableName}]...`);
+        await (await getDb()).$executeRawUnsafe(`DROP TABLE [${table.schemaName}].[${table.tableName}]`);
+        console.log(`✅ Dropped [${table.schemaName}].[${table.tableName}]`);
+    }
 }
 async function push() {
     let schemaText = "";
@@ -160,12 +229,15 @@ async function push() {
         }
     }
     console.log(`🚀 Pushing schema to database...`);
+    await dropTablesNotInSchema(models);
     for (const model of models) {
-        console.log(`Processing table [${model.tableName}]...`);
+        const sqlTableName = tableSqlName(model.tableName);
+        const objectName = tableObjectName(model.tableName);
+        console.log(`Processing table ${sqlTableName}...`);
         // Check if table exists
-        const tableExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.tables WHERE name = '${model.tableName}'`);
+        const tableExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.tables WHERE object_id = OBJECT_ID('${objectName}')`);
         if (tableExists.length === 0) {
-            console.log(`Creating table [${model.tableName}]...`);
+            console.log(`Creating table ${sqlTableName}...`);
             const colDefs = model.fields.map((f) => {
                 let def = `[${f.name}] ${f.sqlType}`;
                 if (f.isId)
@@ -181,32 +253,32 @@ async function push() {
             // Add compound uniques as table constraints
             if (model.compoundUniques && model.compoundUniques.length > 0) {
                 model.compoundUniques.forEach((fields, idx) => {
-                    const constraintName = `UQ_${model.tableName}_compound_${idx}`;
+                    const constraintName = `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
                     const fieldsStr = fields.map(f => `[${f}]`).join(", ");
                     colDefs.push(`CONSTRAINT [${constraintName}] UNIQUE (${fieldsStr})`);
                 });
             }
-            const createSql = `CREATE TABLE [${model.tableName}] (\n  ${colDefs.join(",\n  ")}\n)`;
+            const createSql = `CREATE TABLE ${sqlTableName} (\n  ${colDefs.join(",\n  ")}\n)`;
             await (await getDb()).$executeRawUnsafe(createSql);
-            console.log(`✅ Table [${model.tableName}] created.`);
+            console.log(`✅ Table ${sqlTableName} created.`);
             // Create indexes
             if (model.indexes && model.indexes.length > 0) {
                 for (let idx = 0; idx < model.indexes.length; idx++) {
                     const fields = model.indexes[idx];
-                    const indexName = `IX_${model.tableName}_${fields.join("_")}`;
+                    const indexName = `IX_${safeIdentifierName(model.tableName)}_${fields.join("_")}`;
                     const fieldsStr = fields.map((f) => `[${f}]`).join(", ");
-                    console.log(`Creating index [${indexName}] on table [${model.tableName}]...`);
-                    await (await getDb()).$executeRawUnsafe(`CREATE INDEX [${indexName}] ON [${model.tableName}] (${fieldsStr})`);
+                    console.log(`Creating index [${indexName}] on table ${sqlTableName}...`);
+                    await (await getDb()).$executeRawUnsafe(`CREATE INDEX [${indexName}] ON ${sqlTableName} (${fieldsStr})`);
                 }
             }
         }
         else {
             // 1. Check for missing columns
             for (const field of model.fields) {
-                const colExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('${model.tableName}') AND name = '${field.name}'`);
+                const colExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('${objectName}') AND name = '${field.name}'`);
                 if (colExists.length === 0) {
-                    console.log(`Adding column [${field.name}] to table [${model.tableName}]...`);
-                    let alterSql = `ALTER TABLE [${model.tableName}] ADD [${field.name}] ${field.sqlType}`;
+                    console.log(`Adding column [${field.name}] to table ${sqlTableName}...`);
+                    let alterSql = `ALTER TABLE ${sqlTableName} ADD [${field.name}] ${field.sqlType}`;
                     if (field.defaultValue)
                         alterSql += ` ${field.defaultValue}`;
                     if (field.isUnique && !field.isId)
@@ -224,12 +296,12 @@ async function push() {
             if (model.compoundUniques && model.compoundUniques.length > 0) {
                 for (let idx = 0; idx < model.compoundUniques.length; idx++) {
                     const fields = model.compoundUniques[idx];
-                    const constraintName = `UQ_${model.tableName}_compound_${idx}`;
-                    const constraintExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.objects WHERE type = 'UQ' AND parent_object_id = OBJECT_ID('${model.tableName}') AND name = '${constraintName}'`);
+                    const constraintName = `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
+                    const constraintExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.objects WHERE type = 'UQ' AND parent_object_id = OBJECT_ID('${objectName}') AND name = '${constraintName}'`);
                     if (constraintExists.length === 0) {
-                        console.log(`Adding compound unique constraint [${constraintName}] to table [${model.tableName}]...`);
+                        console.log(`Adding compound unique constraint [${constraintName}] to table ${sqlTableName}...`);
                         const fieldsStr = fields.map((f) => `[${f}]`).join(", ");
-                        await (await getDb()).$executeRawUnsafe(`ALTER TABLE [${model.tableName}] ADD CONSTRAINT [${constraintName}] UNIQUE (${fieldsStr})`);
+                        await (await getDb()).$executeRawUnsafe(`ALTER TABLE ${sqlTableName} ADD CONSTRAINT [${constraintName}] UNIQUE (${fieldsStr})`);
                     }
                 }
             }
@@ -237,12 +309,12 @@ async function push() {
             if (model.indexes && model.indexes.length > 0) {
                 for (let idx = 0; idx < model.indexes.length; idx++) {
                     const fields = model.indexes[idx];
-                    const indexName = `IX_${model.tableName}_${fields.join("_")}`;
-                    const indexExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.indexes WHERE object_id = OBJECT_ID('${model.tableName}') AND name = '${indexName}'`);
+                    const indexName = `IX_${safeIdentifierName(model.tableName)}_${fields.join("_")}`;
+                    const indexExists = await (await getDb()).$queryRawUnsafe(`SELECT name FROM sys.indexes WHERE object_id = OBJECT_ID('${objectName}') AND name = '${indexName}'`);
                     if (indexExists.length === 0) {
-                        console.log(`Creating index [${indexName}] on table [${model.tableName}]...`);
+                        console.log(`Creating index [${indexName}] on table ${sqlTableName}...`);
                         const fieldsStr = fields.map((f) => `[${f}]`).join(", ");
-                        await (await getDb()).$executeRawUnsafe(`CREATE INDEX [${indexName}] ON [${model.tableName}] (${fieldsStr})`);
+                        await (await getDb()).$executeRawUnsafe(`CREATE INDEX [${indexName}] ON ${sqlTableName} (${fieldsStr})`);
                     }
                 }
             }
@@ -255,4 +327,3 @@ push().catch((err) => {
     console.error("❌ Push failed:", err);
     process.exit(1);
 });
-//# sourceMappingURL=push.js.map
