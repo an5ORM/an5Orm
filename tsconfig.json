@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": ".",
+    "paths": {
+      "@an5/client": ["../an5Client/typescript"],
+      "@an5/client/*": ["../an5Client/typescript/*"],
+      "@an5/lib/*": ["../lib/*"]
+    }
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules", "dist", "generator", "test"]
+}
