@@ -20,10 +20,18 @@ class MetadataGenerator {
             }
         }
         metaContent += '};\n\n';
-        metaContent += 'export const modelFields: Record<string, Record<string, { ts: string; sql: string }>> = {\n';
+        metaContent += 'export const modelDescriptions: Record<string, string | undefined> = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
-            const fieldsStr = `{ ${model.fields.map(f => `${f.name}: { ts: "${f.type}${f.isOptional ? '?' : ''}", sql: "${f.sqlType}" }`).join(', ')} }`;
+            for (const prop of props) {
+                metaContent += `  ${prop}: ${model.description ? JSON.stringify(model.description) : 'undefined'},\n`;
+            }
+        }
+        metaContent += '};\n\n';
+        metaContent += 'export const modelFields: Record<string, Record<string, { ts: string; sql: string; description?: string }>> = {\n';
+        for (const model of models) {
+            const props = this.getAllPropertyVariations(model.name);
+            const fieldsStr = `{ ${model.fields.map(f => `${f.name}: ${this.formatFieldMetadata(f)}`).join(', ')} }`;
             for (const prop of props) {
                 metaContent += `  ${prop}: ${fieldsStr},\n`;
             }
@@ -62,6 +70,16 @@ class MetadataGenerator {
             }
         }
         return Array.from(variations);
+    }
+    formatFieldMetadata(field) {
+        const entries = [
+            `ts: ${JSON.stringify(`${field.type}${field.isOptional ? '?' : ''}`)}`,
+            `sql: ${JSON.stringify(field.sqlType)}`,
+        ];
+        if (field.description) {
+            entries.push(`description: ${JSON.stringify(field.description)}`);
+        }
+        return `{ ${entries.join(', ')} }`;
     }
     toCamelCase(str) {
         if (!str)

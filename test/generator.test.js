@@ -150,8 +150,10 @@ test('an5Client/typescript/an5Metadata.ts exists', () => {
   assertExists(metaPath);
   const content = fs.readFileSync(metaPath, 'utf8');
   assertIncludes(content, 'modelToTable');
+  assertIncludes(content, 'modelDescriptions');
   assertIncludes(content, 'relationMap');
   assertIncludes(content, 'modelFields');
+  assertIncludes(content, 'description:');
 });
 
 test('an5Client/python/an5_metadata.py exists', () => {
@@ -159,10 +161,12 @@ test('an5Client/python/an5_metadata.py exists', () => {
   assertExists(pyPath);
   const content = fs.readFileSync(pyPath, 'utf8');
   assertIncludes(content, 'MODEL_TO_TABLE');
+  assertIncludes(content, 'MODEL_DESCRIPTIONS');
   assertIncludes(content, 'MODEL_FIELDS');
   assertIncludes(content, '"name": "id"');
   assertIncludes(content, '"isId": True');
   assertIncludes(content, '"sql": "NVARCHAR(1000)"');
+  assertIncludes(content, '"description": "Primary key');
 });
 
 test('an5Client/dotnet files exist', () => {

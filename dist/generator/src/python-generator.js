@@ -21,7 +21,16 @@ class PythonGenerator {
             }
         }
         pyContent += '}\n\n';
-        // 2. MODEL_FIELDS
+        // 2. MODEL_DESCRIPTIONS
+        pyContent += 'MODEL_DESCRIPTIONS = {\n';
+        for (const model of models) {
+            const props = this.getAllPropertyVariations(model.name);
+            for (const prop of props) {
+                pyContent += `    "${prop}": ${this.pyString(model.description)},\n`;
+            }
+        }
+        pyContent += '}\n\n';
+        // 3. MODEL_FIELDS
         pyContent += 'MODEL_FIELDS = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
@@ -31,7 +40,7 @@ class PythonGenerator {
             }
         }
         pyContent += '}\n\n';
-        // 3. RELATION_MAP
+        // 4. RELATION_MAP
         pyContent += 'RELATION_MAP = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
@@ -72,9 +81,12 @@ class PythonGenerator {
         if (model.fields.length === 0)
             return '[]';
         const fields = model.fields.map(f => {
-            return `        { "name": "${f.name}", "type": "${f.type}${f.isOptional ? '?' : ''}", "sql": "${f.sqlType}", "isOptional": ${f.isOptional ? 'True' : 'False'}, "hasDefault": ${f.hasDefault ? 'True' : 'False'}, "isId": ${f.isId ? 'True' : 'False'} }`;
+            return `        { "name": "${f.name}", "type": "${f.type}${f.isOptional ? '?' : ''}", "sql": "${f.sqlType}", "isOptional": ${f.isOptional ? 'True' : 'False'}, "hasDefault": ${f.hasDefault ? 'True' : 'False'}, "isId": ${f.isId ? 'True' : 'False'}, "description": ${this.pyString(f.description)} }`;
         });
         return `[\n${fields.join(',\n')}\n    ]`;
+    }
+    pyString(value) {
+        return value ? JSON.stringify(value) : 'None';
     }
     toCamelCase(str) {
         if (!str)
