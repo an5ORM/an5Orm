@@ -1,5 +1,5 @@
 import sql from "mssql";
-import { An5Adapter } from "an5-adapters";
+import { An5Adapter } from "@an5/adapters";
 import { randomUUID } from "crypto";
 import { logger } from "@an5/lib/logger";
 import { An5 } from "an5-client/typescript";

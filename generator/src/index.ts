@@ -24,7 +24,7 @@ function clearGeneratedFiles(outputDir: string, extension: string) {
 }
 
 async function main() {
-  const rootDir = path.join(__dirname, '../../../');
+  const rootDir = process.cwd();
   let config: any = {};
   
   try {

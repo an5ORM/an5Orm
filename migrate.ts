@@ -10,9 +10,9 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { An5Adapter } from 'an5-adapters';
+import { An5Adapter } from '@an5/adapters';
 
-const rootDir = path.join(__dirname, '../');
+const rootDir = process.cwd();
 let config: any = {};
 try {
   const configPath = path.join(rootDir, 'an5Orm.config.js');
