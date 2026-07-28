@@ -25,7 +25,7 @@ class PythonGenerator {
         pyContent += 'MODEL_FIELDS = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
-            const fieldsStr = `{ ${model.fields.map(f => `"${f.name}": "${f.type}${f.isOptional ? '?' : ''}"`).join(', ')} }`;
+            const fieldsStr = this.formatFields(model);
             for (const prop of props) {
                 pyContent += `    "${prop}": ${fieldsStr},\n`;
             }
@@ -67,6 +67,14 @@ class PythonGenerator {
             }
         }
         return Array.from(variations);
+    }
+    formatFields(model) {
+        if (model.fields.length === 0)
+            return '[]';
+        const fields = model.fields.map(f => {
+            return `        { "name": "${f.name}", "type": "${f.type}${f.isOptional ? '?' : ''}", "sql": "${f.sqlType}", "isOptional": ${f.isOptional ? 'True' : 'False'}, "hasDefault": ${f.hasDefault ? 'True' : 'False'}, "isId": ${f.isId ? 'True' : 'False'} }`;
+        });
+        return `[\n${fields.join(',\n')}\n    ]`;
     }
     toCamelCase(str) {
         if (!str)

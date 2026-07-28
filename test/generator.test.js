@@ -160,6 +160,9 @@ test('an5Client/python/an5_metadata.py exists', () => {
   const content = fs.readFileSync(pyPath, 'utf8');
   assertIncludes(content, 'MODEL_TO_TABLE');
   assertIncludes(content, 'MODEL_FIELDS');
+  assertIncludes(content, '"name": "id"');
+  assertIncludes(content, '"isId": True');
+  assertIncludes(content, '"sql": "NVARCHAR(1000)"');
 });
 
 test('an5Client/dotnet files exist', () => {
