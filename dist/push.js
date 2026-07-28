@@ -50,10 +50,6 @@ function parseTableName(raw) {
     }
     return { name: cleaned };
 }
-function tableKey(raw) {
-    const table = parseTableName(raw);
-    return `${table.schema || "dbo"}.${table.name}`.toLowerCase();
-}
 function tableSqlName(raw) {
     const table = parseTableName(raw);
     return table.schema ? `[${table.schema}].[${table.name}]` : `[${table.name}]`;
@@ -64,52 +60,6 @@ function tableObjectName(raw) {
 }
 function safeIdentifierName(raw) {
     return raw.replace(/[^A-Za-z0-9_]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
-}
-async function dropTablesNotInSchema(models) {
-    var _a;
-    if (!((_a = config.push) === null || _a === void 0 ? void 0 : _a.dropTables)) {
-        return;
-    }
-    const validTableKeys = new Set(models.map(model => tableKey(model.tableName)));
-    const dbTables = await (await getDb()).$queryRawUnsafe(`
-    SELECT s.name AS schemaName, t.name AS tableName
-    FROM sys.tables t
-    INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
-    WHERE t.is_ms_shipped = 0
-  `);
-    const tablesToDrop = dbTables.filter(table => !validTableKeys.has(`${table.schemaName}.${table.tableName}`.toLowerCase()));
-    if (tablesToDrop.length === 0) {
-        console.log("✅ No extra tables to drop.");
-        return;
-    }
-    console.warn(`⚠️ Dropping ${tablesToDrop.length} table(s) not present in schema because push.dropTables=true.`);
-    const dropKeys = new Set(tablesToDrop.map(table => `${table.schemaName}.${table.tableName}`.toLowerCase()));
-    const foreignKeys = await (await getDb()).$queryRawUnsafe(`
-    SELECT
-      fk.name AS constraintName,
-      ps.name AS parentSchema,
-      pt.name AS parentTable,
-      rs.name AS referencedSchema,
-      rt.name AS referencedTable
-    FROM sys.foreign_keys fk
-    INNER JOIN sys.tables pt ON pt.object_id = fk.parent_object_id
-    INNER JOIN sys.schemas ps ON ps.schema_id = pt.schema_id
-    INNER JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
-    INNER JOIN sys.schemas rs ON rs.schema_id = rt.schema_id
-  `);
-    for (const fk of foreignKeys) {
-        const parentKey = `${fk.parentSchema}.${fk.parentTable}`.toLowerCase();
-        const referencedKey = `${fk.referencedSchema}.${fk.referencedTable}`.toLowerCase();
-        if (dropKeys.has(parentKey) || dropKeys.has(referencedKey)) {
-            console.log(`Dropping foreign key [${fk.constraintName}] on [${fk.parentSchema}].[${fk.parentTable}]...`);
-            await (await getDb()).$executeRawUnsafe(`ALTER TABLE [${fk.parentSchema}].[${fk.parentTable}] DROP CONSTRAINT [${fk.constraintName}]`);
-        }
-    }
-    for (const table of tablesToDrop) {
-        console.log(`Dropping table [${table.schemaName}].[${table.tableName}]...`);
-        await (await getDb()).$executeRawUnsafe(`DROP TABLE [${table.schemaName}].[${table.tableName}]`);
-        console.log(`✅ Dropped [${table.schemaName}].[${table.tableName}]`);
-    }
 }
 async function push() {
     let schemaText = "";
@@ -229,7 +179,6 @@ async function push() {
         }
     }
     console.log(`🚀 Pushing schema to database...`);
-    await dropTablesNotInSchema(models);
     for (const model of models) {
         const sqlTableName = tableSqlName(model.tableName);
         const objectName = tableObjectName(model.tableName);

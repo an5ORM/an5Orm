@@ -11,8 +11,4 @@ assert.ok(packageJson.scripts && packageJson.scripts['db:push'], 'Expected db:pu
 assert.ok(fs.existsSync(path.join(root, 'generator', 'src', 'index.ts')), 'Expected generator entrypoint');
 assert.ok(fs.existsSync(schemaPath), 'Expected sample schema file');
 
-const pushSource = fs.readFileSync(path.join(root, 'push.ts'), 'utf8');
-assert.ok(pushSource.includes('dropTablesNotInSchema'), 'Expected db:push to support dropTables cleanup');
-assert.ok(pushSource.includes('config.push?.dropTables'), 'Expected db:push to honor push.dropTables config');
-
 console.log('an5Orm smoke test passed');
