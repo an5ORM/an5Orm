@@ -66,14 +66,22 @@ function generateChangelog(groups: ChangeGroup[]): string {
   return lines.join('\n').trim();
 }
 
-function maybeUseLLM(summary: string): string {
-  const key = process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY;
-  if (!key) return summary;
+async function maybeUseLLM(summary: string): Promise<string> {
+  let apiKey = '';
+  try {
+    const configPath = require('path').join(__dirname, '..', '..', 'an5Adapters', 'typescript', 'config');
+    const mod = require(configPath);
+    if (mod?.getLlmConfig) {
+      const db = await mod.getLlmConfig();
+      if (db) apiKey = db.apiKey;
+    }
+  } catch {}
+  if (!apiKey) return summary;
 
   try {
     const prompt = `Summarize these changes into one concise release note in English:\n${summary}`;
     const payload = JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'system', content: 'You are a helpful release note writer.' }, { role: 'user', content: prompt }] });
-    const response = run(`curl -s https://api.openai.com/v1/chat/completions -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '${payload}'`, true);
+    const response = run(`curl -s https://api.openai.com/v1/chat/completions -H "Authorization: Bearer ${apiKey}" -H "Content-Type: application/json" -d '${payload}'`, true);
     const parsed = JSON.parse(response);
     return parsed.choices?.[0]?.message?.content?.trim() || summary;
   } catch {
@@ -81,7 +89,7 @@ function maybeUseLLM(summary: string): string {
   }
 }
 
-function main() {
+async function main() {
   const groups = collectChanges();
   if (groups.length === 0) {
     console.log('No modified files detected.');
@@ -93,7 +101,7 @@ function main() {
   fs.writeFileSync(outputPath, changelog + '\n');
 
   const summary = groups.map(g => `${g.component}: ${g.files.join(', ')}`).join('\n');
-  const llmSummary = maybeUseLLM(summary);
+  const llmSummary = await maybeUseLLM(summary);
   console.log('\nGenerated changelog:\n');
   console.log(changelog);
   console.log('\nLLM summary:\n');
@@ -106,4 +114,4 @@ function main() {
   console.log(`\nCommitted with: ${commitMessage}`);
 }
 
-main();
+main().catch(console.error);

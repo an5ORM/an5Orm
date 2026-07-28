@@ -15,10 +15,9 @@ const dryRun = args.includes('--dry-run');
 const bumpType = args.find(a => ['patch', 'minor', 'major'].includes(a)) || 'patch';
 
 const packages = [
-  { name: 'an5-orm', path: path.join(__dirname, '..') },
   { name: 'an5-client', path: path.join(__dirname, '..', '..', 'an5Client') },
   { name: 'an5-adapters', path: path.join(__dirname, '..', '..', 'an5Adapters') },
-  { name: 'an5-agent', path: path.join(__dirname, '..', '..', 'an5Agent') },
+  { name: 'an5-orm', path: path.join(__dirname, '..') },
 ];
 
 function run(cmd, cwd) {

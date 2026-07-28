@@ -2,8 +2,13 @@
   "name": "an5-orm",
   "version": "1.0.0",
   "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, and .NET (C#).",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/an5ORM/an5Orm.git"
+  },
   "scripts": {
     "generate": "npx tsx generator/src/index.ts",
     "db:push": "npx tsx push.ts",
@@ -21,6 +26,7 @@
     "test:generator": "node test/generator.test.js"
   },
   "dependencies": {
+    "an5-adapters": "^0.1.0",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "mssql": "^12.5.5"
@@ -31,5 +37,8 @@
     "@types/node": "^20.11.0",
     "tsx": "^4.7.1",
     "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
