@@ -1,4 +1,4 @@
-# an5Orm
+# @an5/orm
 
 SQL Server ORM. Proxy client. CRUD. Vector search. Middleware. Raw queries. Transactions.
 
@@ -15,6 +15,12 @@ SQL Server ORM. Proxy client. CRUD. Vector search. Middleware. Raw queries. Tran
 
 ## Quick Start
 
+### Installation
+
+```bash
+npm install @an5/orm
+```
+
 ### Configuration
 
 ```bash
@@ -26,16 +32,19 @@ cp .env.example .env
 
 ```bash
 # Generate code from schema
-npm run generate
+npx an5 generate
 
 # Push schema to database
-npm run db:push
+npx an5 db:push
 
 # Pull schema from database
-npm run db:pull
+npx an5 db:pull
 
 # Seed database
-npm run db:seed
+npx an5 db:seed
+
+# Compare schema with database
+npx an5 db:migrate diff
 
 # Run tests
 npm test
@@ -44,7 +53,7 @@ npm test
 ## Usage
 
 ```typescript
-import { An5ORM } from './an5Orm';
+import { An5ORM } from '@an5/orm';
 
 const db = new An5ORM();
 
