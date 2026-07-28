@@ -5,6 +5,11 @@
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist/**/*.{js,d.ts}",
+    "generator/src/**/*.ts",
+    "README.md"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/an5ORM/an5Orm.git"
