@@ -17,8 +17,14 @@ SQL Server ORM. Proxy client. CRUD. Vector search. Middleware. Raw queries. Tran
 
 ### Installation
 
+#### TypeScript / Node.js
 ```bash
 npm install @an5/orm
+```
+
+#### Python
+```bash
+pip install an5-orm
 ```
 
 ### Configuration
