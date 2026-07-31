@@ -24,7 +24,7 @@ function clearGeneratedFiles(outputDir: string, extension: string) {
 }
 
 async function main() {
-  const rootDir = process.cwd();
+  let rootDir = process.cwd();
   let config: any = {};
   
   try {
@@ -32,8 +32,17 @@ async function main() {
     if (!fs.existsSync(configPath)) {
       configPath = path.join(rootDir, 'an5Orm.config.cjs');
     }
+    if (!fs.existsSync(configPath)) {
+      configPath = path.join(rootDir, '..', 'an5Orm.config.js');
+    }
+    if (!fs.existsSync(configPath)) {
+      configPath = path.join(rootDir, '..', 'an5Orm.config.cjs');
+    }
     if (fs.existsSync(configPath)) {
       config = require(configPath);
+      rootDir = path.dirname(configPath);
+    } else if (fs.existsSync(path.join(rootDir, '..', 'an5Schema'))) {
+      rootDir = path.resolve(rootDir, '..');
     }
   } catch (err) {
     console.warn('⚠️ Could not load an5Orm.config.js/.cjs, using defaults.', err);

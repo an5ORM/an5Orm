@@ -28,7 +28,7 @@ jobs:
       - name: Run unit tests
         run: node test/unit.test.js
       - name: Run generator tests
-        run: node test/generator.test.js
+        run: npm run generate && node test/generator.test.js
       - name: Run smoke test
         run: npm test
       - name: Build Python package
