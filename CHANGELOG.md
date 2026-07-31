@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.6] - 2026-07-31
+
+- chore: update misc, generator
+
 ## [1.0.1] - 2026-07-05
 
 - chore(readme): simplify and condense content

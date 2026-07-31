@@ -28,12 +28,15 @@ async function main() {
   let config: any = {};
   
   try {
-    const configPath = path.join(rootDir, 'an5Orm.config.js');
+    let configPath = path.join(rootDir, 'an5Orm.config.js');
+    if (!fs.existsSync(configPath)) {
+      configPath = path.join(rootDir, 'an5Orm.config.cjs');
+    }
     if (fs.existsSync(configPath)) {
       config = require(configPath);
     }
   } catch (err) {
-    console.warn('⚠️ Could not load an5Orm.config.js, using defaults.', err);
+    console.warn('⚠️ Could not load an5Orm.config.js/.cjs, using defaults.', err);
   }
 
   const schemaDir = path.resolve(rootDir, config.schemaDir || 'an5Schema');

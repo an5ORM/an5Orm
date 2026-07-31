@@ -29,13 +29,16 @@ async function main() {
     const rootDir = process.cwd();
     let config = {};
     try {
-        const configPath = path_1.default.join(rootDir, 'an5Orm.config.js');
+        let configPath = path_1.default.join(rootDir, 'an5Orm.config.js');
+        if (!fs_1.default.existsSync(configPath)) {
+            configPath = path_1.default.join(rootDir, 'an5Orm.config.cjs');
+        }
         if (fs_1.default.existsSync(configPath)) {
             config = require(configPath);
         }
     }
     catch (err) {
-        console.warn('⚠️ Could not load an5Orm.config.js, using defaults.', err);
+        console.warn('⚠️ Could not load an5Orm.config.js/.cjs, using defaults.', err);
     }
     const schemaDir = path_1.default.resolve(rootDir, config.schemaDir || 'an5Schema');
     const outputTypesDir = path_1.default.resolve(rootDir, config.outputs?.typescript?.outputDir || 'an5Client/typescript');

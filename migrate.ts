@@ -15,7 +15,10 @@ import { An5Adapter } from '@an5/adapters';
 const rootDir = process.cwd();
 let config: any = {};
 try {
-  const configPath = path.join(rootDir, 'an5Orm.config.js');
+  let configPath = path.join(rootDir, 'an5Orm.config.js');
+  if (!fs.existsSync(configPath)) {
+    configPath = path.join(rootDir, 'an5Orm.config.cjs');
+  }
   if (fs.existsSync(configPath)) {
     config = require(configPath);
   }

@@ -10,7 +10,10 @@ const an5_adapters_1 = require("@an5/adapters");
 const rootDir = process.cwd();
 let config = {};
 try {
-    const configPath = path_1.default.join(rootDir, "an5Orm.config.js");
+    let configPath = path_1.default.join(rootDir, "an5Orm.config.js");
+    if (!fs_1.default.existsSync(configPath)) {
+        configPath = path_1.default.join(rootDir, "an5Orm.config.cjs");
+    }
     if (fs_1.default.existsSync(configPath)) {
         config = require(configPath);
     }
