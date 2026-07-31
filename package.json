@@ -32,7 +32,7 @@
     "release": "node scripts/release.js",
     "test": "node test/smoke.test.js",
     "test:unit": "node test/unit.test.js",
-    "test:generator": "node test/generator.test.js"
+    "test:generator": "npm run generate && node test/generator.test.js"
   },
   "dependencies": {
     "@an5/adapters": "^0.2.3",
