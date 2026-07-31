@@ -22,3 +22,7 @@ dependencies = [
 [tool.setuptools]
 package-dir = {"" = "python"}
 py-modules = ["an5_orm"]
+
+[tool.pyright]
+extraPaths = ["../an5Adapters/python", "python"]
+
