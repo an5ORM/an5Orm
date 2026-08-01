@@ -36,21 +36,27 @@ cp .env.example .env
 
 ### Development Commands
 
+Run from the `an5Orm/` repository directory (no separate CLI binary is shipped):
+
 ```bash
-# Generate code from schema
-npx an5 generate
+# Generate client code from schema
+npm run generate
 
 # Push schema to database
-npx an5 db:push
+npm run db:push
 
 # Pull schema from database
-npx an5 db:pull
+npm run db:pull
 
 # Seed database
-npx an5 db:seed
+npm run db:seed
 
 # Compare schema with database
-npx an5 db:migrate diff
+npm run db:migrate diff
+
+# Generate migration SQL / show status
+npm run db:migrate:generate
+npm run db:migrate:status
 
 # Run tests
 npm test
@@ -62,6 +68,22 @@ npm test
 import { An5ORM } from '@an5/orm';
 
 const db = new An5ORM();
+```
+
+The default executor reads the `DATABASE_URL` environment variable. Schema metadata
+(model→table mapping, relations, field types) is auto-loaded from the ORM's own generated
+metadata file `an5Metadata.ts` (created by `npm run generate`, configured via
+`outputs.typescript.ormMetadataFile`). The ORM owns this metadata locally — it never
+imports from the generated client package (the client is generated *from* the ORM).
+
+To provide metadata explicitly instead:
+
+```typescript
+import { An5ORM } from '@an5/orm';
+import { modelToTable, relationMap, modelFields } from './an5Metadata';
+
+const db = new An5ORM(undefined, { modelToTable, relationMap, modelFields });
+```
 
 // CRUD Operations
 const users = await db.user.findMany({

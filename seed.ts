@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "./config";
 import { An5ORM } from "../an5Orm";
-import { modelToTable, relationMap, modelFields } from "../an5Client/typescript/an5Metadata";
+import { modelToTable, relationMap, modelFields } from "./an5Metadata";
 
 let bcrypt: any;
 try {

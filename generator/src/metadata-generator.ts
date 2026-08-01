@@ -3,11 +3,14 @@ import path from 'path';
 import { Model } from './types';
 
 export class MetadataGenerator {
-  constructor(private outputPath: string) {}
+  constructor(
+    private outputPath: string,
+    private relationImport: string = 'import type { RelationDef } from "@an5/orm";'
+  ) {}
 
   public generate(models: Model[]) {
     let metaContent = '// This file is auto-generated. Do not edit directly.\n\n';
-    metaContent += 'import type { RelationDef } from "@an5/orm";\n\n';
+    metaContent += `${this.relationImport}\n\n`;
 
     metaContent += 'export const modelToTable: Record<string, string> = {\n';
     for (const model of models) {

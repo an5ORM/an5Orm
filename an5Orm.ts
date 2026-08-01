@@ -1055,13 +1055,14 @@ export interface MiddlewareParams {
 export type MiddlewareNext = (params: MiddlewareParams) => Promise<any>;
 export type Middleware = (params: MiddlewareParams, next: MiddlewareNext) => Promise<any>;
 
-// Lazy-load generated schema metadata from the optional `an5-client` package so
-// `new An5ORM()` resolves schema models out of the box while staying decoupled.
+// Lazy-load generated schema metadata from the ORM's own generated copy so
+// `new An5ORM()` resolves schema models out of the box without the core ever
+// importing from the generated client package (client is generated FROM the ORM).
 let autoMetadata: An5Metadata | null = null;
 function loadAutoMetadata(): An5Metadata {
   if (autoMetadata) return autoMetadata;
   try {
-    const m = require("an5-client/typescript/an5Metadata.js") as An5Metadata;
+    const m = require("./an5Metadata") as An5Metadata;
     autoMetadata = {
       modelToTable: m.modelToTable || {},
       relationMap: m.relationMap || {},
