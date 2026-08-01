@@ -15,7 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const an5_adapters_1 = require("@an5/adapters");
+const adapters_1 = require("@an5/adapters");
 const rootDir = process.cwd();
 let config = {};
 try {
@@ -33,7 +33,7 @@ const migrationsDir = path_1.default.resolve(rootDir, 'migrations');
 let _adapter = null;
 async function getDb() {
     if (!_adapter) {
-        _adapter = new an5_adapters_1.An5Adapter({ connectionString: process.env.DATABASE_URL });
+        _adapter = new adapters_1.An5Adapter({ connectionString: process.env.DATABASE_URL });
         await _adapter.$connect();
     }
     return _adapter;
@@ -155,7 +155,66 @@ async function getExistingTables() {
   `);
     return rows.map(r => r.name);
 }
-function generateDiff(schemaModels, dbTables) {
+function generateColumnDiff(model, dbColumns, ops) {
+    const dbColumnMap = new Map(dbColumns.map(c => [c.columnName.toLowerCase(), c]));
+    const schemaFields = model.fields;
+    // ADD_COLUMN: in schema but not in DB
+    for (const f of schemaFields) {
+        const existing = dbColumnMap.get(f.name.toLowerCase());
+        if (!existing) {
+            let def = `[${f.name}] ${f.sqlType}`;
+            if (f.isId)
+                def += ' PRIMARY KEY';
+            if (f.defaultValue)
+                def += ` ${mapDefault(f.defaultValue)}`;
+            if (!f.isOptional && !f.defaultValue && !f.isId)
+                def += ' NOT NULL';
+            if (f.isUnique && !f.isId)
+                def += ' UNIQUE';
+            ops.push({
+                type: 'ADD_COLUMN',
+                table: model.tableName,
+                column: f.name,
+                sql: `ALTER TABLE [${model.tableName}] ADD ${def}`,
+            });
+            continue;
+        }
+        // ALTER_COLUMN: type or nullability drifted
+        const schemaBase = parseSqlType(f.sqlType);
+        const dbBase = parseSqlType(existing.dataType || '');
+        const schemaNullable = f.isOptional;
+        const dbNullable = Boolean(existing.isNullable);
+        const typeChanged = schemaBase !== dbBase;
+        const nullableChanged = schemaNullable !== dbNullable;
+        if (typeChanged || nullableChanged) {
+            const def = `[${f.name}] ${f.sqlType}`;
+            const alterSql = `ALTER TABLE [${model.tableName}] ALTER COLUMN ${def}`;
+            ops.push({
+                type: 'ALTER_COLUMN',
+                table: model.tableName,
+                column: f.name,
+                details: typeChanged
+                    ? `type ${dbBase} -> ${schemaBase}${nullableChanged ? `, nullable ${dbNullable} -> ${schemaNullable}` : ''}`
+                    : `nullable ${dbNullable} -> ${schemaNullable}`,
+                sql: alterSql,
+            });
+        }
+    }
+    // DROP_COLUMN: in DB but not in schema (non-destructive: commented out)
+    const schemaColumnNames = new Set(schemaFields.map(f => f.name.toLowerCase()));
+    for (const c of dbColumns) {
+        if (!schemaColumnNames.has(c.columnName.toLowerCase())) {
+            ops.push({
+                type: 'DROP_COLUMN',
+                table: model.tableName,
+                column: c.columnName,
+                details: `Column not in schema`,
+                sql: `-- ALTER TABLE [${model.tableName}] DROP COLUMN [${c.columnName}]`,
+            });
+        }
+    }
+}
+async function generateDiff(schemaModels, dbTables) {
     const ops = [];
     const schemaTableNames = new Set(schemaModels.map(m => m.tableName));
     // New tables
@@ -177,13 +236,20 @@ function generateDiff(schemaModels, dbTables) {
             ops.push({ type: 'CREATE_TABLE', table: model.tableName, sql });
         }
     }
-    // Dropped tables
+    // Existing tables: column-level drift
+    for (const model of schemaModels) {
+        if (dbTables.includes(model.tableName)) {
+            const dbColumns = await introspectTable(model.tableName);
+            generateColumnDiff(model, dbColumns, ops);
+        }
+    }
+    // Dropped tables (non-destructive: commented out)
     for (const tableName of dbTables) {
         if (!schemaTableNames.has(tableName)) {
             ops.push({
-                type: 'DROP_COLUMN',
+                type: 'DROP_TABLE',
                 table: tableName,
-                details: `Table not in schema - consider dropping`,
+                details: `Table not in schema`,
                 sql: `-- DROP TABLE [${tableName}]`,
             });
         }
@@ -204,7 +270,7 @@ function mapDefault(val) {
     if (val === 'false')
         return 'DEFAULT 0';
     if (/^".*"$/.test(val))
-        return `DEFAULT '${val.slice(1, -1)}'`;
+        return `DEFAULT '${val.slice(1, -1).replace(/'/g, "''")}'`;
     return `DEFAULT ${val}`;
 }
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -214,7 +280,7 @@ async function cmdDiff() {
     const dbTables = await getExistingTables();
     console.log(`Schema: ${schemaModels.length} models`);
     console.log(`Database: ${dbTables.length} tables\n`);
-    const ops = generateDiff(schemaModels, dbTables);
+    const ops = await generateDiff(schemaModels, dbTables);
     if (ops.length === 0) {
         console.log('✅ Schema is in sync with database.');
         return;
@@ -232,7 +298,7 @@ async function cmdGenerate() {
     console.log('\n📝 Generating migration file...\n');
     const schemaModels = parseSchema();
     const dbTables = await getExistingTables();
-    const ops = generateDiff(schemaModels, dbTables);
+    const ops = await generateDiff(schemaModels, dbTables);
     if (ops.length === 0) {
         console.log('No migrations needed.');
         return;
@@ -298,4 +364,3 @@ main().catch((err) => {
     console.error('❌ Migration failed:', err);
     process.exit(1);
 });
-//# sourceMappingURL=migrate.js.map

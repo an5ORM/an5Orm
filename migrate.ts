@@ -191,14 +191,78 @@ async function getExistingTables(): Promise<string[]> {
 // ─── Diff Engine ─────────────────────────────────────────────────────────────
 
 interface MigrationOp {
-  type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'DROP_INDEX';
+  type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'DROP_INDEX' | 'DROP_TABLE';
   table: string;
   column?: string;
   details?: string;
   sql?: string;
 }
 
-function generateDiff(schemaModels: SchemaModel[], dbTables: string[]): MigrationOp[] {
+function generateColumnDiff(
+  model: SchemaModel,
+  dbColumns: DbColumn[],
+  ops: MigrationOp[]
+): void {
+  const dbColumnMap = new Map(dbColumns.map(c => [c.columnName.toLowerCase(), c]));
+  const schemaFields = model.fields;
+
+  // ADD_COLUMN: in schema but not in DB
+  for (const f of schemaFields) {
+    const existing = dbColumnMap.get(f.name.toLowerCase());
+    if (!existing) {
+      let def = `[${f.name}] ${f.sqlType}`;
+      if (f.isId) def += ' PRIMARY KEY';
+      if (f.defaultValue) def += ` ${mapDefault(f.defaultValue)}`;
+      if (!f.isOptional && !f.defaultValue && !f.isId) def += ' NOT NULL';
+      if (f.isUnique && !f.isId) def += ' UNIQUE';
+      ops.push({
+        type: 'ADD_COLUMN',
+        table: model.tableName,
+        column: f.name,
+        sql: `ALTER TABLE [${model.tableName}] ADD ${def}`,
+      });
+      continue;
+    }
+
+    // ALTER_COLUMN: type or nullability drifted
+    const schemaBase = parseSqlType(f.sqlType);
+    const dbBase = parseSqlType(existing.dataType || '');
+    const schemaNullable = f.isOptional;
+    const dbNullable = Boolean(existing.isNullable);
+    const typeChanged = schemaBase !== dbBase;
+    const nullableChanged = schemaNullable !== dbNullable;
+
+    if (typeChanged || nullableChanged) {
+      const def = `[${f.name}] ${f.sqlType}`;
+      const alterSql = `ALTER TABLE [${model.tableName}] ALTER COLUMN ${def}`;
+      ops.push({
+        type: 'ALTER_COLUMN',
+        table: model.tableName,
+        column: f.name,
+        details: typeChanged
+          ? `type ${dbBase} -> ${schemaBase}${nullableChanged ? `, nullable ${dbNullable} -> ${schemaNullable}` : ''}`
+          : `nullable ${dbNullable} -> ${schemaNullable}`,
+        sql: alterSql,
+      });
+    }
+  }
+
+  // DROP_COLUMN: in DB but not in schema (non-destructive: commented out)
+  const schemaColumnNames = new Set(schemaFields.map(f => f.name.toLowerCase()));
+  for (const c of dbColumns) {
+    if (!schemaColumnNames.has(c.columnName.toLowerCase())) {
+      ops.push({
+        type: 'DROP_COLUMN',
+        table: model.tableName,
+        column: c.columnName,
+        details: `Column not in schema`,
+        sql: `-- ALTER TABLE [${model.tableName}] DROP COLUMN [${c.columnName}]`,
+      });
+    }
+  }
+}
+
+async function generateDiff(schemaModels: SchemaModel[], dbTables: string[]): Promise<MigrationOp[]> {
   const ops: MigrationOp[] = [];
   const schemaTableNames = new Set(schemaModels.map(m => m.tableName));
 
@@ -219,13 +283,21 @@ function generateDiff(schemaModels: SchemaModel[], dbTables: string[]): Migratio
     }
   }
 
-  // Dropped tables
+  // Existing tables: column-level drift
+  for (const model of schemaModels) {
+    if (dbTables.includes(model.tableName)) {
+      const dbColumns = await introspectTable(model.tableName);
+      generateColumnDiff(model, dbColumns, ops);
+    }
+  }
+
+  // Dropped tables (non-destructive: commented out)
   for (const tableName of dbTables) {
     if (!schemaTableNames.has(tableName)) {
       ops.push({
-        type: 'DROP_COLUMN',
+        type: 'DROP_TABLE',
         table: tableName,
-        details: `Table not in schema - consider dropping`,
+        details: `Table not in schema`,
         sql: `-- DROP TABLE [${tableName}]`,
       });
     }
@@ -241,7 +313,7 @@ function mapDefault(val: string): string {
   if (val === 'autoincrement()') return 'IDENTITY(1,1)';
   if (val === 'true') return 'DEFAULT 1';
   if (val === 'false') return 'DEFAULT 0';
-  if (/^".*"$/.test(val)) return `DEFAULT '${val.slice(1, -1)}'`;
+  if (/^".*"$/.test(val)) return `DEFAULT '${val.slice(1, -1).replace(/'/g, "''")}'`;
   return `DEFAULT ${val}`;
 }
 
@@ -256,7 +328,7 @@ async function cmdDiff() {
   console.log(`Schema: ${schemaModels.length} models`);
   console.log(`Database: ${dbTables.length} tables\n`);
 
-  const ops = generateDiff(schemaModels, dbTables);
+  const ops = await generateDiff(schemaModels, dbTables);
 
   if (ops.length === 0) {
     console.log('✅ Schema is in sync with database.');
@@ -276,7 +348,7 @@ async function cmdGenerate() {
 
   const schemaModels = parseSchema();
   const dbTables = await getExistingTables();
-  const ops = generateDiff(schemaModels, dbTables);
+  const ops = await generateDiff(schemaModels, dbTables);
 
   if (ops.length === 0) {
     console.log('No migrations needed.');

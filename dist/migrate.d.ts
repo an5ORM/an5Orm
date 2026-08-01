@@ -8,4 +8,3 @@
  *   npx tsx migrate.ts status     # Show migration status
  */
 import 'dotenv/config';
-//# sourceMappingURL=migrate.d.ts.map

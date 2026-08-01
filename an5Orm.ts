@@ -5,8 +5,30 @@ import { logger } from "@an5/lib/logger";
 import { An5 } from "an5-client/typescript";
 
 import { modelToTable, relationMap, RelationDef, modelFields } from "an5-client/typescript/an5Metadata";
+import {
+  quoteIdentifier,
+  sanitizeParamName,
+  normalizeSortDirection,
+  toNonNegativeInt,
+  buildOrderBy,
+  parseWhere as buildWhere,
+} from "./sql-utils";
 
 type ExecutorFn = (queryText: string, params?: Record<string, any>) => Promise<any[]>;
+
+const QUERY_CTX = { relationMap, modelToTable };
+
+function parseWhere(modelName: string, where: any, params: Record<string, any>, prefix = ""): string {
+  return buildWhere(modelName, where, params, prefix, QUERY_CTX);
+}
+
+function aggSelect(fn: string, key: string): string {
+  return `${fn}(${quoteIdentifier(key)}) as ${aggAlias(fn, key)}`;
+}
+
+function aggAlias(fn: string, key: string): string {
+  return sanitizeParamName(`${fn}_${key}`);
+}
 
 let adapter: An5Adapter | null = null;
 
@@ -21,173 +43,6 @@ async function getAdapter(): Promise<An5Adapter> {
 async function execQuery(queryText: string, params?: Record<string, any>): Promise<any[]> {
   const a = await getAdapter();
   return a.exec(queryText, params);
-}
-
-function parseWhere(modelName: string, where: any, params: Record<string, any>, prefix = ""): string {
-  if (!where) return "";
-  const conditions: string[] = [];
-
-  const cleanWhere: Record<string, any> = {};
-  for (const [key, value] of Object.entries(where)) {
-    if (
-      key.includes("_") &&
-      value &&
-      typeof value === "object" &&
-      !(value instanceof Date) &&
-      !(value as any).in &&
-      !(value as any).contains &&
-      !(value as any).not &&
-      !(value as any).gte &&
-      !(value as any).lte &&
-      !(value as any).gt &&
-      !(value as any).lt
-    ) {
-      Object.assign(cleanWhere, value);
-    } else {
-      cleanWhere[key] = value;
-    }
-  }
-
-  for (const [key, value] of Object.entries(cleanWhere)) {
-    if (key === "OR" && Array.isArray(value)) {
-      const orConditions = value.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}or_${idx}_`));
-      const filtered = orConditions.filter(Boolean);
-      if (filtered.length > 0) {
-        conditions.push(`(${filtered.join(" OR ")})`);
-      }
-    } else if (key === "AND" && Array.isArray(value)) {
-      const andConditions = value.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}and_${idx}_`));
-      const filtered = andConditions.filter(Boolean);
-      if (filtered.length > 0) {
-        conditions.push(`(${filtered.join(" AND ")})`);
-      }
-    } else {
-      const modelRelations = relationMap[modelName];
-      const relation = modelRelations?.[key];
-
-      if (relation) {
-        // Relation subquery
-        const relationTable = modelToTable[relation.modelName];
-        const subParams: Record<string, any> = {};
-
-        let subWhere: any = value;
-        let op = "some"; // default
-        if (value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date)) {
-          if (value.some) {
-            subWhere = value.some;
-            op = "some";
-          } else if (value.none) {
-            subWhere = value.none;
-            op = "none";
-          } else if (value.every) {
-            subWhere = value.every;
-            op = "every";
-          }
-        }
-
-        const subWhereSql = parseWhere(relation.modelName, subWhere, subParams, `${prefix}${key}_`);
-        Object.assign(params, subParams);
-
-        if (subWhereSql) {
-          if (relation.relationType === "one") {
-            if (op === "none") {
-              conditions.push(`${relation.foreignKey} NOT IN (SELECT ${relation.localKey} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            } else {
-              conditions.push(`${relation.foreignKey} IN (SELECT ${relation.localKey} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            }
-          } else {
-            if (op === "none") {
-              conditions.push(`${relation.localKey} NOT IN (SELECT ${relation.foreignKey} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            } else {
-              conditions.push(`${relation.localKey} IN (SELECT ${relation.foreignKey} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            }
-          }
-        }
-      } else {
-        const paramName = `${prefix}${key}`;
-        if (value && typeof value === "object" && !(value instanceof Date)) {
-          const ops = Object.entries(value);
-          for (const [op, opVal] of ops) {
-            if (op === "in" && Array.isArray(opVal)) {
-              if (opVal.length === 0) {
-                conditions.push("1 = 0");
-              } else {
-                const inParams: string[] = [];
-                opVal.forEach((item, idx) => {
-                  const inParamName = `${paramName}_in_${idx}`;
-                  inParams.push(`@${inParamName}`);
-                  params[inParamName] = item;
-                });
-                conditions.push(`${key} IN (${inParams.join(", ")})`);
-              }
-            } else if (op === "notIn" && Array.isArray(opVal)) {
-              if (opVal.length === 0) {
-                // NOT IN empty list is always true, but let's be safe
-                conditions.push("1 = 1");
-              } else {
-                const inParams: string[] = [];
-                opVal.forEach((item, idx) => {
-                  const inParamName = `${paramName}_notin_${idx}`;
-                  inParams.push(`@${inParamName}`);
-                  params[inParamName] = item;
-                });
-                conditions.push(`${key} NOT IN (${inParams.join(", ")})`);
-              }
-            } else if (op === "contains") {
-              conditions.push(`${key} LIKE @${paramName}_contains`);
-              params[`${paramName}_contains`] = `%${opVal}%`;
-            } else if (op === "startsWith") {
-              conditions.push(`${key} LIKE @${paramName}_startsWith`);
-              params[`${paramName}_startsWith`] = `${opVal}%`;
-            } else if (op === "endsWith") {
-              conditions.push(`${key} LIKE @${paramName}_endsWith`);
-              params[`${paramName}_endsWith`] = `%${opVal}`;
-            } else if (op === "not") {
-              conditions.push(`${key} <> @${paramName}_not`);
-              params[`${paramName}_not`] = opVal;
-            } else if (op === "gte") {
-              conditions.push(`${key} >= @${paramName}_gte`);
-              params[`${paramName}_gte`] = opVal;
-            } else if (op === "lte") {
-              conditions.push(`${key} <= @${paramName}_lte`);
-              params[`${paramName}_lte`] = opVal;
-            } else if (op === "gt") {
-              conditions.push(`${key} > @${paramName}_gt`);
-              params[`${paramName}_gt`] = opVal;
-            } else if (op === "lt") {
-              conditions.push(`${key} < @${paramName}_lt`);
-              params[`${paramName}_lt`] = opVal;
-            }
-          }
-        } else {
-          if (value === null) {
-            conditions.push(`${key} IS NULL`);
-          } else {
-            conditions.push(`${key} = @${paramName}`);
-            params[paramName] = value;
-          }
-        }
-      }
-    }
-  }
-
-  return conditions.join(" AND ");
-}
-
-function buildOrderBy(orderBy: any): string {
-  if (!orderBy) return "";
-  const orderClauses: string[] = [];
-  const orderByArr = Array.isArray(orderBy) ? orderBy : [orderBy];
-
-  for (const orderObj of orderByArr) {
-    if (orderObj && typeof orderObj === "object") {
-      for (const [k, dir] of Object.entries(orderObj)) {
-        const dirStr = typeof dir === "string" ? dir.toUpperCase() : "ASC";
-        orderClauses.push(`${k} ${dirStr}`);
-      }
-    }
-  }
-  return orderClauses.length > 0 ? ` ORDER BY ` + orderClauses.join(", ") : "";
 }
 
 function projectFields(row: any, select: any) {
@@ -229,10 +84,10 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
             }
 
             const sqlText = `
-              SELECT ${rel.foreignKey} as parentId, COUNT(*) as count 
+              SELECT ${quoteIdentifier(rel.foreignKey)} as parentId, COUNT(*) as count 
               FROM ${relTable} WITH (NOLOCK)
-              WHERE ${rel.foreignKey} IN (${localKeys.map((_, i) => `@lk_${i}`).join(", ")})
-              GROUP BY ${rel.foreignKey}
+              WHERE ${quoteIdentifier(rel.foreignKey)} IN (${localKeys.map((_, i) => `@lk_${i}`).join(", ")})
+              GROUP BY ${quoteIdentifier(rel.foreignKey)}
             `;
             const countParams: Record<string, any> = {};
             localKeys.forEach((lk, i) => { countParams[`lk_${i}`] = lk; });
@@ -268,16 +123,17 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
       const subRelations = relationMap[relation.modelName] || {};
       const selectedSubCols = Object.keys(subSelect)
         .filter(k => subSelect[k] && !subRelations[k])
-        .map(k => `[${k}]`);
+        .map(k => quoteIdentifier(k));
       if (selectedSubCols.length > 0) {
-        if (!selectedSubCols.includes(`[${searchKey}]`)) {
-          selectedSubCols.push(`[${searchKey}]`);
+        const quotedSearchKey = quoteIdentifier(searchKey);
+        if (!selectedSubCols.includes(quotedSearchKey)) {
+          selectedSubCols.push(quotedSearchKey);
         }
         relCols = selectedSubCols.join(", ");
       }
     }
 
-    let sqlText = `SELECT ${relCols} FROM ${relTable} WITH (NOLOCK) WHERE ${searchKey} IN (${uniqueKeys.map((_, i) => `@k_${i}`).join(", ")})`;
+    let sqlText = `SELECT ${relCols} FROM ${relTable} WITH (NOLOCK) WHERE ${quoteIdentifier(searchKey)} IN (${uniqueKeys.map((_, i) => `@k_${i}`).join(", ")})`;
     const subParams: Record<string, any> = {};
     uniqueKeys.forEach((k, i) => { subParams[`k_${i}`] = k; });
 
@@ -338,7 +194,7 @@ class TableClient<T = any> {
         const modelRelations = relationMap[this.modelName] || {};
         const selectedCols = Object.keys(finalArgs.select)
           .filter(k => finalArgs.select[k] && !modelRelations[k])
-          .map(k => `[${k}]`);
+          .map(k => quoteIdentifier(k));
         if (selectedCols.length > 0) {
           cols = selectedCols.join(", ");
         }
@@ -346,7 +202,7 @@ class TableClient<T = any> {
 
       let sqlText = "SELECT";
       if (finalArgs?.take && !hasSkip) {
-        sqlText += ` TOP (${finalArgs.take})`;
+        sqlText += ` TOP (${toNonNegativeInt(finalArgs.take, 1)})`;
       }
       sqlText += ` ${cols} FROM ${this.tableName} WITH (NOLOCK)`;
 
@@ -364,9 +220,9 @@ class TableClient<T = any> {
       }
 
       if (hasSkip) {
-        sqlText += ` OFFSET ${finalArgs.skip} ROWS`;
+        sqlText += ` OFFSET ${toNonNegativeInt(finalArgs.skip)} ROWS`;
         if (finalArgs?.take) {
-          sqlText += ` FETCH NEXT ${finalArgs.take} ROWS ONLY`;
+          sqlText += ` FETCH NEXT ${toNonNegativeInt(finalArgs.take, 1)} ROWS ONLY`;
         }
       }
 
@@ -488,11 +344,14 @@ class TableClient<T = any> {
         }
 
         const keys = Object.keys(data);
-        const columns = keys.map(k => `[${k}]`).join(", ");
-        const placeholders = keys.map(k => `@${k}`).join(", ");
+        const columns = keys.map(k => quoteIdentifier(k)).join(", ");
+        const safeKeys = keys.map(k => sanitizeParamName(k));
+        const placeholders = safeKeys.map(k => `@${k}`).join(", ");
+        const safeData: Record<string, any> = {};
+        keys.forEach((k, i) => { safeData[safeKeys[i]] = data[k]; });
 
         const sqlText = `INSERT INTO ${this.tableName} (${columns}) OUTPUT inserted.* VALUES (${placeholders})`;
-        const rows = await this.executor(sqlText, data);
+        const rows = await this.executor(sqlText, safeData);
         const createdRow = rows[0];
 
         if (!createdRow) {
@@ -583,24 +442,26 @@ class TableClient<T = any> {
 
       for (const key of Object.keys(data)) {
         const val = data[key];
+        const col = quoteIdentifier(key);
+        const safeKey = sanitizeParamName(key);
         if (val && typeof val === "object" && !(val instanceof Date)) {
           if (val.increment !== undefined) {
-            sets.push(`[${key}] = [${key}] + @${key}_inc`);
-            p[`${key}_inc`] = val.increment;
+            sets.push(`${col} = ${col} + @${safeKey}_inc`);
+            p[`${safeKey}_inc`] = val.increment;
             continue;
           } else if (val.decrement !== undefined) {
-            sets.push(`[${key}] = [${key}] - @${key}_dec`);
-            p[`${key}_dec`] = val.decrement;
+            sets.push(`${col} = ${col} - @${safeKey}_dec`);
+            p[`${safeKey}_dec`] = val.decrement;
             continue;
           } else if (val.set !== undefined) {
-            sets.push(`[${key}] = @${key}_set`);
-            p[`${key}_set`] = val.set;
+            sets.push(`${col} = @${safeKey}_set`);
+            p[`${safeKey}_set`] = val.set;
             continue;
           }
         }
 
-        sets.push(`[${key}] = @${key}`);
-        p[key] = val;
+        sets.push(`${col} = @${safeKey}`);
+        p[safeKey] = val;
       }
 
       const whereParams: Record<string, any> = {};
@@ -641,25 +502,27 @@ class TableClient<T = any> {
       for (const key of Object.keys(data)) {
         const val = data[key];
         if (relationMap[this.modelName]?.[key]) continue;
+        const col = quoteIdentifier(key);
+        const safeKey = sanitizeParamName(key);
 
         if (val && typeof val === "object" && !(val instanceof Date)) {
           if (val.increment !== undefined) {
-            sets.push(`[${key}] = [${key}] + @${key}_inc`);
-            p[`${key}_inc`] = val.increment;
+            sets.push(`${col} = ${col} + @${safeKey}_inc`);
+            p[`${safeKey}_inc`] = val.increment;
             continue;
           } else if (val.decrement !== undefined) {
-            sets.push(`[${key}] = [${key}] - @${key}_dec`);
-            p[`${key}_dec`] = val.decrement;
+            sets.push(`${col} = ${col} - @${safeKey}_dec`);
+            p[`${safeKey}_dec`] = val.decrement;
             continue;
           } else if (val.set !== undefined) {
-            sets.push(`[${key}] = @${key}_set`);
-            p[`${key}_set`] = val.set;
+            sets.push(`${col} = @${safeKey}_set`);
+            p[`${safeKey}_set`] = val.set;
             continue;
           }
         }
 
-        sets.push(`[${key}] = @${key}`);
-        p[key] = val;
+        sets.push(`${col} = @${safeKey}`);
+        p[safeKey] = val;
       }
 
       const whereParams: Record<string, any> = {};
@@ -721,18 +584,21 @@ class TableClient<T = any> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'vectorSearch', args }, async (params) => {
       const { args: finalArgs } = params;
       const field = finalArgs.vectorField || "embedding";
-      const metric = finalArgs.distanceMetric || "cosine";
-      const elementType = finalArgs.vectorElementType || "float32";
-      const take = finalArgs.take || 10;
-      const dim = finalArgs.vector.length;
+      const METRICS = ["cosine", "euclidean", "dot"];
+      const ELEMENT_TYPES = ["float32", "float16", "uint8"];
+      const metric = METRICS.includes(finalArgs.distanceMetric) ? finalArgs.distanceMetric : "cosine";
+      const elementType = ELEMENT_TYPES.includes(finalArgs.vectorElementType) ? finalArgs.vectorElementType : "float32";
+      const take = toNonNegativeInt(finalArgs.take, 10);
+      const dim = Number(finalArgs.vector?.length) || 0;
       const vectorJson = JSON.stringify(finalArgs.vector);
+      const col = quoteIdentifier(field);
 
       try {
         if (dim > 1998) {
           throw new Error("Vector dimension exceeds SQL Server limit of 1998");
         }
         let sqlText = `SELECT TOP (${take}) *, `;
-        sqlText += `VECTOR_DISTANCE('${metric}', CAST([${field}] AS VECTOR(${dim}, ${elementType})), CAST(@query_vector AS VECTOR(${dim}, ${elementType}))) AS distance `;
+        sqlText += `VECTOR_DISTANCE('${metric}', CAST(${col} AS VECTOR(${dim}, ${elementType})), CAST(@query_vector AS VECTOR(${dim}, ${elementType}))) AS distance `;
         sqlText += `FROM ${this.tableName} WITH (NOLOCK) `;
 
         const p: Record<string, any> = {
@@ -740,7 +606,7 @@ class TableClient<T = any> {
         };
 
         const whereClauses: string[] = [];
-        whereClauses.push(`[${field}] IS NOT NULL`);
+        whereClauses.push(`${col} IS NOT NULL`);
 
         const whereSql = parseWhere(this.modelName, finalArgs.where, p, "v_");
         if (whereSql) {
@@ -778,7 +644,7 @@ class TableClient<T = any> {
         let fallbackSql = `SELECT * FROM ${this.tableName} WITH (NOLOCK) `;
         const fallbackParams: Record<string, any> = {};
         const fallbackWhereClauses: string[] = [];
-        fallbackWhereClauses.push(`[${field}] IS NOT NULL`);
+        fallbackWhereClauses.push(`${col} IS NOT NULL`);
 
         const fallbackWhereSql = parseWhere(this.modelName, finalArgs.where, fallbackParams, "vf_");
         if (fallbackWhereSql) {
@@ -911,25 +777,25 @@ class TableClient<T = any> {
       if (finalArgs._sum) {
         resultObj._sum = {};
         for (const key of Object.keys(finalArgs._sum)) {
-          selects.push(`SUM(${key}) as sum_${key}`);
+          selects.push(aggSelect("SUM", key));
         }
       }
       if (finalArgs._avg) {
         resultObj._avg = {};
         for (const key of Object.keys(finalArgs._avg)) {
-          selects.push(`AVG(${key}) as avg_${key}`);
+          selects.push(aggSelect("AVG", key));
         }
       }
       if (finalArgs._min) {
         resultObj._min = {};
         for (const key of Object.keys(finalArgs._min)) {
-          selects.push(`MIN(${key}) as min_${key}`);
+          selects.push(aggSelect("MIN", key));
         }
       }
       if (finalArgs._max) {
         resultObj._max = {};
         for (const key of Object.keys(finalArgs._max)) {
-          selects.push(`MAX(${key}) as max_${key}`);
+          selects.push(aggSelect("MAX", key));
         }
       }
       if (finalArgs._count) {
@@ -938,7 +804,7 @@ class TableClient<T = any> {
           selects.push(`COUNT(*) as count_all`);
         } else {
           for (const key of Object.keys(finalArgs._count)) {
-            selects.push(`COUNT(${key}) as count_${key}`);
+            selects.push(aggSelect("COUNT", key));
           }
         }
       }
@@ -959,22 +825,22 @@ class TableClient<T = any> {
 
       if (finalArgs._sum) {
         for (const key of Object.keys(finalArgs._sum)) {
-          resultObj._sum[key] = row[`sum_${key}`] !== undefined ? row[`sum_${key}`] : null;
+          resultObj._sum[key] = row[aggAlias("sum", key)] !== undefined ? row[aggAlias("sum", key)] : null;
         }
       }
       if (finalArgs._avg) {
         for (const key of Object.keys(finalArgs._avg)) {
-          resultObj._avg[key] = row[`avg_${key}`] !== undefined ? row[`avg_${key}`] : null;
+          resultObj._avg[key] = row[aggAlias("avg", key)] !== undefined ? row[aggAlias("avg", key)] : null;
         }
       }
       if (finalArgs._min) {
         for (const key of Object.keys(finalArgs._min)) {
-          resultObj._min[key] = row[`min_${key}`] !== undefined ? row[`min_${key}`] : null;
+          resultObj._min[key] = row[aggAlias("min", key)] !== undefined ? row[aggAlias("min", key)] : null;
         }
       }
       if (finalArgs._max) {
         for (const key of Object.keys(finalArgs._max)) {
-          resultObj._max[key] = row[`max_${key}`] !== undefined ? row[`max_${key}`] : null;
+          resultObj._max[key] = row[aggAlias("max", key)] !== undefined ? row[aggAlias("max", key)] : null;
         }
       }
       if (finalArgs._count) {
@@ -982,7 +848,7 @@ class TableClient<T = any> {
           resultObj._count._all = row[`count_all`] || 0;
         } else {
           for (const key of Object.keys(finalArgs._count)) {
-            resultObj._count[key] = row[`count_${key}`] || 0;
+            resultObj._count[key] = row[aggAlias("count", key)] || 0;
           }
         }
       }
@@ -999,35 +865,35 @@ class TableClient<T = any> {
         throw new Error("groupBy requires 'by' fields");
       }
 
-      const selects = [...byFields];
+      const selects = byFields.map((f: string) => quoteIdentifier(f));
 
       if (finalArgs._count) {
         if (finalArgs._count === true || finalArgs._count._all) {
           selects.push(`COUNT(*) as count_all`);
         } else {
           for (const key of Object.keys(finalArgs._count)) {
-            selects.push(`COUNT(${key}) as count_${key}`);
+            selects.push(aggSelect("COUNT", key));
           }
         }
       }
       if (finalArgs._sum) {
         for (const key of Object.keys(finalArgs._sum)) {
-          selects.push(`SUM(${key}) as sum_${key}`);
+          selects.push(aggSelect("SUM", key));
         }
       }
       if (finalArgs._avg) {
         for (const key of Object.keys(finalArgs._avg)) {
-          selects.push(`AVG(${key}) as avg_${key}`);
+          selects.push(aggSelect("AVG", key));
         }
       }
       if (finalArgs._min) {
         for (const key of Object.keys(finalArgs._min)) {
-          selects.push(`MIN(${key}) as min_${key}`);
+          selects.push(aggSelect("MIN", key));
         }
       }
       if (finalArgs._max) {
         for (const key of Object.keys(finalArgs._max)) {
-          selects.push(`MAX(${key}) as max_${key}`);
+          selects.push(aggSelect("MAX", key));
         }
       }
 
@@ -1038,7 +904,7 @@ class TableClient<T = any> {
         sqlText += ` WHERE ${whereSql}`;
       }
 
-      sqlText += ` GROUP BY ${byFields.join(", ")}`;
+      sqlText += ` GROUP BY ${byFields.map((f: string) => quoteIdentifier(f)).join(", ")}`;
 
       const rows = await this.executor(sqlText, p);
 
@@ -1054,32 +920,32 @@ class TableClient<T = any> {
             item._count._all = row[`count_all`] || 0;
           } else {
             for (const key of Object.keys(finalArgs._count)) {
-              item._count[key] = row[`count_${key}`] || 0;
+              item._count[key] = row[aggAlias("count", key)] || 0;
             }
           }
         }
         if (finalArgs._sum) {
           item._sum = {};
           for (const key of Object.keys(finalArgs._sum)) {
-            item._sum[key] = row[`sum_${key}`] !== undefined ? row[`sum_${key}`] : null;
+            item._sum[key] = row[aggAlias("sum", key)] !== undefined ? row[aggAlias("sum", key)] : null;
           }
         }
         if (finalArgs._avg) {
           item._avg = {};
           for (const key of Object.keys(finalArgs._avg)) {
-            item._avg[key] = row[`avg_${key}`] !== undefined ? row[`avg_${key}`] : null;
+            item._avg[key] = row[aggAlias("avg", key)] !== undefined ? row[aggAlias("avg", key)] : null;
           }
         }
         if (finalArgs._min) {
           item._min = {};
           for (const key of Object.keys(finalArgs._min)) {
-            item._min[key] = row[`min_${key}`] !== undefined ? row[`min_${key}`] : null;
+            item._min[key] = row[aggAlias("min", key)] !== undefined ? row[aggAlias("min", key)] : null;
           }
         }
         if (finalArgs._max) {
           item._max = {};
           for (const key of Object.keys(finalArgs._max)) {
-            item._max[key] = row[`max_${key}`] !== undefined ? row[`max_${key}`] : null;
+            item._max[key] = row[aggAlias("max", key)] !== undefined ? row[aggAlias("max", key)] : null;
           }
         }
 
@@ -1115,19 +981,21 @@ class TableClient<T = any> {
       const whereSql = parseWhere(this.modelName, where, p, "upw_");
 
       const allKeys = Array.from(new Set([...Object.keys(cleanCreate), ...Object.keys(cleanUpdate)]));
+      const cParam = (k: string) => `c_${sanitizeParamName(k)}`;
+      const uParam = (k: string) => `u_${sanitizeParamName(k)}`;
       for (const k of allKeys) {
-        if (cleanCreate[k] !== undefined) p[`c_${k}`] = cleanCreate[k];
-        if (cleanUpdate[k] !== undefined) p[`u_${k}`] = cleanUpdate[k];
+        if (cleanCreate[k] !== undefined) p[cParam(k)] = cleanCreate[k];
+        if (cleanUpdate[k] !== undefined) p[uParam(k)] = cleanUpdate[k];
       }
 
       const sourceSelect = allKeys.map(k => {
-        const val = cleanCreate[k] !== undefined ? `@c_${k}` : (cleanUpdate[k] !== undefined ? `@u_${k}` : "NULL");
-        return `${val} as [${k}]`;
+        const val = cleanCreate[k] !== undefined ? `@${cParam(k)}` : (cleanUpdate[k] !== undefined ? `@${uParam(k)}` : "NULL");
+        return `${val} as ${quoteIdentifier(k)}`;
       }).join(", ");
 
-      const updateSets = Object.keys(cleanUpdate).map(k => `target.[${k}] = source.[${k}]`).join(", ");
-      const insertCols = Object.keys(cleanCreate).map(k => `[${k}]`).join(", ");
-      const insertVals = Object.keys(cleanCreate).map(k => `source.[${k}]`).join(", ");
+      const updateSets = Object.keys(cleanUpdate).map(k => `target.${quoteIdentifier(k)} = source.${quoteIdentifier(k)}`).join(", ");
+      const insertCols = Object.keys(cleanCreate).map(k => quoteIdentifier(k)).join(", ");
+      const insertVals = Object.keys(cleanCreate).map(k => `source.${quoteIdentifier(k)}`).join(", ");
 
       // Note: This MERGE assumes the 'where' translates to a simple ON clause.
       // For complex 'where', parseWhere might return something not easily usable in ON.
@@ -1137,9 +1005,9 @@ class TableClient<T = any> {
         if (typeof where[k] === 'object' && where[k] !== null && !(where[k] instanceof Date)) {
           // Flatten unique object if needed
           const inner = where[k];
-          return Object.keys(inner).map(ik => `target.[${ik}] = @upw_${k}_${ik}`).join(" AND ");
+          return Object.keys(inner).map(ik => `target.${quoteIdentifier(ik)} = @${sanitizeParamName(`upw_${k}_${ik}`)}`).join(" AND ");
         }
-        return `target.[${k}] = @upw_${k}`;
+        return `target.${quoteIdentifier(k)} = @${sanitizeParamName(`upw_${k}`)}`;
       }).join(" AND ");
 
       const sqlText = `
