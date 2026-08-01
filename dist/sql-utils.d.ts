@@ -1,4 +1,4 @@
-import type { RelationDef } from "an5-client/typescript/an5Metadata";
+import type { RelationDef } from "./metadata";
 /**
  * SQL Server identifier quoting.
  *

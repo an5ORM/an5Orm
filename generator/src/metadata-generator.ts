@@ -7,6 +7,7 @@ export class MetadataGenerator {
 
   public generate(models: Model[]) {
     let metaContent = '// This file is auto-generated. Do not edit directly.\n\n';
+    metaContent += 'import type { RelationDef } from "@an5/orm";\n\n';
 
     metaContent += 'export const modelToTable: Record<string, string> = {\n';
     for (const model of models) {
@@ -36,8 +37,6 @@ export class MetadataGenerator {
       }
     }
     metaContent += '};\n\n';
-
-    metaContent += 'export interface RelationDef {\n  modelName: string;\n  relationType: "many" | "one";\n  foreignKey: string;\n  localKey: string;\n}\n\n';
 
     metaContent += 'export const relationMap: Record<string, Record<string, RelationDef>> = {\n';
     for (const model of models) {

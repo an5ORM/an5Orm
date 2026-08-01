@@ -1,10 +1,8 @@
-import sql from "mssql";
 import { An5Adapter } from "@an5/adapters";
 import { randomUUID } from "crypto";
-import { logger } from "@an5/lib/logger";
-import { An5 } from "an5-client/typescript";
-
-import { modelToTable, relationMap, RelationDef, modelFields } from "an5-client/typescript/an5Metadata";
+import { logger } from "./logger";
+import { An5ClientKnownRequestError } from "./errors";
+import { DEFAULT_METADATA, An5Metadata } from "./metadata";
 import {
   quoteIdentifier,
   sanitizeParamName,
@@ -15,12 +13,6 @@ import {
 } from "./sql-utils";
 
 type ExecutorFn = (queryText: string, params?: Record<string, any>) => Promise<any[]>;
-
-const QUERY_CTX = { relationMap, modelToTable };
-
-function parseWhere(modelName: string, where: any, params: Record<string, any>, prefix = ""): string {
-  return buildWhere(modelName, where, params, prefix, QUERY_CTX);
-}
 
 function aggSelect(fn: string, key: string): string {
   return `${fn}(${quoteIdentifier(key)}) as ${aggAlias(fn, key)}`;
@@ -60,10 +52,10 @@ function projectFields(row: any, select: any) {
 }
 
 // Helper to batch-query and resolve relationships
-async function resolveIncludes(modelName: string, rows: any[], include: any, executor: ExecutorFn) {
+async function resolveIncludes(modelName: string, rows: any[], include: any, executor: ExecutorFn, metadata: An5Metadata) {
   if (!rows || rows.length === 0 || !include) return;
 
-  const modelRelations = relationMap[modelName];
+  const modelRelations = metadata.relationMap[modelName];
   if (!modelRelations) return;
 
   for (const [key, value] of Object.entries(include)) {
@@ -76,7 +68,7 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
         for (const countField of countFields) {
           const rel = modelRelations[countField];
           if (rel) {
-            const relTable = modelToTable[rel.modelName];
+            const relTable = metadata.modelToTable[rel.modelName];
             const localKeys = rows.map(r => r[rel.localKey]).filter(Boolean);
             if (localKeys.length === 0) {
               rows.forEach(r => { r._count = { ...r._count, [countField]: 0 }; });
@@ -105,7 +97,7 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
       continue;
     }
 
-    const relTable = modelToTable[relation.modelName];
+    const relTable = metadata.modelToTable[relation.modelName];
     const isMany = relation.relationType === "many";
     const matchKey = relation.relationType === "one" ? relation.foreignKey : relation.localKey;
     const searchKey = relation.relationType === "one" ? relation.localKey : relation.foreignKey;
@@ -120,7 +112,7 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
     let relCols = "*";
     if (value && typeof value === "object" && (value as any).select) {
       const subSelect = (value as any).select;
-      const subRelations = relationMap[relation.modelName] || {};
+      const subRelations = metadata.relationMap[relation.modelName] || {};
       const selectedSubCols = Object.keys(subSelect)
         .filter(k => subSelect[k] && !subRelations[k])
         .map(k => quoteIdentifier(k));
@@ -153,7 +145,7 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
     }
 
     if (value && typeof value === "object" && (value as any).include) {
-      await resolveIncludes(relation.modelName, relatedRows, (value as any).include, executor);
+      await resolveIncludes(relation.modelName, relatedRows, (value as any).include, executor, metadata);
     }
 
     const groupMap = new Map<any, any[]>();
@@ -191,7 +183,7 @@ class TableClient<T = any> {
 
       let cols = "*";
       if (finalArgs?.select) {
-        const modelRelations = relationMap[this.modelName] || {};
+        const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
         const selectedCols = Object.keys(finalArgs.select)
           .filter(k => finalArgs.select[k] && !modelRelations[k])
           .map(k => quoteIdentifier(k));
@@ -207,7 +199,7 @@ class TableClient<T = any> {
       sqlText += ` ${cols} FROM ${this.tableName} WITH (NOLOCK)`;
 
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs?.where, p);
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
       if (whereSql) {
         sqlText += ` WHERE ${whereSql}`;
       }
@@ -233,7 +225,7 @@ class TableClient<T = any> {
         });
       }
       if (finalArgs?.include) {
-        await resolveIncludes(this.modelName, rows, finalArgs.include, this.executor);
+        await resolveIncludes(this.modelName, rows, finalArgs.include, this.executor, this.orm.metadata);
       }
       return rows as T[];
     });
@@ -257,7 +249,7 @@ class TableClient<T = any> {
       const { args: finalArgs } = params;
       let sqlText = `SELECT COUNT(*) as count FROM ${this.tableName} WITH (NOLOCK)`;
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs?.where, p);
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
       if (whereSql) {
         sqlText += ` WHERE ${whereSql}`;
       }
@@ -267,7 +259,7 @@ class TableClient<T = any> {
   }
 
   private async handleNestedWrites(data: any, parentId: any) {
-    const modelRelations = relationMap[this.modelName] || {};
+    const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
     for (const [key, value] of Object.entries(data)) {
       const relation = modelRelations[key];
       if (!relation || !value || typeof value !== "object" || (value instanceof Date)) continue;
@@ -318,7 +310,7 @@ class TableClient<T = any> {
 
         // Extract nested writes
         const nestedData: Record<string, any> = {};
-        const modelRelations = relationMap[this.modelName] || {};
+        const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
         for (const key of Object.keys(data)) {
           if (modelRelations[key]) {
             nestedData[key] = data[key];
@@ -326,12 +318,12 @@ class TableClient<T = any> {
           }
         }
 
-        if (!data.id && modelFields[this.modelName]?.id?.ts === "string") {
+        if (!data.id && this.orm.metadata.modelFields[this.modelName]?.id?.ts === "string") {
           data.id = randomUUID();
         }
         const now = new Date();
-        if (!data.createdAt && modelFields[this.modelName]?.createdAt) data.createdAt = now;
-        if (!data.updatedAt && modelFields[this.modelName]?.updatedAt) data.updatedAt = now;
+        if (!data.createdAt && this.orm.metadata.modelFields[this.modelName]?.createdAt) data.createdAt = now;
+        if (!data.updatedAt && this.orm.metadata.modelFields[this.modelName]?.updatedAt) data.updatedAt = now;
 
         // Handle one-relation connect where we hold the FK
         for (const [key, value] of Object.entries(nestedData)) {
@@ -382,21 +374,21 @@ class TableClient<T = any> {
           errNumber === 2627 ||
           errNumber === 2601
         ) {
-          throw new An5.An5ClientKnownRequestError("Unique constraint failed", {
+          throw new An5ClientKnownRequestError("Unique constraint failed", {
             code: "P2002",
             clientVersion: "mock",
           });
         }
 
         if (msg.includes('foreign key') || errNumber === 547) {
-          throw new An5.An5ClientKnownRequestError("Foreign key constraint failed", {
+          throw new An5ClientKnownRequestError("Foreign key constraint failed", {
             code: "P2003",
             clientVersion: "mock",
           });
         }
 
         if (msg.includes('not found') || errNumber === 404) {
-          throw new An5.An5ClientKnownRequestError("Record not found", {
+          throw new An5ClientKnownRequestError("Record not found", {
             code: "P2025",
             clientVersion: "mock",
           });
@@ -411,13 +403,13 @@ class TableClient<T = any> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'update', args }, async (params) => {
       const { args: finalArgs } = params;
       const data = { ...finalArgs.data };
-      if (modelFields[this.modelName]?.updatedAt) {
+      if (this.orm.metadata.modelFields[this.modelName]?.updatedAt) {
         data.updatedAt = new Date();
       }
 
       // Extract nested writes
       const nestedData: Record<string, any> = {};
-      const modelRelations = relationMap[this.modelName] || {};
+      const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
       for (const key of Object.keys(data)) {
         if (modelRelations[key]) {
           nestedData[key] = data[key];
@@ -465,7 +457,7 @@ class TableClient<T = any> {
       }
 
       const whereParams: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
       Object.assign(p, whereParams);
 
       const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} WHERE ${whereSql}`;
@@ -491,7 +483,7 @@ class TableClient<T = any> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'updateMany', args }, async (params) => {
       const { args: finalArgs } = params;
       const data = { ...finalArgs.data };
-      if (modelFields[this.modelName]?.updatedAt) {
+      if (this.orm.metadata.modelFields[this.modelName]?.updatedAt) {
         data.updatedAt = new Date();
       }
       delete data.id;
@@ -501,7 +493,7 @@ class TableClient<T = any> {
 
       for (const key of Object.keys(data)) {
         const val = data[key];
-        if (relationMap[this.modelName]?.[key]) continue;
+        if (this.orm.metadata.relationMap[this.modelName]?.[key]) continue;
         const col = quoteIdentifier(key);
         const safeKey = sanitizeParamName(key);
 
@@ -526,17 +518,12 @@ class TableClient<T = any> {
       }
 
       const whereParams: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
       Object.assign(p, whereParams);
 
       const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} ${whereSql ? `WHERE ${whereSql}` : ""}`;
-      const pool = await (await getAdapter()).getPool();
-      const request = new sql.Request(pool);
-      for (const [key, value] of Object.entries(p)) {
-        request.input(key, value);
-      }
-      const result = await request.query(sqlText);
-      return { count: result.rowsAffected?.[0] || 0 };
+      const count = await (await getAdapter())._executeRaw(sqlText, p);
+      return { count };
     });
   }
 
@@ -547,7 +534,7 @@ class TableClient<T = any> {
       if (!existing) throw new Error("Record not found to delete");
 
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs.where, p);
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, p);
       const sqlText = `DELETE FROM ${this.tableName} WHERE ${whereSql}`;
       await this.executor(sqlText, p);
 
@@ -559,16 +546,11 @@ class TableClient<T = any> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'deleteMany', args }, async (params) => {
       const { args: finalArgs } = params;
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs?.where, p);
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
       const sqlText = `DELETE FROM ${this.tableName} ${whereSql ? `WHERE ${whereSql}` : ""}`;
 
-      const pool = await (await getAdapter()).getPool();
-      const request = new sql.Request(pool);
-      for (const [key, value] of Object.entries(p)) {
-        request.input(key, value);
-      }
-      const result = await request.query(sqlText);
-      return { count: result.rowsAffected?.[0] || 0 };
+      const count = await (await getAdapter())._executeRaw(sqlText, p);
+      return { count };
     });
   }
 
@@ -608,7 +590,7 @@ class TableClient<T = any> {
         const whereClauses: string[] = [];
         whereClauses.push(`${col} IS NOT NULL`);
 
-        const whereSql = parseWhere(this.modelName, finalArgs.where, p, "v_");
+        const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, p, "v_");
         if (whereSql) {
           whereClauses.push(whereSql);
         }
@@ -618,7 +600,7 @@ class TableClient<T = any> {
 
         const rows = await this.executor(sqlText, p);
         if (finalArgs.include) {
-          await resolveIncludes(this.modelName, rows, finalArgs.include, this.executor);
+          await resolveIncludes(this.modelName, rows, finalArgs.include, this.executor, this.orm.metadata);
         }
         return rows as (T & { distance: number })[];
       } catch (err: any) {
@@ -646,7 +628,7 @@ class TableClient<T = any> {
         const fallbackWhereClauses: string[] = [];
         fallbackWhereClauses.push(`${col} IS NOT NULL`);
 
-        const fallbackWhereSql = parseWhere(this.modelName, finalArgs.where, fallbackParams, "vf_");
+        const fallbackWhereSql = this.orm.parseWhere(this.modelName, finalArgs.where, fallbackParams, "vf_");
         if (fallbackWhereSql) {
           fallbackWhereClauses.push(fallbackWhereSql);
         }
@@ -687,7 +669,7 @@ class TableClient<T = any> {
           .slice(0, take);
 
         if (finalArgs.include && results.length > 0) {
-          await resolveIncludes(this.modelName, results, finalArgs.include, this.executor);
+          await resolveIncludes(this.modelName, results, finalArgs.include, this.executor, this.orm.metadata);
         }
 
         return results;
@@ -701,56 +683,35 @@ class TableClient<T = any> {
       if (!finalArgs.data || finalArgs.data.length === 0) return { count: 0 };
 
       try {
-        const pool = await (await getAdapter()).getPool();
-        const table = new sql.Table(this.tableName);
-
-        const fields = modelFields[this.modelName] || {};
+        const fields = this.orm.metadata.modelFields[this.modelName] || {};
         const fieldNames = Object.keys(fields);
 
-        for (const col of fieldNames) {
-          const fieldDef = fields[col];
-          const rawType = fieldDef?.ts || 'string';
-          const sqlType = fieldDef?.sql || 'NVARCHAR(MAX)';
-          const isNullable = rawType.endsWith('?');
-          const tsType = isNullable ? rawType.slice(0, -1) : rawType;
-
-          // Map SQL Server type to mssql package type
-          const sqlBase = sqlType.toUpperCase().split('(')[0];
-          if (sqlBase === 'INT' || sqlBase === 'SMALLINT' || sqlBase === 'TINYINT') {
-            table.columns.add(col, sql.Int, { nullable: isNullable });
-          } else if (sqlBase === 'BIGINT') {
-            table.columns.add(col, sql.BigInt, { nullable: isNullable });
-          } else if (sqlBase === 'FLOAT' || sqlBase === 'REAL' || sqlBase === 'DECIMAL' || sqlBase === 'NUMERIC' || sqlBase === 'MONEY' || sqlBase === 'SMALLMONEY') {
-            table.columns.add(col, sql.Float, { nullable: isNullable });
-          } else if (sqlBase === 'BIT') {
-            table.columns.add(col, sql.Bit, { nullable: isNullable });
-          } else if (sqlBase === 'DATETIME' || sqlBase === 'DATETIME2' || sqlBase === 'SMALLDATETIME' || sqlBase === 'DATE' || sqlBase === 'TIME') {
-            table.columns.add(col, sql.DateTime, { nullable: isNullable });
-          } else if (sqlBase === 'UNIQUEIDENTIFIER') {
-            table.columns.add(col, sql.UniqueIdentifier, { nullable: isNullable });
-          } else {
-            table.columns.add(col, sql.NVarChar(sql.MAX), { nullable: isNullable });
-          }
-        }
-
         const now = new Date();
-        for (const item of finalArgs.data) {
-          const rowData = { ...item };
+        const rows = finalArgs.data.map((item: any) => {
+          const rowData: Record<string, any> = { ...item };
           if (!rowData.id && fields.id?.ts === "string") rowData.id = randomUUID();
           if (!rowData.createdAt && fields.createdAt) rowData.createdAt = now;
           if (!rowData.updatedAt && fields.updatedAt) rowData.updatedAt = now;
+          return rowData;
+        });
 
-          const rowValues = fieldNames.map(col => {
-            const v = rowData[col];
-            if (v === undefined) return null;
-            return v;
+        const cols = fieldNames.filter(col => rows.some((r: any) => r[col] !== undefined));
+        if (cols.length === 0) throw new Error("No insertable columns");
+
+        const params: Record<string, any> = {};
+        const rowPlaceholders: string[] = [];
+        rows.forEach((row: any, rowIdx: number) => {
+          const vals = cols.map(col => {
+            const p = sanitizeParamName(`r${rowIdx}_${col}`);
+            params[p] = row[col] ?? null;
+            return `@${p}`;
           });
-          table.rows.add(...rowValues);
-        }
+          rowPlaceholders.push(`(${vals.join(", ")})`);
+        });
 
-        const request = new sql.Request(pool);
-        await request.bulk(table);
-        return { count: finalArgs.data.length };
+        const sqlText = `INSERT INTO ${this.tableName} (${cols.map(quoteIdentifier).join(", ")}) VALUES ${rowPlaceholders.join(", ")}`;
+        await (await getAdapter())._executeRaw(sqlText, params);
+        return { count: rows.length };
       } catch (err: any) {
         logger.warn(`Bulk insert failed, falling back to sequential inserts: ${err.message}`);
         let count = 0;
@@ -815,7 +776,7 @@ class TableClient<T = any> {
 
       let sqlText = `SELECT ${selects.join(", ")} FROM ${this.tableName} WITH (NOLOCK)`;
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs?.where, p);
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
       if (whereSql) {
         sqlText += ` WHERE ${whereSql}`;
       }
@@ -899,7 +860,7 @@ class TableClient<T = any> {
 
       let sqlText = `SELECT ${selects.join(", ")} FROM ${this.tableName} WITH (NOLOCK)`;
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, finalArgs?.where, p);
+      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
       if (whereSql) {
         sqlText += ` WHERE ${whereSql}`;
       }
@@ -963,22 +924,22 @@ class TableClient<T = any> {
       const cleanCreate = { ...createData };
       const cleanUpdate = { ...updateData };
       for (const key of Object.keys(cleanCreate)) {
-        if (relationMap[this.modelName]?.[key]) delete cleanCreate[key];
+        if (this.orm.metadata.relationMap[this.modelName]?.[key]) delete cleanCreate[key];
       }
       for (const key of Object.keys(cleanUpdate)) {
-        if (relationMap[this.modelName]?.[key]) delete cleanUpdate[key];
+        if (this.orm.metadata.relationMap[this.modelName]?.[key]) delete cleanUpdate[key];
       }
 
-      if (!cleanCreate.id && modelFields[this.modelName]?.id?.ts === "string") {
+      if (!cleanCreate.id && this.orm.metadata.modelFields[this.modelName]?.id?.ts === "string") {
         cleanCreate.id = randomUUID();
       }
       const now = new Date();
-      if (!cleanCreate.createdAt && modelFields[this.modelName]?.createdAt) cleanCreate.createdAt = now;
-      if (!cleanCreate.updatedAt && modelFields[this.modelName]?.updatedAt) cleanCreate.updatedAt = now;
-      if (!cleanUpdate.updatedAt && modelFields[this.modelName]?.updatedAt) cleanUpdate.updatedAt = now;
+      if (!cleanCreate.createdAt && this.orm.metadata.modelFields[this.modelName]?.createdAt) cleanCreate.createdAt = now;
+      if (!cleanCreate.updatedAt && this.orm.metadata.modelFields[this.modelName]?.updatedAt) cleanCreate.updatedAt = now;
+      if (!cleanUpdate.updatedAt && this.orm.metadata.modelFields[this.modelName]?.updatedAt) cleanUpdate.updatedAt = now;
 
       const p: Record<string, any> = {};
-      const whereSql = parseWhere(this.modelName, where, p, "upw_");
+      const whereSql = this.orm.parseWhere(this.modelName, where, p, "upw_");
 
       const allKeys = Array.from(new Set([...Object.keys(cleanCreate), ...Object.keys(cleanUpdate)]));
       const cParam = (k: string) => `c_${sanitizeParamName(k)}`;
@@ -1025,7 +986,7 @@ class TableClient<T = any> {
         const rows = await this.executor(sqlText, p);
         const result = rows[0];
         if (include && result) {
-          await resolveIncludes(this.modelName, [result], include, this.executor);
+          await resolveIncludes(this.modelName, [result], include, this.executor, this.orm.metadata);
         }
         return result as T;
       } catch (err: any) {
@@ -1041,13 +1002,13 @@ class TableClient<T = any> {
   }
 }
 
-function addNoLockToQuery(sql: string): string {
+function addNoLockToQuery(sql: string, metadata: An5Metadata): string {
   // If it's not a SELECT query, don't modify it
   if (!/^\s*SELECT/i.test(sql)) {
     return sql;
   }
 
-  const tableNames = Object.values(modelToTable);
+  const tableNames = Object.values(metadata.modelToTable);
 
   let modifiedSql = sql;
 
@@ -1094,12 +1055,32 @@ export interface MiddlewareParams {
 export type MiddlewareNext = (params: MiddlewareParams) => Promise<any>;
 export type Middleware = (params: MiddlewareParams, next: MiddlewareNext) => Promise<any>;
 
+// Lazy-load generated schema metadata from the optional `an5-client` package so
+// `new An5ORM()` resolves schema models out of the box while staying decoupled.
+let autoMetadata: An5Metadata | null = null;
+function loadAutoMetadata(): An5Metadata {
+  if (autoMetadata) return autoMetadata;
+  try {
+    const m = require("an5-client/typescript/an5Metadata.js") as An5Metadata;
+    autoMetadata = {
+      modelToTable: m.modelToTable || {},
+      relationMap: m.relationMap || {},
+      modelFields: m.modelFields || {},
+    };
+  } catch {
+    autoMetadata = DEFAULT_METADATA;
+  }
+  return autoMetadata;
+}
+
 // Proxied AN5 ORM client class
 export class An5ORM {
   [key: string]: any;
   private middlewares: Middleware[] = [];
+  public readonly metadata: An5Metadata;
 
-  constructor(private customExecutor?: ExecutorFn) {
+  constructor(private customExecutor?: ExecutorFn, metadata?: An5Metadata) {
+    this.metadata = metadata ?? loadAutoMetadata();
     // Add default logging middleware
     this.$use(async (params, next) => {
       const start = Date.now();
@@ -1110,7 +1091,7 @@ export class An5ORM {
           logger.info(`ORM [${params.model || 'raw'}.${params.action}] executed in ${duration}ms`);
         }
         return result;
-      } catch (err) {
+      } catch (err: any) {
         const duration = Date.now() - start;
         logger.error(`ORM [${params.model || 'raw'}.${params.action}] failed after ${duration}ms`, err);
         throw err;
@@ -1145,7 +1126,7 @@ export class An5ORM {
         }
         if (!(prop in target) && typeof prop === "string" && !prop.startsWith("_")) {
           // Resolve modelName in camelCase and map to table name
-          const tableName = modelToTable[prop];
+          const tableName = target.metadata.modelToTable[prop];
           if (tableName) {
             target[prop] = new TableClient(
               prop,
@@ -1162,6 +1143,13 @@ export class An5ORM {
 
   $use(middleware: Middleware) {
     this.middlewares.push(middleware);
+  }
+
+  parseWhere(modelName: string, where: any, params: Record<string, any>, prefix = ""): string {
+    return buildWhere(modelName, where, params, prefix, {
+      relationMap: this.metadata.relationMap,
+      modelToTable: this.metadata.modelToTable,
+    });
   }
 
   async _executeMiddleware(params: MiddlewareParams, finalAction: (params: MiddlewareParams) => Promise<any>): Promise<any> {
@@ -1214,7 +1202,7 @@ export class An5ORM {
       throw new Error("Invalid query format for $queryRaw");
     }
 
-    queryText = addNoLockToQuery(queryText);
+    queryText = addNoLockToQuery(queryText, this.metadata);
     return executor(queryText, params);
   }
 
@@ -1228,7 +1216,7 @@ export class An5ORM {
       });
     }
 
-    const modifiedQueryText = addNoLockToQuery(queryText);
+    const modifiedQueryText = addNoLockToQuery(queryText, this.metadata);
     const result = await executor(modifiedQueryText, params);
     return result as unknown as R;
   }
@@ -1260,7 +1248,7 @@ export class An5ORM {
       throw new Error("Invalid query format for $executeRaw");
     }
 
-    queryText = addNoLockToQuery(queryText);
+    queryText = addNoLockToQuery(queryText, this.metadata);
     const result = (await executor(queryText, params)) as any;
     return result.rowsAffected?.[0] || 0;
   }
@@ -1275,7 +1263,7 @@ export class An5ORM {
       });
     }
 
-    const modifiedQueryText = addNoLockToQuery(queryText);
+    const modifiedQueryText = addNoLockToQuery(queryText, this.metadata);
     const result = (await executor(modifiedQueryText, params)) as any;
     return result.rowsAffected?.[0] || 0;
   }
@@ -1288,41 +1276,16 @@ export class An5ORM {
       return Promise.all(fn);
     }
 
-    const pool = await getDbPool();
-    const transaction = new sql.Transaction(pool);
+    const a = await getAdapter();
+    return a.$transaction(async (tx) => {
+      const txExecutor: ExecutorFn = async (queryText: string, params?: Record<string, any>) => {
+        const rows = await tx.exec(queryText, params);
+        return rows;
+      };
 
-    await transaction.begin();
-    logger.info("Database Transaction Initiated");
-
-    const txExecutor: ExecutorFn = async (queryText: string, params?: Record<string, any>) => {
-      const request = new sql.Request(transaction);
-      if (params) {
-        for (const [key, value] of Object.entries(params)) {
-          request.input(key, value);
-        }
-      }
-      const result = await request.query(queryText);
-      const recordset = (result.recordset || []) as any;
-      recordset.rowsAffected = result.rowsAffected;
-      return recordset;
-    };
-
-    const txClient = new An5ORM(txExecutor);
-
-    try {
-      const result = await fn(txClient);
-      await transaction.commit();
-      logger.info("Database Transaction Committed Successfully");
-      return result;
-    } catch (err) {
-      try {
-        await transaction.rollback();
-        logger.warn("Database Transaction Rolled Back");
-      } catch (rollbackErr) {
-        logger.error("Failed to rollback database transaction", rollbackErr);
-      }
-      throw err;
-    }
+      const txClient = new An5ORM(txExecutor, this.metadata);
+      return fn(txClient);
+    }, options);
   }
 }
 

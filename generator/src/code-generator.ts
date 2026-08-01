@@ -19,15 +19,11 @@ export class CodeGenerator {
 
   private generateBaseTs() {
     const baseTs = `
+import { An5ClientKnownRequestError as An5KnownError } from "@an5/orm";
+
 export namespace An5 {
-  export class An5ClientKnownRequestError extends Error {
-    code!: string;
-    meta?: any;
-    constructor(message: string, { code, clientVersion }: { code: string; clientVersion: string }) {
-      super(message);
-      this.code = code;
-    }
-  }
+  export const An5ClientKnownRequestError: typeof An5KnownError = An5KnownError;
+  export type An5ClientKnownRequestError = An5KnownError;
   export type SortOrder = 'asc' | 'desc';
   export type StringFilter = { equals?: string; in?: string[]; notIn?: string[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; not?: string | StringFilter; };
   export type StringNullableFilter = { equals?: string | null; in?: (string | null)[]; notIn?: (string | null)[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; not?: string | StringNullableFilter | null; };

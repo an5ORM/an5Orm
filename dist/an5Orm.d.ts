@@ -1,3 +1,4 @@
+import { An5Metadata } from "./metadata";
 type ExecutorFn = (queryText: string, params?: Record<string, any>) => Promise<any[]>;
 export interface MiddlewareParams {
     model?: string;
@@ -11,8 +12,10 @@ export declare class An5ORM {
     private customExecutor?;
     [key: string]: any;
     private middlewares;
-    constructor(customExecutor?: ExecutorFn | undefined);
+    readonly metadata: An5Metadata;
+    constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata);
     $use(middleware: Middleware): void;
+    parseWhere(modelName: string, where: any, params: Record<string, any>, prefix?: string): string;
     _executeMiddleware(params: MiddlewareParams, finalAction: (params: MiddlewareParams) => Promise<any>): Promise<any>;
     $connect(): Promise<void>;
     $disconnect(): Promise<void>;

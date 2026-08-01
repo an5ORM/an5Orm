@@ -1,8 +1,9 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
-import { config } from "@an5/lib/config";
+import { config } from "./config";
 import { An5ORM } from "../an5Orm";
+import { modelToTable, relationMap, modelFields } from "../an5Client/typescript/an5Metadata";
 
 let bcrypt: any;
 try {
@@ -18,7 +19,7 @@ let db: An5ORM | null = null;
 let dbLoadError: any = null;
 try {
   if (connectionString) {
-    db = new An5ORM();
+    db = new An5ORM(undefined, { modelToTable, relationMap, modelFields });
   }
 } catch (e: any) {
   dbLoadError = e;

@@ -3,12 +3,20 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": ".",
-    "paths": {
-      "@an5/client": ["../an5Client/typescript"],
-      "@an5/client/*": ["../an5Client/typescript/*"],
-      "@an5/lib/*": ["../lib/*"]
-    }
+    "types": ["node"],
+    "paths": {}
   },
   "include": ["./**/*.ts"],
-  "exclude": ["node_modules", "dist", "generator", "test"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "generator",
+    "test",
+    "seed.ts",
+    "push.ts",
+    "pull.ts",
+    "migrate.ts",
+    "cleanup.ts",
+    "scripts"
+  ]
 }
