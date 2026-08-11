@@ -493,6 +493,51 @@ async function main() {
   assert.ok(txCalls.some((call) => call.sql.includes('INSERT INTO [dbo].[orders]') && call.params.userId === 'tx-user'));
   assert.ok(txCalls.some((call) => call.kind === 'executeRaw' && call.sql.includes('UPDATE dbo.users SET name = @p_0')));
 
+  const interactiveRootCalls = [];
+  const interactiveTxCalls = [];
+  const interactiveExecutor = Object.assign(
+    async (sql, params) => {
+      interactiveTxCalls.push({ kind: 'query', sql, params });
+      return [{ id: params?.name || 'interactive-user', name: params?.name || 'Interactive' }];
+    },
+    {
+      executeRaw: async (sql, params) => {
+        interactiveTxCalls.push({ kind: 'executeRaw', sql, params });
+        return 5;
+      },
+    }
+  );
+  const interactiveDb = new An5ORM(Object.assign(
+    async (sql, params) => {
+      interactiveRootCalls.push({ kind: 'query', sql, params });
+      return [];
+    },
+    {
+      beginTransaction: async () => {
+        interactiveRootCalls.push({ kind: 'begin' });
+        return {
+          executor: interactiveExecutor,
+          commit: async () => { interactiveRootCalls.push({ kind: 'commit' }); },
+          rollback: async () => { interactiveRootCalls.push({ kind: 'rollback' }); },
+        };
+      },
+    }
+  ), nestedMetadata);
+
+  const interactiveTx = await interactiveDb.$begin();
+  await interactiveTx.user.updateMany({ where: { id: 'interactive-user' }, data: { name: 'Committed' } });
+  await interactiveTx.$commit();
+  assert.deepStrictEqual(interactiveRootCalls.map((call) => call.kind), ['begin', 'commit']);
+  assert.ok(interactiveTxCalls.some((call) => call.kind === 'executeRaw' && call.sql.includes('UPDATE [dbo].[users] SET [name] = @name')));
+  await assert.rejects(() => interactiveTx.$rollback(), /interactive transaction client/);
+
+  const rollbackTx = await interactiveDb.$begin();
+  await rollbackTx.order.updateMany({ where: { userId: 'interactive-user' }, data: { name: 'Rolled back' } });
+  await rollbackTx.$rollback();
+  assert.deepStrictEqual(interactiveRootCalls.map((call) => call.kind), ['begin', 'commit', 'begin', 'rollback']);
+  await assert.rejects(() => rollbackTx.$commit(), /interactive transaction client/);
+  await assert.rejects(() => rollbackTx.$begin(), /cannot be nested/);
+
   console.log('an5Orm runtime test passed');
 }
 

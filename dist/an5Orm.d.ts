@@ -4,6 +4,12 @@ type ExecutorFn = ((queryText: string, params?: Record<string, any>) => Promise<
     transaction?: <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: {
         timeout?: number;
     }) => Promise<R>;
+    beginTransaction?: () => Promise<InteractiveTransactionExecutor>;
+};
+type InteractiveTransactionExecutor = {
+    executor: ExecutorFn;
+    commit: () => Promise<void>;
+    rollback: () => Promise<void>;
 };
 export interface MiddlewareParams {
     model?: string;
@@ -16,10 +22,11 @@ export type Middleware = (params: MiddlewareParams, next: MiddlewareNext) => Pro
 export declare class An5ORM {
     private customExecutor?;
     private readonly inTransaction;
+    private transactionControl?;
     [key: string]: any;
     private middlewares;
     readonly metadata: An5Metadata;
-    constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata, inTransaction?: boolean);
+    constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata, inTransaction?: boolean, transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback"> | undefined);
     $use(middleware: Middleware): void;
     parseWhere(modelName: string, where: any, params: Record<string, any>, prefix?: string): string;
     _executeMiddleware(params: MiddlewareParams, finalAction: (params: MiddlewareParams) => Promise<any>): Promise<any>;
@@ -32,6 +39,9 @@ export declare class An5ORM {
     $transaction<R>(fn: ((tx: any) => Promise<R>) | Promise<any>[], options?: {
         timeout?: number;
     }): Promise<any>;
+    $begin(): Promise<any>;
+    $commit(): Promise<void>;
+    $rollback(): Promise<void>;
 }
 export declare const an5Orm: An5ORM;
 export default an5Orm;

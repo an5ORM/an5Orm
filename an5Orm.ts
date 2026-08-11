@@ -16,6 +16,13 @@ import {
 type ExecutorFn = ((queryText: string, params?: Record<string, any>) => Promise<any[]>) & {
   executeRaw?: (queryText: string, params?: Record<string, any>) => Promise<number>;
   transaction?: <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: { timeout?: number }) => Promise<R>;
+  beginTransaction?: () => Promise<InteractiveTransactionExecutor>;
+};
+
+type InteractiveTransactionExecutor = {
+  executor: ExecutorFn;
+  commit: () => Promise<void>;
+  rollback: () => Promise<void>;
 };
 
 function aggSelect(fn: string, key: string): string {
@@ -49,6 +56,18 @@ const execQuery: ExecutorFn = Object.assign(
     transaction: async <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: { timeout?: number }): Promise<R> => {
       const a = await getAdapter();
       return a.$transaction(async (tx: any) => fn(executorFromAdapterLike(tx)), options);
+    },
+    beginTransaction: async (): Promise<InteractiveTransactionExecutor> => {
+      const a: any = await getAdapter();
+      if (typeof a.$begin !== "function") {
+        throw new Error("Interactive transactions require an adapter with $begin support");
+      }
+      const tx = await a.$begin();
+      return {
+        executor: executorFromAdapterLike(tx),
+        commit: () => tx.$commit(),
+        rollback: () => tx.$rollback(),
+      };
     },
   }
 );
@@ -1422,7 +1441,8 @@ export class An5ORM {
   constructor(
     private customExecutor?: ExecutorFn,
     metadata?: An5Metadata,
-    private readonly inTransaction = false
+    private readonly inTransaction = false,
+    private transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback">
   ) {
     this.metadata = metadata ?? loadAutoMetadata();
     // Add default logging middleware
@@ -1449,6 +1469,15 @@ export class An5ORM {
         }
         if (prop === "$transaction") {
           return target.$transaction.bind(target);
+        }
+        if (prop === "$begin") {
+          return target.$begin.bind(target);
+        }
+        if (prop === "$commit") {
+          return target.$commit.bind(target);
+        }
+        if (prop === "$rollback") {
+          return target.$rollback.bind(target);
         }
         if (prop === "$connect") {
           return target.$connect.bind(target);
@@ -1636,6 +1665,39 @@ export class An5ORM {
       const txClient = new An5ORM(txExecutor, this.metadata, true);
       return fn(txClient);
     }, options);
+  }
+
+  async $begin(): Promise<any> {
+    if (this.inTransaction) {
+      throw new Error("Interactive transactions cannot be nested");
+    }
+    const executor = this.customExecutor || execQuery;
+    if (!executor.beginTransaction) {
+      throw new Error("Interactive transactions require an executor with beginTransaction support");
+    }
+    const tx = await executor.beginTransaction();
+    return new An5ORM(tx.executor, this.metadata, true, {
+      commit: tx.commit,
+      rollback: tx.rollback,
+    });
+  }
+
+  async $commit(): Promise<void> {
+    if (!this.transactionControl) {
+      throw new Error("$commit can only be called on an interactive transaction client");
+    }
+    const control = this.transactionControl;
+    this.transactionControl = undefined;
+    await control.commit();
+  }
+
+  async $rollback(): Promise<void> {
+    if (!this.transactionControl) {
+      throw new Error("$rollback can only be called on an interactive transaction client");
+    }
+    const control = this.transactionControl;
+    this.transactionControl = undefined;
+    await control.rollback();
   }
 }
 

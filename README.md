@@ -114,6 +114,15 @@ await db.$transaction(async (tx) => {
   await tx.order.create({ data: { userId: user.id, total: 100 } });
 });
 
+const tx = await db.$begin();
+try {
+  await tx.user.update({ where: { id }, data: { active: true } });
+  await tx.$commit();
+} catch (error) {
+  await tx.$rollback();
+  throw error;
+}
+
 // Raw Queries
 const results = await db.$queryRaw`SELECT * FROM users WHERE id = ${id}`;
 ```

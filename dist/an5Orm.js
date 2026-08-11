@@ -33,6 +33,18 @@ const execQuery = Object.assign(async (queryText, params) => {
         const a = await getAdapter();
         return a.$transaction(async (tx) => fn(executorFromAdapterLike(tx)), options);
     },
+    beginTransaction: async () => {
+        const a = await getAdapter();
+        if (typeof a.$begin !== "function") {
+            throw new Error("Interactive transactions require an adapter with $begin support");
+        }
+        const tx = await a.$begin();
+        return {
+            executor: executorFromAdapterLike(tx),
+            commit: () => tx.$commit(),
+            rollback: () => tx.$rollback(),
+        };
+    },
 });
 function normalizeAffectedCount(result) {
     if (typeof result === "number")
@@ -1271,9 +1283,10 @@ function loadAutoMetadata() {
 }
 // Proxied AN5 ORM client class
 class An5ORM {
-    constructor(customExecutor, metadata, inTransaction = false) {
+    constructor(customExecutor, metadata, inTransaction = false, transactionControl) {
         this.customExecutor = customExecutor;
         this.inTransaction = inTransaction;
+        this.transactionControl = transactionControl;
         this.middlewares = [];
         this.metadata = metadata ?? loadAutoMetadata();
         // Add default logging middleware
@@ -1300,6 +1313,15 @@ class An5ORM {
                 }
                 if (prop === "$transaction") {
                     return target.$transaction.bind(target);
+                }
+                if (prop === "$begin") {
+                    return target.$begin.bind(target);
+                }
+                if (prop === "$commit") {
+                    return target.$commit.bind(target);
+                }
+                if (prop === "$rollback") {
+                    return target.$rollback.bind(target);
                 }
                 if (prop === "$connect") {
                     return target.$connect.bind(target);
@@ -1470,6 +1492,36 @@ class An5ORM {
             const txClient = new An5ORM(txExecutor, this.metadata, true);
             return fn(txClient);
         }, options);
+    }
+    async $begin() {
+        if (this.inTransaction) {
+            throw new Error("Interactive transactions cannot be nested");
+        }
+        const executor = this.customExecutor || execQuery;
+        if (!executor.beginTransaction) {
+            throw new Error("Interactive transactions require an executor with beginTransaction support");
+        }
+        const tx = await executor.beginTransaction();
+        return new An5ORM(tx.executor, this.metadata, true, {
+            commit: tx.commit,
+            rollback: tx.rollback,
+        });
+    }
+    async $commit() {
+        if (!this.transactionControl) {
+            throw new Error("$commit can only be called on an interactive transaction client");
+        }
+        const control = this.transactionControl;
+        this.transactionControl = undefined;
+        await control.commit();
+    }
+    async $rollback() {
+        if (!this.transactionControl) {
+            throw new Error("$rollback can only be called on an interactive transaction client");
+        }
+        const control = this.transactionControl;
+        this.transactionControl = undefined;
+        await control.rollback();
     }
 }
 exports.An5ORM = An5ORM;
