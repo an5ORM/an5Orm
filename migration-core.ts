@@ -13,6 +13,7 @@ export interface SchemaIndexDefinition {
   name?: string;
   includeFields?: string[];
   filter?: string;
+  options?: string;
 }
 
 export interface SchemaModel {
@@ -146,10 +147,12 @@ function parseMappedIndex(line: string, directive: '@@unique' | '@@index'): Sche
   const nameMatch = match[2]?.match(/\bmap\s*:\s*"([^"]+)"/);
   const includeMatch = match[2]?.match(/\binclude\s*:\s*\[([\w,\s]+)\]/);
   const filterMatch = match[2]?.match(/\bfilter\s*:\s*"([^"]+)"/);
+  const optionsMatch = match[2]?.match(/\boptions\s*:\s*"([^"]+)"/);
   const definition: SchemaIndexDefinition = { fields };
   if (nameMatch) definition.name = nameMatch[1];
   if (includeMatch) definition.includeFields = includeMatch[1].split(',').map(field => field.trim()).filter(Boolean);
   if (filterMatch) definition.filter = filterMatch[1];
+  if (optionsMatch) definition.options = optionsMatch[1];
   return definition;
 }
 
@@ -481,6 +484,8 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
       const includeSql = includeFields.length > 0 ? ` INCLUDE (${includeFields.map(f => `[${f}]`).join(', ')})` : '';
       const filter = Array.isArray(definition) ? undefined : definition.filter;
       const filterSql = filter ? ` WHERE ${filter}` : '';
+      const options = Array.isArray(definition) ? undefined : definition.options;
+      const optionsSql = options ? ` WITH (${options})` : '';
       ops.push({
         type: 'ADD_INDEX',
         table: model.tableName,
@@ -488,8 +493,9 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
           fields.join(', '),
           includeFields.length > 0 ? `include ${includeFields.join(', ')}` : '',
           filter ? `filter ${filter}` : '',
+          options ? `options ${options}` : '',
         ].filter(Boolean).join(' '),
-        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})${includeSql}${filterSql}`,
+        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})${includeSql}${filterSql}${optionsSql}`,
       });
     }
   }
