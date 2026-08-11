@@ -11,6 +11,7 @@ export interface SchemaField {
 export interface SchemaIndexDefinition {
   fields: string[];
   name?: string;
+  includeFields?: string[];
 }
 
 export interface SchemaModel {
@@ -142,7 +143,11 @@ function parseMappedIndex(line: string, directive: '@@unique' | '@@index'): Sche
   if (!match) return null;
   const fields = match[1].split(',').map(field => field.trim()).filter(Boolean);
   const nameMatch = match[2]?.match(/\bmap\s*:\s*"([^"]+)"/);
-  return { fields, name: nameMatch?.[1] };
+  const includeMatch = match[2]?.match(/\binclude\s*:\s*\[([\w,\s]+)\]/);
+  const definition: SchemaIndexDefinition = { fields };
+  if (nameMatch) definition.name = nameMatch[1];
+  if (includeMatch) definition.includeFields = includeMatch[1].split(',').map(field => field.trim()).filter(Boolean);
+  return definition;
 }
 
 export function quoteTableName(raw: string): string {
@@ -469,11 +474,13 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
     expectedIndexes.add(name.toLowerCase());
     if (!existingIndexes.has(name.toLowerCase())) {
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
+      const includeFields = Array.isArray(definition) ? [] : definition.includeFields || [];
+      const includeSql = includeFields.length > 0 ? ` INCLUDE (${includeFields.map(f => `[${f}]`).join(', ')})` : '';
       ops.push({
         type: 'ADD_INDEX',
         table: model.tableName,
-        details: fields.join(', '),
-        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})`,
+        details: includeFields.length > 0 ? `${fields.join(', ')} include ${includeFields.join(', ')}` : fields.join(', '),
+        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})${includeSql}`,
       });
     }
   }

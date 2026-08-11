@@ -494,8 +494,8 @@ test('parseSchemaText keeps SQL fields and skips relation fields', () => {
   assertEq(models.length, 1);
   assertEq(models[0].tableName, 'app_users');
   assert.deepStrictEqual(models[0].fields.map((field) => field.name), ['id', 'email', 'age']);
-  assert.deepStrictEqual(models[0].compoundUniques, [{ fields: ['email', 'age'], name: undefined }]);
-  assert.deepStrictEqual(models[0].indexes, [{ fields: ['age'], name: undefined }]);
+  assert.deepStrictEqual(models[0].compoundUniques, [{ fields: ['email', 'age'] }]);
+  assert.deepStrictEqual(models[0].indexes, [{ fields: ['age'] }]);
   assert.strictEqual(models[0].fields[2].isOptional, true);
 });
 
@@ -507,13 +507,13 @@ test('parseSchemaText keeps mapped index and unique artifact names', () => {
       tenantId NVARCHAR(64)
       age      INT?
       @@unique([tenantId, email], map: "UQ_app_users_tenant_email")
-      @@index([age], map: "IX_app_users_age_active")
+      @@index([age], map: "IX_app_users_age_active", include: [email, tenantId])
     }
   `);
 
   assertEq(model.fields.find((field) => field.name === 'email').uniqueName, 'UQ_app_users_email');
   assert.deepStrictEqual(model.compoundUniques, [{ fields: ['tenantId', 'email'], name: 'UQ_app_users_tenant_email' }]);
-  assert.deepStrictEqual(model.indexes, [{ fields: ['age'], name: 'IX_app_users_age_active' }]);
+  assert.deepStrictEqual(model.indexes, [{ fields: ['age'], name: 'IX_app_users_age_active', includeFields: ['email', 'tenantId'] }]);
 });
 
 test('buildCreateTableSql maps defaults and constraints', () => {
@@ -763,7 +763,7 @@ test('buildIndexDiff uses mapped artifact names', () => {
       email    NVARCHAR(255) @unique(map: "UQ_app_users_email")
       age      INT?
       @@unique([tenantId, email], map: "UQ_app_users_tenant_email")
-      @@index([age], map: "IX_app_users_age_active")
+      @@index([age], map: "IX_app_users_age_active", include: [email, tenantId])
     }
   `);
   const ops = [];
@@ -773,7 +773,8 @@ test('buildIndexDiff uses mapped artifact names', () => {
   assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_UNIQUE', 'ADD_UNIQUE', 'ADD_INDEX']);
   assertEq(ops[0].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_app_users_email] UNIQUE ([email])');
   assertEq(ops[1].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_app_users_tenant_email] UNIQUE ([tenantId], [email])');
-  assertEq(ops[2].sql, 'CREATE INDEX [IX_app_users_age_active] ON [users] ([age])');
+  assertEq(ops[2].sql, 'CREATE INDEX [IX_app_users_age_active] ON [users] ([age]) INCLUDE ([email], [tenantId])');
+  assertEq(ops[2].details, 'age include email, tenantId');
 
   const matched = [];
   buildIndexDiff(model, {
