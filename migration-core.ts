@@ -12,6 +12,7 @@ export interface SchemaIndexDefinition {
   fields: string[];
   name?: string;
   includeFields?: string[];
+  filter?: string;
 }
 
 export interface SchemaModel {
@@ -144,9 +145,11 @@ function parseMappedIndex(line: string, directive: '@@unique' | '@@index'): Sche
   const fields = match[1].split(',').map(field => field.trim()).filter(Boolean);
   const nameMatch = match[2]?.match(/\bmap\s*:\s*"([^"]+)"/);
   const includeMatch = match[2]?.match(/\binclude\s*:\s*\[([\w,\s]+)\]/);
+  const filterMatch = match[2]?.match(/\bfilter\s*:\s*"([^"]+)"/);
   const definition: SchemaIndexDefinition = { fields };
   if (nameMatch) definition.name = nameMatch[1];
   if (includeMatch) definition.includeFields = includeMatch[1].split(',').map(field => field.trim()).filter(Boolean);
+  if (filterMatch) definition.filter = filterMatch[1];
   return definition;
 }
 
@@ -476,11 +479,17 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
       const includeFields = Array.isArray(definition) ? [] : definition.includeFields || [];
       const includeSql = includeFields.length > 0 ? ` INCLUDE (${includeFields.map(f => `[${f}]`).join(', ')})` : '';
+      const filter = Array.isArray(definition) ? undefined : definition.filter;
+      const filterSql = filter ? ` WHERE ${filter}` : '';
       ops.push({
         type: 'ADD_INDEX',
         table: model.tableName,
-        details: includeFields.length > 0 ? `${fields.join(', ')} include ${includeFields.join(', ')}` : fields.join(', '),
-        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})${includeSql}`,
+        details: [
+          fields.join(', '),
+          includeFields.length > 0 ? `include ${includeFields.join(', ')}` : '',
+          filter ? `filter ${filter}` : '',
+        ].filter(Boolean).join(' '),
+        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})${includeSql}${filterSql}`,
       });
     }
   }
