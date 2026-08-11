@@ -494,9 +494,26 @@ test('parseSchemaText keeps SQL fields and skips relation fields', () => {
   assertEq(models.length, 1);
   assertEq(models[0].tableName, 'app_users');
   assert.deepStrictEqual(models[0].fields.map((field) => field.name), ['id', 'email', 'age']);
-  assert.deepStrictEqual(models[0].compoundUniques, [['email', 'age']]);
-  assert.deepStrictEqual(models[0].indexes, [['age']]);
+  assert.deepStrictEqual(models[0].compoundUniques, [{ fields: ['email', 'age'], name: undefined }]);
+  assert.deepStrictEqual(models[0].indexes, [{ fields: ['age'], name: undefined }]);
   assert.strictEqual(models[0].fields[2].isOptional, true);
+});
+
+test('parseSchemaText keeps mapped index and unique artifact names', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id       NVARCHAR(64) @id
+      email    NVARCHAR(255) @unique(map: "UQ_app_users_email")
+      tenantId NVARCHAR(64)
+      age      INT?
+      @@unique([tenantId, email], map: "UQ_app_users_tenant_email")
+      @@index([age], map: "IX_app_users_age_active")
+    }
+  `);
+
+  assertEq(model.fields.find((field) => field.name === 'email').uniqueName, 'UQ_app_users_email');
+  assert.deepStrictEqual(model.compoundUniques, [{ fields: ['tenantId', 'email'], name: 'UQ_app_users_tenant_email' }]);
+  assert.deepStrictEqual(model.indexes, [{ fields: ['age'], name: 'IX_app_users_age_active' }]);
 });
 
 test('buildCreateTableSql maps defaults and constraints', () => {
@@ -530,6 +547,21 @@ test('buildCreateTableSql includes compound unique constraints', () => {
   assertIncludes(sql, 'CONSTRAINT [UQ_users_compound_0] UNIQUE ([tenantId], [email])');
 });
 
+test('buildCreateTableSql uses mapped unique constraint names', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id       NVARCHAR(64) @id
+      email    NVARCHAR(255) @unique(map: "UQ_app_users_email")
+      tenantId NVARCHAR(64)
+      @@unique([tenantId, email], map: "UQ_app_users_tenant_email")
+    }
+  `);
+
+  const sql = buildCreateTableSql(model);
+  assertIncludes(sql, '[email] NVARCHAR(255) NOT NULL CONSTRAINT [UQ_app_users_email] UNIQUE');
+  assertIncludes(sql, 'CONSTRAINT [UQ_app_users_tenant_email] UNIQUE ([tenantId], [email])');
+});
+
 test('generateColumnDiff emits additive and non-destructive drift SQL', () => {
   const [model] = parseSchemaText(`
     model User {
@@ -550,6 +582,19 @@ test('generateColumnDiff emits additive and non-destructive drift SQL', () => {
   assertIncludes(ops[0].preflightSql[0], 'is NOT NULL without a default on a non-empty table');
   assertEq(ops[1].sql, 'ALTER TABLE [users] ADD [age] INT');
   assertEq(ops[2].sql, '-- ALTER TABLE [users] DROP COLUMN [legacy]');
+});
+
+test('generateColumnDiff uses mapped unique name for additive unique columns', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      email NVARCHAR(255) @unique(map: "UQ_app_users_email")
+    }
+  `);
+  const ops = [];
+
+  generateColumnDiff(model, [], ops);
+
+  assertEq(ops[0].sql, 'ALTER TABLE [users] ADD [email] NVARCHAR(255) NOT NULL CONSTRAINT [UQ_app_users_email] UNIQUE');
 });
 
 test('formatDbColumnSqlType reconstructs common SQL Server type parameters', () => {
@@ -708,6 +753,34 @@ test('buildIndexDiff skips existing named artifacts', () => {
   }, ops);
 
   assertEq(ops.length, 0);
+});
+
+test('buildIndexDiff uses mapped artifact names', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id       NVARCHAR(64) @id
+      tenantId NVARCHAR(64)
+      email    NVARCHAR(255) @unique(map: "UQ_app_users_email")
+      age      INT?
+      @@unique([tenantId, email], map: "UQ_app_users_tenant_email")
+      @@index([age], map: "IX_app_users_age_active")
+    }
+  `);
+  const ops = [];
+
+  buildIndexDiff(model, { indexes: [], uniqueConstraints: [] }, ops);
+
+  assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_UNIQUE', 'ADD_UNIQUE', 'ADD_INDEX']);
+  assertEq(ops[0].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_app_users_email] UNIQUE ([email])');
+  assertEq(ops[1].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_app_users_tenant_email] UNIQUE ([tenantId], [email])');
+  assertEq(ops[2].sql, 'CREATE INDEX [IX_app_users_age_active] ON [users] ([age])');
+
+  const matched = [];
+  buildIndexDiff(model, {
+    indexes: ['IX_app_users_age_active'],
+    uniqueConstraints: ['UQ_app_users_email', 'UQ_app_users_tenant_email'],
+  }, matched);
+  assertEq(matched.length, 0);
 });
 
 test('buildIndexDiff reports stale managed artifacts as commented drops', () => {

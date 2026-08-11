@@ -4,15 +4,21 @@ export interface SchemaField {
   isOptional: boolean;
   isId: boolean;
   isUnique: boolean;
+  uniqueName?: string;
   defaultValue?: string;
+}
+
+export interface SchemaIndexDefinition {
+  fields: string[];
+  name?: string;
 }
 
 export interface SchemaModel {
   name: string;
   tableName: string;
   fields: SchemaField[];
-  compoundUniques: string[][];
-  indexes: string[][];
+  compoundUniques: Array<string[] | SchemaIndexDefinition>;
+  indexes: Array<string[] | SchemaIndexDefinition>;
 }
 
 export interface DbColumn {
@@ -117,6 +123,26 @@ function compoundUniqueConstraintName(model: SchemaModel, idx: number): string {
 
 function indexName(model: SchemaModel, fields: string[]): string {
   return `IX_${safeIdentifierName(model.tableName)}_${safeIdentifierName(fields.join('_'))}`;
+}
+
+function schemaIndexFields(definition: string[] | SchemaIndexDefinition): string[] {
+  return Array.isArray(definition) ? definition : definition.fields;
+}
+
+function schemaIndexName(
+  definition: string[] | SchemaIndexDefinition,
+  fallback: (fields: string[]) => string
+): string {
+  if (!Array.isArray(definition) && definition.name) return definition.name;
+  return fallback(schemaIndexFields(definition));
+}
+
+function parseMappedIndex(line: string, directive: '@@unique' | '@@index'): SchemaIndexDefinition | null {
+  const match = line.match(new RegExp(`${directive}\\(\\[([\\w,\\s]+)\\]([^)]*)\\)`));
+  if (!match) return null;
+  const fields = match[1].split(',').map(field => field.trim()).filter(Boolean);
+  const nameMatch = match[2]?.match(/\bmap\s*:\s*"([^"]+)"/);
+  return { fields, name: nameMatch?.[1] };
 }
 
 export function quoteTableName(raw: string): string {
@@ -343,13 +369,13 @@ export function parseSchemaText(text: string): SchemaModel[] {
       continue;
     }
     if (line.startsWith('@@unique')) {
-      const m = line.match(/@@unique\(\[([\w,\s]+)\]\)/);
-      if (m) current.compoundUniques.push(m[1].split(',').map(f => f.trim()));
+      const parsed = parseMappedIndex(line, '@@unique');
+      if (parsed) current.compoundUniques.push(parsed);
       continue;
     }
     if (line.startsWith('@@index')) {
-      const m = line.match(/@@index\(\[([\w,\s]+)\]\)/);
-      if (m) current.indexes.push(m[1].split(',').map(f => f.trim()));
+      const parsed = parseMappedIndex(line, '@@index');
+      if (parsed) current.indexes.push(parsed);
       continue;
     }
     if (line.startsWith('@@')) continue;
@@ -369,6 +395,7 @@ export function parseSchemaText(text: string): SchemaModel[] {
       isOptional: fieldType.endsWith('?'),
       isId: line.includes('@id'),
       isUnique: line.includes('@unique'),
+      uniqueName: line.match(/@unique\([^)]*\bmap\s*:\s*"([^"]+)"/)?.[1],
       defaultValue: line.match(/@default\((.*)\)/)?.[1],
     });
   }
@@ -382,13 +409,14 @@ export function buildCreateTableSql(model: SchemaModel): string {
     if (f.isId) def += ' PRIMARY KEY';
     if (f.defaultValue) def += ` ${mapDefault(f.defaultValue)}`;
     if (!f.isOptional && !f.defaultValue && !f.isId) def += ' NOT NULL';
-    if (f.isUnique && !f.isId) def += ' UNIQUE';
+    if (f.isUnique && !f.isId) def += f.uniqueName ? ` CONSTRAINT [${f.uniqueName}] UNIQUE` : ' UNIQUE';
     return def;
   });
 
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
-    const fields = model.compoundUniques[idx];
-    const constraintName = compoundUniqueConstraintName(model, idx);
+    const definition = model.compoundUniques[idx];
+    const fields = schemaIndexFields(definition);
+    const constraintName = schemaIndexName(definition, () => compoundUniqueConstraintName(model, idx));
     const fieldsStr = fields.map(f => `[${f}]`).join(', ');
     colDefs.push(`CONSTRAINT [${constraintName}] UNIQUE (${fieldsStr})`);
   }
@@ -404,7 +432,7 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
 
   for (const field of model.fields) {
     if (!field.isUnique || field.isId) continue;
-    const constraintName = fieldUniqueConstraintName(model, field);
+    const constraintName = field.uniqueName || fieldUniqueConstraintName(model, field);
     expectedUniques.add(constraintName.toLowerCase());
     if (!existingUniques.has(constraintName.toLowerCase())) {
       ops.push({
@@ -419,8 +447,9 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
   }
 
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
-    const fields = model.compoundUniques[idx];
-    const constraintName = compoundUniqueConstraintName(model, idx);
+    const definition = model.compoundUniques[idx];
+    const fields = schemaIndexFields(definition);
+    const constraintName = schemaIndexName(definition, () => compoundUniqueConstraintName(model, idx));
     expectedUniques.add(constraintName.toLowerCase());
     if (!existingUniques.has(constraintName.toLowerCase())) {
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
@@ -434,8 +463,9 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
     }
   }
 
-  for (const fields of model.indexes) {
-    const name = indexName(model, fields);
+  for (const definition of model.indexes) {
+    const fields = schemaIndexFields(definition);
+    const name = schemaIndexName(definition, fields => indexName(model, fields));
     expectedIndexes.add(name.toLowerCase());
     if (!existingIndexes.has(name.toLowerCase())) {
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
@@ -490,7 +520,7 @@ export function generateColumnDiff(
       if (f.isId) def += ' PRIMARY KEY';
       if (f.defaultValue) def += ` ${mapDefault(f.defaultValue)}`;
       if (!f.isOptional && !f.defaultValue && !f.isId) def += ' NOT NULL';
-      if (f.isUnique && !f.isId) def += ' UNIQUE';
+      if (f.isUnique && !f.isId) def += f.uniqueName ? ` CONSTRAINT [${f.uniqueName}] UNIQUE` : ' UNIQUE';
       ops.push({
         type: 'ADD_COLUMN',
         table: model.tableName,
@@ -560,8 +590,8 @@ export async function generateDiff(
       buildIndexDiff(model, {
         indexes: [],
         uniqueConstraints: [
-          ...model.fields.filter(field => field.isUnique && !field.isId).map(field => fieldUniqueConstraintName(model, field)),
-          ...model.compoundUniques.map((_, idx) => compoundUniqueConstraintName(model, idx)),
+          ...model.fields.filter(field => field.isUnique && !field.isId).map(field => field.uniqueName || fieldUniqueConstraintName(model, field)),
+          ...model.compoundUniques.map((definition, idx) => schemaIndexName(definition, () => compoundUniqueConstraintName(model, idx))),
         ],
       }, ops);
     }
