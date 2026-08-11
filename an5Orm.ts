@@ -1419,7 +1419,11 @@ export class An5ORM {
   private middlewares: Middleware[] = [];
   public readonly metadata: An5Metadata;
 
-  constructor(private customExecutor?: ExecutorFn, metadata?: An5Metadata) {
+  constructor(
+    private customExecutor?: ExecutorFn,
+    metadata?: An5Metadata,
+    private readonly inTransaction = false
+  ) {
     this.metadata = metadata ?? loadAutoMetadata();
     // Add default logging middleware
     this.$use(async (params, next) => {
@@ -1622,10 +1626,14 @@ export class An5ORM {
 
     const executor = this.customExecutor || execQuery;
     if (!executor.transaction) {
+      if (this.inTransaction) {
+        const txClient = new An5ORM(executor, this.metadata, true);
+        return fn(txClient);
+      }
       throw new Error("Transactions require an executor with transaction support");
     }
     return executor.transaction(async (txExecutor) => {
-      const txClient = new An5ORM(txExecutor, this.metadata);
+      const txClient = new An5ORM(txExecutor, this.metadata, true);
       return fn(txClient);
     }, options);
   }

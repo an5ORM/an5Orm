@@ -15,10 +15,11 @@ export type MiddlewareNext = (params: MiddlewareParams) => Promise<any>;
 export type Middleware = (params: MiddlewareParams, next: MiddlewareNext) => Promise<any>;
 export declare class An5ORM {
     private customExecutor?;
+    private readonly inTransaction;
     [key: string]: any;
     private middlewares;
     readonly metadata: An5Metadata;
-    constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata);
+    constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata, inTransaction?: boolean);
     $use(middleware: Middleware): void;
     parseWhere(modelName: string, where: any, params: Record<string, any>, prefix?: string): string;
     _executeMiddleware(params: MiddlewareParams, finalAction: (params: MiddlewareParams) => Promise<any>): Promise<any>;

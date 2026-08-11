@@ -479,13 +479,17 @@ async function main() {
       where: { id: 'tx-user' },
       data: { orders: { create: { id: 'tx-child', name: 'Child in tx' } } },
     });
+    const nestedResult = await tx.$transaction(async (innerTx) => {
+      return innerTx.order.updateMany({ where: { userId: 'tx-user' }, data: { name: 'Nested tx' } });
+    });
     const rawCount = await tx.$executeRaw`UPDATE dbo.users SET name = ${'Raw tx'}`;
-    return { updated, rawCount };
+    return { updated, nestedResult, rawCount };
   });
 
-  assert.deepStrictEqual(txResult, { updated: { count: 3 }, rawCount: 3 });
+  assert.deepStrictEqual(txResult, { updated: { count: 3 }, nestedResult: { count: 3 }, rawCount: 3 });
   assert.deepStrictEqual(rootTxCalls.map((call) => call.kind), ['begin', 'commit']);
   assert.ok(txCalls.some((call) => call.kind === 'executeRaw' && call.sql.includes('UPDATE [dbo].[users] SET [name] = @name')));
+  assert.ok(txCalls.some((call) => call.kind === 'executeRaw' && call.sql.includes('UPDATE [dbo].[orders] SET [name] = @name')));
   assert.ok(txCalls.some((call) => call.sql.includes('INSERT INTO [dbo].[orders]') && call.params.userId === 'tx-user'));
   assert.ok(txCalls.some((call) => call.kind === 'executeRaw' && call.sql.includes('UPDATE dbo.users SET name = @p_0')));
 

@@ -1271,8 +1271,9 @@ function loadAutoMetadata() {
 }
 // Proxied AN5 ORM client class
 class An5ORM {
-    constructor(customExecutor, metadata) {
+    constructor(customExecutor, metadata, inTransaction = false) {
         this.customExecutor = customExecutor;
+        this.inTransaction = inTransaction;
         this.middlewares = [];
         this.metadata = metadata ?? loadAutoMetadata();
         // Add default logging middleware
@@ -1459,10 +1460,14 @@ class An5ORM {
         }
         const executor = this.customExecutor || execQuery;
         if (!executor.transaction) {
+            if (this.inTransaction) {
+                const txClient = new An5ORM(executor, this.metadata, true);
+                return fn(txClient);
+            }
             throw new Error("Transactions require an executor with transaction support");
         }
         return executor.transaction(async (txExecutor) => {
-            const txClient = new An5ORM(txExecutor, this.metadata);
+            const txClient = new An5ORM(txExecutor, this.metadata, true);
             return fn(txClient);
         }, options);
     }
