@@ -750,6 +750,26 @@ test('generateDiff does not duplicate inline unique constraints for new tables',
   assertEq(ops[1].sql, 'CREATE INDEX [IX_users_age] ON [users] ([age])');
 });
 
+test('generateDiff matches dbo-qualified schema tables with unqualified introspection names', async () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id NVARCHAR(64) @id
+      @@map("dbo.users")
+    }
+  `);
+  const introspected = [];
+
+  const ops = await generateDiff([model], ['users'], async (tableName) => {
+    introspected.push(tableName);
+    return [
+      { columnName: 'id', dataType: 'nvarchar', maxLength: 128, isNullable: false, isPrimaryKey: true, isIdentity: false },
+    ];
+  });
+
+  assert.deepStrictEqual(ops, []);
+  assert.deepStrictEqual(introspected, ['dbo.users']);
+});
+
 test('mapDefault keeps generated SQL literal-safe', () => {
   assertEq(mapDefault('"owner\'s"'), "DEFAULT 'owner''s'");
 });

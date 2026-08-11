@@ -129,6 +129,18 @@ export function quoteTableName(raw: string): string {
     .join('.');
 }
 
+function tableIdentityName(raw: string): string {
+  const cleaned = raw
+    .replace(/"/g, '')
+    .split('.')
+    .map(part => part.trim().replace(/^\[|\]$/g, '').toLowerCase())
+    .filter(Boolean);
+  if (cleaned.length > 1 && cleaned[0] === 'dbo') {
+    cleaned.shift();
+  }
+  return cleaned.join('.');
+}
+
 function matchFirst(sql: string | undefined, pattern: RegExp): string | null {
   if (!sql) return null;
   const match = sql.match(pattern);
@@ -539,10 +551,11 @@ export async function generateDiff(
   introspectArtifacts?: (tableName: string) => Promise<TableArtifacts>
 ): Promise<MigrationOp[]> {
   const ops: MigrationOp[] = [];
-  const schemaTableNames = new Set(schemaModels.map(m => m.tableName));
+  const dbTableIdentities = new Set(dbTables.map(tableIdentityName));
+  const schemaTableNames = new Set(schemaModels.map(m => tableIdentityName(m.tableName)));
 
   for (const model of schemaModels) {
-    if (!dbTables.includes(model.tableName)) {
+    if (!dbTableIdentities.has(tableIdentityName(model.tableName))) {
       ops.push({ type: 'CREATE_TABLE', table: model.tableName, sql: buildCreateTableSql(model) });
       buildIndexDiff(model, {
         indexes: [],
@@ -555,7 +568,7 @@ export async function generateDiff(
   }
 
   for (const model of schemaModels) {
-    if (dbTables.includes(model.tableName)) {
+    if (dbTableIdentities.has(tableIdentityName(model.tableName))) {
       const dbColumns = await introspectTable(model.tableName);
       generateColumnDiff(model, dbColumns, ops);
       if (introspectArtifacts) {
@@ -565,7 +578,7 @@ export async function generateDiff(
   }
 
   for (const tableName of dbTables) {
-    if (!schemaTableNames.has(tableName)) {
+    if (!schemaTableNames.has(tableIdentityName(tableName))) {
       ops.push({
         type: 'DROP_TABLE',
         table: tableName,
