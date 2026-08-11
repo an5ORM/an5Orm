@@ -343,6 +343,9 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
         }
         const uniqueKeys = Array.from(new Set(keys));
         let relCols = "*";
+        const nestedInclude = value && typeof value === "object"
+            ? mergeIncludes(value.include, collectRelationSelections(relation.modelName, value.select, metadata))
+            : undefined;
         if (value && typeof value === "object" && value.select) {
             const subSelect = value.select;
             const subRelations = metadata.relationMap[relation.modelName] || {};
@@ -350,9 +353,11 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
                 .filter(k => subSelect[k] && !subRelations[k])
                 .map(k => (0, sql_utils_1.quoteIdentifier)(k));
             if (selectedSubCols.length > 0) {
-                const quotedSearchKey = (0, sql_utils_1.quoteIdentifier)(searchKey);
-                if (!selectedSubCols.includes(quotedSearchKey)) {
-                    selectedSubCols.push(quotedSearchKey);
+                for (const requiredKey of [searchKey, ...requiredRelationKeys(relation.modelName, nestedInclude, metadata)]) {
+                    const quotedRequiredKey = (0, sql_utils_1.quoteIdentifier)(requiredKey);
+                    if (!selectedSubCols.includes(quotedRequiredKey)) {
+                        selectedSubCols.push(quotedRequiredKey);
+                    }
                 }
                 relCols = selectedSubCols.join(", ");
             }
@@ -397,8 +402,8 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
         }
         const relatedRows = await executor(sqlText, subParams);
         relatedRows.forEach((r) => { delete r.__an5_rn; });
-        if (value && typeof value === "object" && value.include) {
-            await resolveIncludes(relation.modelName, relatedRows, value.include, executor, metadata);
+        if (nestedInclude) {
+            await resolveIncludes(relation.modelName, relatedRows, nestedInclude, executor, metadata);
         }
         const outputRows = value && typeof value === "object" && value.select
             ? relatedRows.map((r) => projectFields(r, value.select))

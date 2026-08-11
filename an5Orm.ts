@@ -378,6 +378,9 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
 
     const uniqueKeys = Array.from(new Set(keys));
     let relCols = "*";
+    const nestedInclude = value && typeof value === "object"
+      ? mergeIncludes((value as any).include, collectRelationSelections(relation.modelName, (value as any).select, metadata))
+      : undefined;
     if (value && typeof value === "object" && (value as any).select) {
       const subSelect = (value as any).select;
       const subRelations = metadata.relationMap[relation.modelName] || {};
@@ -385,9 +388,11 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
         .filter(k => subSelect[k] && !subRelations[k])
         .map(k => quoteIdentifier(k));
       if (selectedSubCols.length > 0) {
-        const quotedSearchKey = quoteIdentifier(searchKey);
-        if (!selectedSubCols.includes(quotedSearchKey)) {
-          selectedSubCols.push(quotedSearchKey);
+        for (const requiredKey of [searchKey, ...requiredRelationKeys(relation.modelName, nestedInclude, metadata)]) {
+          const quotedRequiredKey = quoteIdentifier(requiredKey);
+          if (!selectedSubCols.includes(quotedRequiredKey)) {
+            selectedSubCols.push(quotedRequiredKey);
+          }
         }
         relCols = selectedSubCols.join(", ");
       }
@@ -436,8 +441,8 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
     const relatedRows = await executor(sqlText, subParams);
     relatedRows.forEach((r: any) => { delete r.__an5_rn; });
 
-    if (value && typeof value === "object" && (value as any).include) {
-      await resolveIncludes(relation.modelName, relatedRows, (value as any).include, executor, metadata);
+    if (nestedInclude) {
+      await resolveIncludes(relation.modelName, relatedRows, nestedInclude, executor, metadata);
     }
 
     const outputRows = value && typeof value === "object" && (value as any).select

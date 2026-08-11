@@ -70,6 +70,60 @@ async function main() {
   assert.ok(selectQueries[0].sql.includes('SELECT [name], [id] FROM'), `Expected parent relation key in select SQL, got: ${selectQueries[0].sql}`);
   assert.ok(selectQueries[1].sql.includes('SELECT [id], [userId] FROM [sales].[orders]'), `Expected child relation key in select SQL, got: ${selectQueries[1].sql}`);
 
+  const nestedSelectQueries = [];
+  const nestedSelectDb = new An5ORM(async (sql, params) => {
+    nestedSelectQueries.push({ sql, params });
+    if (/FROM \[dbo\]\.\[users\]/.test(sql)) return [{ id: 'u1', name: 'Son' }];
+    if (/FROM \[dbo\]\.\[orders\]/.test(sql)) return [{ id: 'o1', userId: 'u1', productId: 'p1' }];
+    if (/FROM \[dbo\]\.\[products\]/.test(sql)) return [{ id: 'p1', name: 'Keyboard' }];
+    return [];
+  }, {
+    modelToTable: { user: 'dbo.users', order: 'dbo.orders', product: 'dbo.products' },
+    modelFields: {
+      user: { id: { ts: 'string', sql: 'NVARCHAR(1000)' }, name: { ts: 'string', sql: 'NVARCHAR(255)' } },
+      order: {
+        id: { ts: 'string', sql: 'NVARCHAR(1000)' },
+        userId: { ts: 'string', sql: 'NVARCHAR(1000)' },
+        productId: { ts: 'string', sql: 'NVARCHAR(1000)' },
+      },
+      product: { id: { ts: 'string', sql: 'NVARCHAR(1000)' }, name: { ts: 'string', sql: 'NVARCHAR(255)' } },
+    },
+    relationMap: {
+      user: {
+        orders: { modelName: 'order', relationType: 'many', foreignKey: 'userId', localKey: 'id' },
+      },
+      order: {
+        product: { modelName: 'product', relationType: 'one', foreignKey: 'productId', localKey: 'id' },
+      },
+      product: {},
+    },
+  });
+
+  const nestedSelected = await nestedSelectDb.user.findMany({
+    select: {
+      name: true,
+      orders: {
+        select: {
+          id: true,
+          product: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  assert.deepStrictEqual(nestedSelected, [{
+    name: 'Son',
+    orders: [{ id: 'o1', product: { name: 'Keyboard' } }],
+  }]);
+  assert.ok(
+    nestedSelectQueries[1].sql.includes('SELECT [id], [userId], [productId] FROM [dbo].[orders]'),
+    `Expected nested select query to include relation key, got: ${nestedSelectQueries[1].sql}`
+  );
+  assert.ok(
+    nestedSelectQueries[2].sql.includes('SELECT [name], [id] FROM [dbo].[products]'),
+    `Expected nested relation select query, got: ${nestedSelectQueries[2].sql}`
+  );
+
   const nestedFilterQueries = [];
   const nestedFilterDb = new An5ORM(async (sql, params) => {
     nestedFilterQueries.push({ sql, params });
