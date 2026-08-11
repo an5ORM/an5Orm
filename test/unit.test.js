@@ -657,7 +657,7 @@ test('buildIndexDiff emits missing index and compound unique operations', () => 
     model User {
       id       NVARCHAR(64) @id
       tenantId NVARCHAR(64)
-      email    NVARCHAR(255)
+      email    NVARCHAR(255) @unique
       age      INT?
       @@unique([tenantId, email])
       @@index([age])
@@ -667,10 +667,12 @@ test('buildIndexDiff emits missing index and compound unique operations', () => 
 
   buildIndexDiff(model, { indexes: [], uniqueConstraints: [] }, ops);
 
-  assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_UNIQUE', 'ADD_INDEX']);
-  assertEq(ops[0].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_users_compound_0] UNIQUE ([tenantId], [email])');
-  assertIncludes(ops[0].preflightSql[0], 'GROUP BY [tenantId], [email]');
-  assertEq(ops[1].sql, 'CREATE INDEX [IX_users_age] ON [users] ([age])');
+  assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_UNIQUE', 'ADD_UNIQUE', 'ADD_INDEX']);
+  assertEq(ops[0].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_users_email] UNIQUE ([email])');
+  assertIncludes(ops[0].preflightSql[0], 'GROUP BY [email]');
+  assertEq(ops[1].sql, 'ALTER TABLE [users] ADD CONSTRAINT [UQ_users_compound_0] UNIQUE ([tenantId], [email])');
+  assertIncludes(ops[1].preflightSql[0], 'GROUP BY [tenantId], [email]');
+  assertEq(ops[2].sql, 'CREATE INDEX [IX_users_age] ON [users] ([age])');
 });
 
 test('buildIndexDiff skips existing named artifacts', () => {
@@ -678,7 +680,7 @@ test('buildIndexDiff skips existing named artifacts', () => {
     model User {
       id       NVARCHAR(64) @id
       tenantId NVARCHAR(64)
-      email    NVARCHAR(255)
+      email    NVARCHAR(255) @unique
       age      INT?
       @@unique([tenantId, email])
       @@index([age])
@@ -688,7 +690,7 @@ test('buildIndexDiff skips existing named artifacts', () => {
 
   buildIndexDiff(model, {
     indexes: ['IX_users_age'],
-    uniqueConstraints: ['UQ_users_compound_0'],
+    uniqueConstraints: ['UQ_users_email', 'UQ_users_compound_0'],
   }, ops);
 
   assertEq(ops.length, 0);

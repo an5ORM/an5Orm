@@ -376,6 +376,21 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
   const existingIndexes = new Set((artifacts.indexes || []).map(name => name.toLowerCase()));
   const existingUniques = new Set((artifacts.uniqueConstraints || []).map(name => name.toLowerCase()));
 
+  for (const field of model.fields) {
+    if (!field.isUnique || field.isId) continue;
+    const constraintName = `UQ_${safeIdentifierName(model.tableName)}_${safeIdentifierName(field.name)}`;
+    if (!existingUniques.has(constraintName.toLowerCase())) {
+      ops.push({
+        type: 'ADD_UNIQUE',
+        table: model.tableName,
+        column: field.name,
+        details: field.name,
+        sql: `ALTER TABLE ${quoteTableName(model.tableName)} ADD CONSTRAINT [${constraintName}] UNIQUE ([${field.name}])`,
+        preflightSql: buildUniqueConstraintPreflightSql(model.tableName, [field.name]),
+      });
+    }
+  }
+
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
     const fields = model.compoundUniques[idx];
     const constraintName = `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
