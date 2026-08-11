@@ -709,6 +709,29 @@ test('buildIndexDiff skips existing named artifacts', () => {
   assertEq(ops.length, 0);
 });
 
+test('buildIndexDiff reports stale managed artifacts as commented drops', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id    NVARCHAR(64) @id
+      email NVARCHAR(255)
+      age   INT?
+      @@index([age])
+    }
+  `);
+  const ops = [];
+
+  buildIndexDiff(model, {
+    indexes: ['IX_users_age', 'IX_users_legacy', 'custom_reporting_idx'],
+    uniqueConstraints: ['UQ_users_email', 'UQ_users_compound_0', 'custom_unique'],
+  }, ops);
+
+  assert.deepStrictEqual(ops.map((op) => op.type), ['DROP_INDEX', 'DROP_UNIQUE', 'DROP_UNIQUE']);
+  assertEq(ops[0].sql, '-- DROP INDEX [IX_users_legacy] ON [users]');
+  assertEq(ops[1].sql, '-- ALTER TABLE [users] DROP CONSTRAINT [UQ_users_email]');
+  assertEq(ops[2].sql, '-- ALTER TABLE [users] DROP CONSTRAINT [UQ_users_compound_0]');
+  assert.ok(!ops.some((op) => String(op.sql).includes('custom_')));
+});
+
 test('generateDiff does not duplicate inline unique constraints for new tables', async () => {
   const [model] = parseSchemaText(`
     model User {

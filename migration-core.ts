@@ -28,7 +28,7 @@ export interface DbColumn {
 }
 
 export interface MigrationOp {
-  type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'ADD_UNIQUE' | 'DROP_INDEX' | 'DROP_TABLE';
+  type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'ADD_UNIQUE' | 'DROP_INDEX' | 'DROP_UNIQUE' | 'DROP_TABLE';
   table: string;
   column?: string;
   details?: string;
@@ -113,6 +113,10 @@ function fieldUniqueConstraintName(model: SchemaModel, field: SchemaField): stri
 
 function compoundUniqueConstraintName(model: SchemaModel, idx: number): string {
   return `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
+}
+
+function indexName(model: SchemaModel, fields: string[]): string {
+  return `IX_${safeIdentifierName(model.tableName)}_${safeIdentifierName(fields.join('_'))}`;
 }
 
 export function quoteTableName(raw: string): string {
@@ -383,10 +387,13 @@ export function buildCreateTableSql(model: SchemaModel): string {
 export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, ops: MigrationOp[]): void {
   const existingIndexes = new Set((artifacts.indexes || []).map(name => name.toLowerCase()));
   const existingUniques = new Set((artifacts.uniqueConstraints || []).map(name => name.toLowerCase()));
+  const expectedIndexes = new Set<string>();
+  const expectedUniques = new Set<string>();
 
   for (const field of model.fields) {
     if (!field.isUnique || field.isId) continue;
     const constraintName = fieldUniqueConstraintName(model, field);
+    expectedUniques.add(constraintName.toLowerCase());
     if (!existingUniques.has(constraintName.toLowerCase())) {
       ops.push({
         type: 'ADD_UNIQUE',
@@ -402,6 +409,7 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
     const fields = model.compoundUniques[idx];
     const constraintName = compoundUniqueConstraintName(model, idx);
+    expectedUniques.add(constraintName.toLowerCase());
     if (!existingUniques.has(constraintName.toLowerCase())) {
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
       ops.push({
@@ -415,14 +423,41 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
   }
 
   for (const fields of model.indexes) {
-    const indexName = `IX_${safeIdentifierName(model.tableName)}_${fields.join('_')}`;
-    if (!existingIndexes.has(indexName.toLowerCase())) {
+    const name = indexName(model, fields);
+    expectedIndexes.add(name.toLowerCase());
+    if (!existingIndexes.has(name.toLowerCase())) {
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
       ops.push({
         type: 'ADD_INDEX',
         table: model.tableName,
         details: fields.join(', '),
-        sql: `CREATE INDEX [${indexName}] ON ${quoteTableName(model.tableName)} (${fieldsStr})`,
+        sql: `CREATE INDEX [${name}] ON ${quoteTableName(model.tableName)} (${fieldsStr})`,
+      });
+    }
+  }
+
+  const managedIndexPrefix = `ix_${safeIdentifierName(model.tableName).toLowerCase()}_`;
+  for (const name of artifacts.indexes || []) {
+    const normalized = name.toLowerCase();
+    if (normalized.startsWith(managedIndexPrefix) && !expectedIndexes.has(normalized)) {
+      ops.push({
+        type: 'DROP_INDEX',
+        table: model.tableName,
+        details: 'Index not in schema',
+        sql: `-- DROP INDEX [${name.replace(/]/g, ']]')}] ON ${quoteTableName(model.tableName)}`,
+      });
+    }
+  }
+
+  const managedUniquePrefix = `uq_${safeIdentifierName(model.tableName).toLowerCase()}_`;
+  for (const name of artifacts.uniqueConstraints || []) {
+    const normalized = name.toLowerCase();
+    if (normalized.startsWith(managedUniquePrefix) && !expectedUniques.has(normalized)) {
+      ops.push({
+        type: 'DROP_UNIQUE',
+        table: model.tableName,
+        details: 'Unique constraint not in schema',
+        sql: `-- ALTER TABLE ${quoteTableName(model.tableName)} DROP CONSTRAINT [${name.replace(/]/g, ']]')}]`,
       });
     }
   }
