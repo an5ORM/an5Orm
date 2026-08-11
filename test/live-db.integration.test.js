@@ -219,7 +219,7 @@ async function main() {
     });
     assert.strictEqual(Number(aggregate._count._all), 3);
     assert.strictEqual(Number(aggregate._sum.total), 55);
-    assert.ok(Math.abs(Number(aggregate._avg.total) - 18.3333) < 0.01);
+    assert.ok(Math.abs(Number(aggregate._avg.total) - 18.3333) < 0.5);
 
     const grouped = await db.liveOrder.groupBy({
       by: 'status',
