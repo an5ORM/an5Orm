@@ -4,6 +4,7 @@ import { CodeGenerator } from './code-generator';
 import { MetadataGenerator } from './metadata-generator';
 import { PythonGenerator } from './python-generator';
 import { DotnetGenerator } from './dotnet-generator';
+import { GolangGenerator } from './golang-generator';
 
 import fs from 'fs';
 
@@ -54,12 +55,14 @@ async function main() {
   const outputOrmMetadataPath = path.resolve(rootDir, config.outputs?.typescript?.ormMetadataFile || 'an5Orm/an5Metadata.ts');
   const outputPythonMetadataPath = path.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
   const outputDotnetDir = path.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
+  const outputGolangDir = path.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
 
   console.log('🚀 Starting ORM generation...');
 
   try {
     clearGeneratedFiles(outputTypesDir, '.ts');
     clearGeneratedFiles(outputDotnetDir, '.cs');
+    clearGeneratedFiles(outputGolangDir, '.go');
     if (fs.existsSync(outputMetadataPath)) {
       fs.unlinkSync(outputMetadataPath);
     }
@@ -100,11 +103,15 @@ async function main() {
     }
     const pythonGen = new PythonGenerator(outputPythonMetadataPath);
     pythonGen.generate(models);
-    console.log(`✨ Generated Python metadata in ${outputPythonMetadataPath}`);
+    console.log(`✨ Generated Python metadata and client models in ${pythonDir}`);
 
     const dotnetGen = new DotnetGenerator(outputDotnetDir);
     dotnetGen.generate(models);
     console.log(`✨ Generated .NET models in ${outputDotnetDir}`);
+
+    const golangGen = new GolangGenerator(outputGolangDir);
+    golangGen.generate(models);
+    console.log(`✨ Generated Golang models in ${outputGolangDir}`);
 
     console.log('✅ ORM generation completed successfully.');
   } catch (error) {

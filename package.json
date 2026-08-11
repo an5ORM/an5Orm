@@ -1,7 +1,7 @@
 {
   "name": "@an5/orm",
   "version": "1.0.8",
-  "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, and .NET (C#).",
+  "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, .NET (C#), and Go.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,6 +17,7 @@
     "url": "https://github.com/an5ORM/an5Orm.git"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "generate": "npx tsx generator/src/index.ts",
     "db:push": "npx tsx push.ts",
     "db:pull": "npx tsx pull.ts",
@@ -25,15 +26,18 @@
     "db:migrate": "npx tsx migrate.ts",
     "db:migrate:diff": "npx tsx migrate.ts diff",
     "db:migrate:generate": "npx tsx migrate.ts generate",
+    "db:migrate:apply": "npx tsx migrate.ts apply",
+    "db:migrate:rollback": "npx tsx migrate.ts rollback",
     "db:migrate:status": "npx tsx migrate.ts status",
     "release:cli": "npx tsx scripts/release-cli.ts",
     "release": "node scripts/release.js",
-    "test": "node test/smoke.test.js",
+    "test": "node test/smoke.test.js && node test/unit.test.js && node test/runtime.test.js",
     "test:unit": "node test/unit.test.js",
-    "test:generator": "npm run generate && node test/generator.test.js"
+    "test:generator": "npm run generate && node test/generator.test.js",
+    "test:integration:live": "node test/live-db.integration.test.js"
   },
   "dependencies": {
-    "@an5/adapters": "^0.2.4",
+    "@an5/adapters": "^0.2.5",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "mssql": "^12.5.5"

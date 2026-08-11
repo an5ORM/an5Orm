@@ -37,7 +37,7 @@ export namespace An5 {
   export type DateTimeNullableFilter = { equals?: Date | null; in?: (Date | null)[]; notIn?: (Date | null)[]; lt?: Date; lte?: Date; gt?: Date; gte?: Date; not?: Date | DateTimeNullableFilter | null; };
 }
 
-export interface TableClient<T, WhereInput = any, Select = any, Include = any, CreateInput = any, UpdateInput = any, FindManyArgs = any, FindFirstArgs = any, FindUniqueArgs = any, CreateArgs = any, UpdateArgs = any, UpsertArgs = any, DeleteArgs = any> {
+export interface TableClient<T, WhereInput = any, Select = any, Include = any, CreateInput = any, UpdateInput = any, FindManyArgs = any, FindFirstArgs = any, FindUniqueArgs = any, CreateArgs = any, UpdateArgs = any, UpsertArgs = any, DeleteArgs = any, AggregateArgs = any, GroupByArgs = any> {
   findMany(args?: FindManyArgs): Promise<T[]>;
   vectorSearch(args: { vector: number[]; take?: number; where?: WhereInput; include?: Include; vectorField?: string; distanceMetric?: 'cosine' | 'euclidean' | 'dot'; }): Promise<(T & { distance: number })[]>;
   findFirst(args?: FindFirstArgs): Promise<T | null>;
@@ -49,8 +49,8 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
   updateMany(args: { where?: WhereInput; data: UpdateInput; }): Promise<{ count: number }>;
   delete(args: DeleteArgs): Promise<T>;
   deleteMany(args?: { where?: WhereInput; }): Promise<{ count: number }>;
-  aggregate(args: any): Promise<any>;
-  groupBy(args: any): Promise<any[]>;
+  aggregate(args: AggregateArgs): Promise<any>;
+  groupBy(args: GroupByArgs): Promise<any[]>;
   upsert(args: UpsertArgs): Promise<T>;
 }
 `;
@@ -124,8 +124,11 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
     content += `export type ${model.name}UpdateArgs = { where: ${model.name}WhereInput; data: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}UpsertArgs = { where: ${model.name}WhereInput; create: ${model.name}CreateInput; update: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}DeleteArgs = { where: ${model.name}WhereInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+    content += `export type ${model.name}ScalarFieldEnum = ${model.fields.map(f => `'${f.name}'`).join(' | ') || 'never'};\n`;
+    content += `export type ${model.name}AggregateArgs = { where?: ${model.name}WhereInput; _count?: true | { _all?: true; ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _sum?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _avg?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _min?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _max?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; };\n`;
+    content += `export type ${model.name}GroupByArgs = { by: ${model.name}ScalarFieldEnum | ${model.name}ScalarFieldEnum[]; where?: ${model.name}WhereInput; orderBy?: any; skip?: number; take?: number; _count?: true | { _all?: true; ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _sum?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _avg?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _min?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _max?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; };\n`;
 
-    content += `export type ${model.name}TableClient = TableClient<\n  ${model.name},\n  ${model.name}WhereInput,\n  ${model.name}Select,\n  ${model.name}Include,\n  ${model.name}CreateInput,\n  ${model.name}UpdateInput,\n  ${model.name}FindManyArgs,\n  ${model.name}FindFirstArgs,\n  ${model.name}FindUniqueArgs,\n  ${model.name}CreateArgs,\n  ${model.name}UpdateArgs,\n  ${model.name}UpsertArgs,\n  ${model.name}DeleteArgs\n>;\n`;
+    content += `export type ${model.name}TableClient = TableClient<\n  ${model.name},\n  ${model.name}WhereInput,\n  ${model.name}Select,\n  ${model.name}Include,\n  ${model.name}CreateInput,\n  ${model.name}UpdateInput,\n  ${model.name}FindManyArgs,\n  ${model.name}FindFirstArgs,\n  ${model.name}FindUniqueArgs,\n  ${model.name}CreateArgs,\n  ${model.name}UpdateArgs,\n  ${model.name}UpsertArgs,\n  ${model.name}DeleteArgs,\n  ${model.name}AggregateArgs,\n  ${model.name}GroupByArgs\n>;\n`;
 
     fs.writeFileSync(path.join(this.outputDir, `${model.name}.ts`), content);
   }
@@ -161,6 +164,9 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
       content += `  export type ${model.name}Include = ${model.name}Types.${model.name}Include;\n`;
       content += `  export type ${model.name}CreateInput = ${model.name}Types.${model.name}CreateInput;\n`;
       content += `  export type ${model.name}UpdateInput = ${model.name}Types.${model.name}UpdateInput;\n`;
+      content += `  export type ${model.name}ScalarFieldEnum = ${model.name}Types.${model.name}ScalarFieldEnum;\n`;
+      content += `  export type ${model.name}AggregateArgs = ${model.name}Types.${model.name}AggregateArgs;\n`;
+      content += `  export type ${model.name}GroupByArgs = ${model.name}Types.${model.name}GroupByArgs;\n`;
     }
     content += `}\n`;
 
@@ -183,12 +189,16 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
 
   private getAllPropertyVariations(modelName: string): string[] {
     const variations = new Set<string>();
+    variations.add(modelName);
     variations.add(this.toCamelCase(modelName));
+    variations.add(modelName + 's');
+    variations.add(this.toCamelCase(modelName) + 's');
     const acronyms = ['LLM', 'AI', 'MCP', 'IT', 'QC', 'HR', 'MR', 'WH', 'SSIS', 'API', 'URL', 'ID', 'JSON'];
     for (const acronym of acronyms) {
       if (modelName.startsWith(acronym)) {
         variations.add(acronym.toLowerCase() + modelName.slice(acronym.length));
         variations.add(acronym[0].toLowerCase() + acronym.slice(1) + modelName.slice(acronym.length));
+        variations.add(acronym.toLowerCase() + modelName.slice(acronym.length) + 's');
       }
     }
     return Array.from(variations);

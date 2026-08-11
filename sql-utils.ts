@@ -13,6 +13,50 @@ export function quoteIdentifier(name: string): string {
   return `[${s.replace(/\]/g, "]]")}]`;
 }
 
+function unquoteBracketIdentifier(part: string): string {
+  const trimmed = String(part).trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed.slice(1, -1).replace(/\]\]/g, "]");
+  }
+  return trimmed;
+}
+
+function splitMultipartIdentifier(name: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inBracket = false;
+  const input = String(name).trim();
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (ch === "[") inBracket = true;
+    if (ch === "]") {
+      if (input[i + 1] === "]") {
+        current += "]]";
+        i += 1;
+        continue;
+      }
+      inBracket = false;
+    }
+    if (ch === "." && !inBracket) {
+      if (current.trim()) parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  if (current.trim()) parts.push(current.trim());
+  return parts.length > 0 ? parts : [input];
+}
+
+/** Quotes one-part or multipart SQL Server table identifiers safely. */
+export function quoteTableIdentifier(name: string): string {
+  return splitMultipartIdentifier(name)
+    .map(part => quoteIdentifier(unquoteBracketIdentifier(part)))
+    .join(".");
+}
+
 /** Sanitizes a parameter name to a safe T-SQL identifier fragment. */
 export function sanitizeParamName(name: string): string {
   const s = String(name);
@@ -37,7 +81,7 @@ export interface QueryContext {
   modelToTable?: Record<string, string>;
 }
 
-const OPERATOR_KEYS = ["in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt"];
+const OPERATOR_KEYS = ["equals", "in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt"];
 
 function isOperatorValue(value: any): boolean {
   if (!value || typeof value !== "object" || value instanceof Date) return false;
@@ -60,7 +104,7 @@ export function buildOrderBy(orderBy: any): string {
 }
 
 /**
- * Recursively builds a WHERE clause from a Prisma-style filter object.
+ * Recursively builds a WHERE clause from a structured filter object.
  *
  * Values are always bound as parameters (`@name`); only identifiers are
  * interpolated directly, and they are run through {@link quoteIdentifier}.
@@ -93,18 +137,26 @@ export function parseWhere(
       if (filtered.length > 0) {
         conditions.push(`(${filtered.join(" OR ")})`);
       }
-    } else if (key === "AND" && Array.isArray(value)) {
-      const andConditions = value.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}and_${idx}_`, ctx));
+    } else if (key === "AND") {
+      const andItems = Array.isArray(value) ? value : [value];
+      const andConditions = andItems.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}and_${idx}_`, ctx));
       const filtered = andConditions.filter(Boolean);
       if (filtered.length > 0) {
         conditions.push(`(${filtered.join(" AND ")})`);
+      }
+    } else if (key === "NOT") {
+      const notItems = Array.isArray(value) ? value : [value];
+      const notConditions = notItems.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}not_${idx}_`, ctx));
+      const filtered = notConditions.filter(Boolean);
+      if (filtered.length > 0) {
+        conditions.push(`NOT (${filtered.join(" AND ")})`);
       }
     } else {
       const modelRelations = relationMap[modelName];
       const relation = modelRelations?.[key];
 
       if (relation) {
-        const relationTable = modelToTable[relation.modelName] || relation.modelName;
+        const relationTable = quoteTableIdentifier(modelToTable[relation.modelName] || relation.modelName);
         const subParams: Record<string, any> = {};
 
         let subWhere: any = value;
@@ -125,22 +177,21 @@ export function parseWhere(
         const subWhereSql = parseWhere(relation.modelName, subWhere, subParams, `${prefix}${key}_`, ctx);
         Object.assign(params, subParams);
 
-        if (subWhereSql) {
-          const fk = quoteIdentifier(relation.foreignKey);
-          const lk = quoteIdentifier(relation.localKey);
-          if (relation.relationType === "one") {
-            if (op === "none") {
-              conditions.push(`${fk} NOT IN (SELECT ${lk} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            } else {
-              conditions.push(`${fk} IN (SELECT ${lk} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            }
+        const fk = quoteIdentifier(relation.foreignKey);
+        const lk = quoteIdentifier(relation.localKey);
+        const outerKey = relation.relationType === "one" ? fk : lk;
+        const innerKey = relation.relationType === "one" ? lk : fk;
+
+        if (op === "every") {
+          if (subWhereSql) {
+            conditions.push(`${outerKey} NOT IN (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK) WHERE NOT (${subWhereSql}))`);
           } else {
-            if (op === "none") {
-              conditions.push(`${lk} NOT IN (SELECT ${fk} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            } else {
-              conditions.push(`${lk} IN (SELECT ${fk} FROM ${relationTable} WITH (NOLOCK) WHERE ${subWhereSql})`);
-            }
+            conditions.push("1 = 1");
           }
+        } else {
+          const relationPredicate = subWhereSql ? ` WHERE ${subWhereSql}` : "";
+          const operator = op === "none" ? "NOT IN" : "IN";
+          conditions.push(`${outerKey} ${operator} (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK)${relationPredicate})`);
         }
       } else {
         const col = quoteIdentifier(key);
@@ -148,7 +199,14 @@ export function parseWhere(
         if (value && typeof value === "object" && !(value instanceof Date)) {
           const ops = Object.entries(value);
           for (const [op, opVal] of ops) {
-            if (op === "in" && Array.isArray(opVal)) {
+            if (op === "equals") {
+              if (opVal === null) {
+                conditions.push(`${col} IS NULL`);
+              } else {
+                conditions.push(`${col} = @${paramName}_equals`);
+                params[`${paramName}_equals`] = opVal;
+              }
+            } else if (op === "in" && Array.isArray(opVal)) {
               if (opVal.length === 0) {
                 conditions.push("1 = 0");
               } else {
@@ -182,8 +240,17 @@ export function parseWhere(
               conditions.push(`${col} LIKE @${paramName}_endsWith`);
               params[`${paramName}_endsWith`] = `%${opVal}`;
             } else if (op === "not") {
-              conditions.push(`${col} <> @${paramName}_not`);
-              params[`${paramName}_not`] = opVal;
+              if (opVal === null) {
+                conditions.push(`${col} IS NOT NULL`);
+              } else if (opVal && typeof opVal === "object" && !(opVal instanceof Date) && !Array.isArray(opVal)) {
+                const nestedParams: Record<string, any> = {};
+                const nestedSql = parseWhere(modelName, { [key]: opVal }, nestedParams, `${prefix}${key}_not_`, ctx);
+                Object.assign(params, nestedParams);
+                if (nestedSql) conditions.push(`NOT (${nestedSql})`);
+              } else {
+                conditions.push(`${col} <> @${paramName}_not`);
+                params[`${paramName}_not`] = opVal;
+              }
             } else if (op === "gte") {
               conditions.push(`${col} >= @${paramName}_gte`);
               params[`${paramName}_gte`] = opVal;

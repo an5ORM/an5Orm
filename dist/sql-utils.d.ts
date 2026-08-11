@@ -8,6 +8,8 @@ import type { RelationDef } from "./metadata";
  * user-supplied column / alias names.
  */
 export declare function quoteIdentifier(name: string): string;
+/** Quotes one-part or multipart SQL Server table identifiers safely. */
+export declare function quoteTableIdentifier(name: string): string;
 /** Sanitizes a parameter name to a safe T-SQL identifier fragment. */
 export declare function sanitizeParamName(name: string): string;
 /** Validates a direction token, defaulting to ASC. */
@@ -20,7 +22,7 @@ export interface QueryContext {
 }
 export declare function buildOrderBy(orderBy: any): string;
 /**
- * Recursively builds a WHERE clause from a Prisma-style filter object.
+ * Recursively builds a WHERE clause from a structured filter object.
  *
  * Values are always bound as parameters (`@name`); only identifiers are
  * interpolated directly, and they are run through {@link quoteIdentifier}.

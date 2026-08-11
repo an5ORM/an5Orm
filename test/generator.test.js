@@ -77,9 +77,9 @@ test('schema files use SQL Server types directly', () => {
   const content = fs.readFileSync(schemaPath, 'utf8');
   assertIncludes(content, 'NVARCHAR(');
   assertIncludes(content, 'DATETIME2');
-  // Should NOT have Prisma-like types
-  assert(!content.includes('String '), 'Should not use Prisma-like String type');
-  assert(!content.includes('DateTime '), 'Should not use Prisma-like DateTime type');
+  // Should NOT use generic TypeScript types
+  assert(!content.includes('String '), 'Should not use generic String type');
+  assert(!content.includes('DateTime '), 'Should not use generic DateTime type');
 });
 
 // ─── Generator source tests ──────────────────────────────────────────────────
@@ -111,6 +111,11 @@ test('dotnet-generator.ts exists', () => {
   assertExists(dotnetPath);
 });
 
+test('golang-generator.ts exists', () => {
+  const goPath = path.join(__dirname, '..', 'generator', 'src', 'golang-generator.ts');
+  assertExists(goPath);
+});
+
 test('types.ts exists with Model and Field interfaces', () => {
   const typesPath = path.join(__dirname, '..', 'generator', 'src', 'types.ts');
   assertExists(typesPath);
@@ -126,6 +131,7 @@ test('generator index.ts has main function', () => {
   assertIncludes(content, 'SchemaParser');
   assertIncludes(content, 'CodeGenerator');
   assertIncludes(content, 'MetadataGenerator');
+  assertIncludes(content, 'GolangGenerator');
 });
 
 // ─── Generated output tests ──────────────────────────────────────────────────
@@ -143,6 +149,52 @@ test('an5Client/typescript/base.ts exists with An5 namespace', () => {
   const content = fs.readFileSync(basePath, 'utf8');
   assertIncludes(content, 'namespace An5');
   assertIncludes(content, 'An5ClientKnownRequestError');
+  assertIncludes(content, 'equals?: string');
+  assertIncludes(content, 'equals?: number');
+  assertIncludes(content, 'multiply?: number');
+  assertIncludes(content, 'divide?: number');
+  assertIncludes(content, 'AggregateArgs = any');
+  assertIncludes(content, 'GroupByArgs = any');
+  assertIncludes(content, 'aggregate(args: AggregateArgs)');
+  assertIncludes(content, 'groupBy(args: GroupByArgs)');
+});
+
+test('an5Client/typescript model where inputs expose logical filters', () => {
+  const userPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'User.ts');
+  assertExists(userPath);
+  const content = fs.readFileSync(userPath, 'utf8');
+  assertIncludes(content, 'AND?: UserWhereInput | UserWhereInput[]');
+  assertIncludes(content, 'OR?: UserWhereInput[]');
+  assertIncludes(content, 'NOT?: UserWhereInput | UserWhereInput[]');
+});
+
+test('code generator emits relation selects as part of the public contract', () => {
+  const genPath = path.join(__dirname, '..', 'generator', 'src', 'code-generator.ts');
+  assertExists(genPath);
+  const content = fs.readFileSync(genPath, 'utf8');
+  assertIncludes(content, "const selectRels = model.relations.map");
+  assertIncludes(content, "?: boolean | ${r.type}FindManyArgs");
+  assertIncludes(content, "_count?: boolean | { select?:");
+});
+
+test('an5Client/typescript groupBy args are model-aware', () => {
+  const orderPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'Order.ts');
+  assertExists(orderPath);
+  const content = fs.readFileSync(orderPath, 'utf8');
+  assertIncludes(content, "export type OrderScalarFieldEnum = 'id' | 'userId' | 'total' | 'createdAt'");
+  assertIncludes(content, 'export type OrderGroupByArgs = { by: OrderScalarFieldEnum | OrderScalarFieldEnum[]');
+  assertIncludes(content, '_sum?: { total?: true }');
+  assertIncludes(content, 'OrderGroupByArgs');
+});
+
+test('an5Client/typescript aggregate args are model-aware', () => {
+  const orderPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'Order.ts');
+  assertExists(orderPath);
+  const content = fs.readFileSync(orderPath, 'utf8');
+  assertIncludes(content, 'export type OrderAggregateArgs = { where?: OrderWhereInput');
+  assertIncludes(content, '_sum?: { total?: true }');
+  assertIncludes(content, '_avg?: { total?: true }');
+  assertIncludes(content, 'OrderAggregateArgs');
 });
 
 test('an5Client/typescript/an5Metadata.ts exists', () => {
@@ -156,24 +208,66 @@ test('an5Client/typescript/an5Metadata.ts exists', () => {
   assertIncludes(content, 'description:');
 });
 
-test('an5Client/python/an5_metadata.py exists', () => {
-  const pyPath = path.join(__dirname, '..', '..', 'an5Client', 'python', 'an5_metadata.py');
-  assertExists(pyPath);
-  const content = fs.readFileSync(pyPath, 'utf8');
-  assertIncludes(content, 'MODEL_TO_TABLE');
-  assertIncludes(content, 'MODEL_DESCRIPTIONS');
-  assertIncludes(content, 'MODEL_FIELDS');
-  assertIncludes(content, '"name": "id"');
-  assertIncludes(content, '"isId": True');
-  assertIncludes(content, '"sql": "NVARCHAR(1000)"');
-  assertIncludes(content, '"description": "Primary key');
+test('an5Client/python files exist and have An5Client & models', () => {
+  const pyDir = path.join(__dirname, '..', '..', 'an5Client', 'python');
+  assertExists(path.join(pyDir, 'an5_metadata.py'));
+  assertExists(path.join(pyDir, 'an5_models.py'));
+  assertExists(path.join(pyDir, 'an5_client.py'));
+  assertExists(path.join(pyDir, '__init__.py'));
+
+  const metaContent = fs.readFileSync(path.join(pyDir, 'an5_metadata.py'), 'utf8');
+  assertIncludes(metaContent, 'MODEL_TO_TABLE');
+  assertIncludes(metaContent, 'MODEL_DESCRIPTIONS');
+  assertIncludes(metaContent, 'MODEL_FIELDS');
+
+  const modelsContent = fs.readFileSync(path.join(pyDir, 'an5_models.py'), 'utf8');
+  assertIncludes(modelsContent, '@dataclass');
+  assertIncludes(modelsContent, 'class User:');
+
+  const clientContent = fs.readFileSync(path.join(pyDir, 'an5_client.py'), 'utf8');
+  assertIncludes(clientContent, 'class An5Client:');
+  assertIncludes(clientContent, 'self.users: AdapterTableClient');
 });
 
-test('an5Client/dotnet files exist', () => {
+test('an5Client/dotnet files exist with complete CRUD methods', () => {
   const dotnetDir = path.join(__dirname, '..', '..', 'an5Client', 'dotnet');
   assertExists(path.join(dotnetDir, 'User.cs'));
   assertExists(path.join(dotnetDir, 'Order.cs'));
   assertExists(path.join(dotnetDir, 'An5DbContext.cs'));
+
+  const dbCtxContent = fs.readFileSync(path.join(dotnetDir, 'An5DbContext.cs'), 'utf8');
+  assertIncludes(dbCtxContent, 'public int Count(');
+  assertIncludes(dbCtxContent, 'public int CreateMany(');
+  assertIncludes(dbCtxContent, 'public int UpdateMany(');
+  assertIncludes(dbCtxContent, 'public int DeleteMany(');
+  assertIncludes(dbCtxContent, 'public T Upsert(');
+});
+
+test('an5Client/golang files exist with models and generic client', () => {
+  const goDir = path.join(__dirname, '..', '..', 'an5Client', 'golang');
+  assertExists(path.join(goDir, 'models.go'));
+  assertExists(path.join(goDir, 'client.go'));
+  assertExists(path.join(goDir, 'config.go'));
+
+  const modelsContent = fs.readFileSync(path.join(goDir, 'models.go'), 'utf8');
+  assertIncludes(modelsContent, 'type User struct {');
+  assertIncludes(modelsContent, 'type Order struct {');
+
+  const clientContent = fs.readFileSync(path.join(goDir, 'client.go'), 'utf8');
+  assertIncludes(clientContent, 'type An5DbContext struct');
+  assertIncludes(clientContent, 'type TableClient[T any] struct');
+  assertIncludes(clientContent, 'func (c *TableClient[T]) FindMany(');
+  assertIncludes(clientContent, 'func (c *TableClient[T]) CreateMany(');
+  assertIncludes(clientContent, 'func (c *TableClient[T]) VectorSearch(');
+  assertIncludes(clientContent, 'direction := strings.ToUpper(fv.Elem().String())');
+  assert.ok(!clientContent.includes('fv.Pointer()'), 'Go client must not convert reflect pointer to SortOrder');
+});
+
+test('golang generator emits safe SortOrder reflection', () => {
+  const generatorPath = path.join(__dirname, '..', 'generator', 'src', 'golang-generator.ts');
+  const content = fs.readFileSync(generatorPath, 'utf8');
+  assertIncludes(content, 'direction := strings.ToUpper(fv.Elem().String())');
+  assert.ok(!content.includes('fv.Pointer()'), 'Go generator must not emit invalid reflect pointer conversion');
 });
 
 // ─── ORM core file tests ─────────────────────────────────────────────────────

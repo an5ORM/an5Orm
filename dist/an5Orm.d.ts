@@ -1,5 +1,10 @@
 import { An5Metadata } from "./metadata";
-type ExecutorFn = (queryText: string, params?: Record<string, any>) => Promise<any[]>;
+type ExecutorFn = ((queryText: string, params?: Record<string, any>) => Promise<any[]>) & {
+    executeRaw?: (queryText: string, params?: Record<string, any>) => Promise<number>;
+    transaction?: <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: {
+        timeout?: number;
+    }) => Promise<R>;
+};
 export interface MiddlewareParams {
     model?: string;
     action: string;

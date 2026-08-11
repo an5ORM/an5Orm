@@ -8,14 +8,18 @@ import {
   sanitizeParamName,
   normalizeSortDirection,
   toNonNegativeInt,
+  quoteTableIdentifier,
   buildOrderBy,
   parseWhere as buildWhere,
 } from "./sql-utils";
 
-type ExecutorFn = (queryText: string, params?: Record<string, any>) => Promise<any[]>;
+type ExecutorFn = ((queryText: string, params?: Record<string, any>) => Promise<any[]>) & {
+  executeRaw?: (queryText: string, params?: Record<string, any>) => Promise<number>;
+  transaction?: <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: { timeout?: number }) => Promise<R>;
+};
 
 function aggSelect(fn: string, key: string): string {
-  return `${fn}(${quoteIdentifier(key)}) as ${aggAlias(fn, key)}`;
+  return `${fn}(${quoteIdentifier(key)}) as ${aggAlias(fn.toLowerCase(), key)}`;
 }
 
 function aggAlias(fn: string, key: string): string {
@@ -32,9 +36,133 @@ async function getAdapter(): Promise<An5Adapter> {
   return adapter;
 }
 
-async function execQuery(queryText: string, params?: Record<string, any>): Promise<any[]> {
-  const a = await getAdapter();
-  return a.exec(queryText, params);
+const execQuery: ExecutorFn = Object.assign(
+  async (queryText: string, params?: Record<string, any>): Promise<any[]> => {
+    const a = await getAdapter();
+    return a.exec(queryText, params);
+  },
+  {
+    executeRaw: async (queryText: string, params?: Record<string, any>): Promise<number> => {
+      const a = await getAdapter();
+      return a._executeRaw(queryText, params);
+    },
+    transaction: async <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: { timeout?: number }): Promise<R> => {
+      const a = await getAdapter();
+      return a.$transaction(async (tx: any) => fn(executorFromAdapterLike(tx)), options);
+    },
+  }
+);
+
+function normalizeAffectedCount(result: any): number {
+  if (typeof result === "number") return result;
+  if (!result) return 0;
+  if (Array.isArray(result.rowsAffected)) return Number(result.rowsAffected[0] ?? 0);
+  if (typeof result.rowsAffected === "number") return result.rowsAffected;
+  if (typeof result.count === "number") return result.count;
+  if (Array.isArray(result) && result.length === 1) return normalizeAffectedCount(result[0]);
+  return 0;
+}
+
+const FILTER_OPERATOR_KEYS = new Set(["in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt"]);
+
+function executorFromAdapterLike(adapterLike: any): ExecutorFn {
+  return Object.assign(
+    async (queryText: string, params?: Record<string, any>) => {
+      return adapterLike.exec(queryText, params);
+    },
+    {
+      executeRaw: async (queryText: string, params?: Record<string, any>) => {
+        if (typeof adapterLike._executeRaw === "function") {
+          return adapterLike._executeRaw(queryText, params);
+        }
+        if (typeof adapterLike.executeRaw === "function") {
+          return adapterLike.executeRaw(queryText, params);
+        }
+        return normalizeAffectedCount(await adapterLike.exec(queryText, params));
+      },
+    }
+  );
+}
+
+function flattenSimpleEqualityWhere(where: any): Record<string, any> | null {
+  if (!where || typeof where !== "object" || where instanceof Date || Array.isArray(where)) {
+    return null;
+  }
+
+  const flat: Record<string, any> = {};
+  for (const [key, value] of Object.entries(where)) {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date || typeof value !== "object") {
+      flat[key] = value;
+      continue;
+    }
+    if (Array.isArray(value)) return null;
+    if (!key.includes("_")) return null;
+
+    for (const [innerKey, innerValue] of Object.entries(value as Record<string, any>)) {
+      if (FILTER_OPERATOR_KEYS.has(innerKey)) return null;
+      if (innerValue === null || innerValue === undefined || (typeof innerValue === "object" && !(innerValue instanceof Date))) {
+        return null;
+      }
+      flat[innerKey] = innerValue;
+    }
+  }
+
+  return Object.keys(flat).length > 0 ? flat : null;
+}
+
+function asArray<T = any>(value: T | T[] | undefined): T[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function hasOwn(obj: any, key: string): boolean {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function appendUpdateSet(sets: string[], params: Record<string, any>, key: string, val: any): void {
+  const col = quoteIdentifier(key);
+  const safeKey = sanitizeParamName(key);
+  if (val && typeof val === "object" && !(val instanceof Date)) {
+    if (val.increment !== undefined) {
+      sets.push(`${col} = ${col} + @${safeKey}_inc`);
+      params[`${safeKey}_inc`] = val.increment;
+      return;
+    }
+    if (val.decrement !== undefined) {
+      sets.push(`${col} = ${col} - @${safeKey}_dec`);
+      params[`${safeKey}_dec`] = val.decrement;
+      return;
+    }
+    if (val.multiply !== undefined) {
+      sets.push(`${col} = ${col} * @${safeKey}_mul`);
+      params[`${safeKey}_mul`] = val.multiply;
+      return;
+    }
+    if (val.divide !== undefined) {
+      sets.push(`${col} = ${col} / @${safeKey}_div`);
+      params[`${safeKey}_div`] = val.divide;
+      return;
+    }
+    if (val.set !== undefined) {
+      sets.push(`${col} = @${safeKey}_set`);
+      params[`${safeKey}_set`] = val.set;
+      return;
+    }
+  }
+
+  sets.push(`${col} = @${safeKey}`);
+  params[safeKey] = val;
+}
+
+function normalizeByFields(by: any): string[] {
+  if (typeof by === "string") return [by];
+  return Array.isArray(by) ? by.filter((field) => typeof field === "string" && field.length > 0) : [];
+}
+
+function selectedAggregateFields(fields: any): string[] {
+  if (!fields || typeof fields !== "object") return [];
+  return Object.keys(fields).filter((key) => fields[key]);
 }
 
 function projectFields(row: any, select: any) {
@@ -51,6 +179,45 @@ function projectFields(row: any, select: any) {
   return projected;
 }
 
+function collectRelationSelections(modelName: string, select: any, metadata: An5Metadata): any {
+  if (!select || typeof select !== "object") return undefined;
+  const modelRelations = metadata.relationMap[modelName] || {};
+  const relationSelections: Record<string, any> = {};
+  for (const [key, value] of Object.entries(select)) {
+    if (!value) continue;
+    if (key === "_count" || modelRelations[key]) {
+      relationSelections[key] = value;
+    }
+  }
+  return Object.keys(relationSelections).length > 0 ? relationSelections : undefined;
+}
+
+function mergeIncludes(primary: any, secondary: any): any {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  return { ...secondary, ...primary };
+}
+
+function requiredRelationKeys(modelName: string, include: any, metadata: An5Metadata): string[] {
+  if (!include || typeof include !== "object") return [];
+  const modelRelations = metadata.relationMap[modelName] || {};
+  const keys = new Set<string>();
+  for (const [key, value] of Object.entries(include)) {
+    if (!value) continue;
+    const relation = modelRelations[key];
+    if (!relation) {
+      if (key === "_count") {
+        for (const rel of Object.values(modelRelations)) {
+          keys.add(rel.localKey);
+        }
+      }
+      continue;
+    }
+    keys.add(relation.relationType === "one" ? relation.foreignKey : relation.localKey);
+  }
+  return Array.from(keys);
+}
+
 // Helper to batch-query and resolve relationships
 async function resolveIncludes(modelName: string, rows: any[], include: any, executor: ExecutorFn, metadata: An5Metadata) {
   if (!rows || rows.length === 0 || !include) return;
@@ -63,12 +230,14 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
 
     const relation = modelRelations[key];
     if (!relation) {
-      if (key === "_count" && value && typeof value === "object") {
-        const countFields = Object.keys((value as any).select || {});
+      if (key === "_count" && value) {
+        const countFields = value === true
+          ? Object.keys(modelRelations)
+          : Object.keys((value as any).select || {}).filter((field) => (value as any).select[field]);
         for (const countField of countFields) {
           const rel = modelRelations[countField];
           if (rel) {
-            const relTable = metadata.modelToTable[rel.modelName];
+            const relTable = quoteTableIdentifier(metadata.modelToTable[rel.modelName] || rel.modelName);
             const localKeys = rows.map(r => r[rel.localKey]).filter(Boolean);
             if (localKeys.length === 0) {
               rows.forEach(r => { r._count = { ...r._count, [countField]: 0 }; });
@@ -97,7 +266,7 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
       continue;
     }
 
-    const relTable = metadata.modelToTable[relation.modelName];
+    const relTable = quoteTableIdentifier(metadata.modelToTable[relation.modelName] || relation.modelName);
     const isMany = relation.relationType === "many";
     const matchKey = relation.relationType === "one" ? relation.foreignKey : relation.localKey;
     const searchKey = relation.relationType === "one" ? relation.localKey : relation.foreignKey;
@@ -131,6 +300,13 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
 
     if (value && typeof value === "object") {
       const subArgs = value as any;
+      const subWhereSql = buildWhere(relation.modelName, subArgs.where, subParams, `rel_${key}_`, {
+        relationMap: metadata.relationMap,
+        modelToTable: metadata.modelToTable,
+      });
+      if (subWhereSql) {
+        sqlText += ` AND ${subWhereSql}`;
+      }
       if (subArgs.orderBy) {
         sqlText += buildOrderBy(subArgs.orderBy);
       }
@@ -138,21 +314,18 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
 
     const relatedRows = await executor(sqlText, subParams);
 
-    if (value && typeof value === "object" && (value as any).select) {
-      relatedRows.forEach((r, idx) => {
-        relatedRows[idx] = projectFields(r, (value as any).select);
-      });
-    }
-
     if (value && typeof value === "object" && (value as any).include) {
       await resolveIncludes(relation.modelName, relatedRows, (value as any).include, executor, metadata);
     }
 
+    const outputRows = value && typeof value === "object" && (value as any).select
+      ? relatedRows.map((r) => projectFields(r, (value as any).select))
+      : relatedRows;
     const groupMap = new Map<any, any[]>();
-    relatedRows.forEach((r: any) => {
+    relatedRows.forEach((r: any, idx: number) => {
       const k = r[searchKey];
       if (!groupMap.has(k)) groupMap.set(k, []);
-      groupMap.get(k)!.push(r);
+      groupMap.get(k)!.push(outputRows[idx]);
     });
 
     rows.forEach(r => {
@@ -171,22 +344,40 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
 class TableClient<T = any> {
   constructor(
     private modelName: string,
-    private tableName: string,
+    tableName: string,
     private executor: ExecutorFn,
     private orm: An5ORM
-  ) { }
+  ) {
+    this.tableName = quoteTableIdentifier(tableName);
+  }
+
+  private tableName: string;
+
+  private async executeRaw(queryText: string, params?: Record<string, any>): Promise<number> {
+    if (this.executor.executeRaw) {
+      return this.executor.executeRaw(queryText, params);
+    }
+    return normalizeAffectedCount(await this.executor(queryText, params));
+  }
 
   async findMany(args?: any): Promise<T[]> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'findMany', args }, async (params) => {
       const { args: finalArgs } = params;
       const hasSkip = finalArgs?.skip !== undefined && finalArgs?.skip !== null;
+      const selectedRelations = collectRelationSelections(this.modelName, finalArgs?.select, this.orm.metadata);
+      const include = mergeIncludes(finalArgs?.include, selectedRelations);
 
       let cols = "*";
       if (finalArgs?.select) {
         const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
-        const selectedCols = Object.keys(finalArgs.select)
-          .filter(k => finalArgs.select[k] && !modelRelations[k])
-          .map(k => quoteIdentifier(k));
+        const selectedColNames = Object.keys(finalArgs.select)
+          .filter(k => finalArgs.select[k] && !modelRelations[k] && k !== "_count");
+        for (const key of requiredRelationKeys(this.modelName, include, this.orm.metadata)) {
+          if (!selectedColNames.includes(key)) {
+            selectedColNames.push(key);
+          }
+        }
+        const selectedCols = selectedColNames.map(k => quoteIdentifier(k));
         if (selectedCols.length > 0) {
           cols = selectedCols.join(", ");
         }
@@ -219,13 +410,13 @@ class TableClient<T = any> {
       }
 
       const rows = await this.executor(sqlText, p);
+      if (include) {
+        await resolveIncludes(this.modelName, rows, include, this.executor, this.orm.metadata);
+      }
       if (finalArgs?.select) {
         rows.forEach((r, idx) => {
           rows[idx] = projectFields(r, finalArgs.select);
         });
-      }
-      if (finalArgs?.include) {
-        await resolveIncludes(this.modelName, rows, finalArgs.include, this.executor, this.orm.metadata);
       }
       return rows as T[];
     });
@@ -258,6 +449,12 @@ class TableClient<T = any> {
     });
   }
 
+  private scopedRelationWhere(relation: any, parentId: any, where?: any): any {
+    const parentWhere = { [relation.foreignKey]: parentId };
+    if (!where || Object.keys(where).length === 0) return parentWhere;
+    return { AND: [where, parentWhere] };
+  }
+
   private async handleNestedWrites(data: any, parentId: any) {
     const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
     for (const [key, value] of Object.entries(data)) {
@@ -268,19 +465,66 @@ class TableClient<T = any> {
       if (!relTableClient) continue;
 
       const nestedOps = value as any;
+      if (relation.relationType !== "many") continue;
+
+      if (hasOwn(nestedOps, "set")) {
+        await relTableClient.updateMany({
+          where: { [relation.foreignKey]: parentId },
+          data: { [relation.foreignKey]: null },
+        });
+        for (const item of asArray(nestedOps.set)) {
+          await relTableClient.update({
+            where: item,
+            data: { [relation.foreignKey]: parentId }
+          });
+        }
+      }
 
       // Handle deleteMany (an5Orm-style)
-      if (nestedOps.deleteMany) {
+      if (hasOwn(nestedOps, "deleteMany")) {
         const deleteWhere = Array.isArray(nestedOps.deleteMany) ? { OR: nestedOps.deleteMany } : nestedOps.deleteMany;
         // Scope deletion to parent
-        const scopedWhere = { ...deleteWhere, [relation.foreignKey]: parentId };
+        const scopedWhere = this.scopedRelationWhere(relation, parentId, deleteWhere);
         await relTableClient.deleteMany({ where: scopedWhere });
       }
 
+      if (hasOwn(nestedOps, "delete")) {
+        const deleteWhere = Array.isArray(nestedOps.delete) ? { OR: nestedOps.delete } : nestedOps.delete;
+        await relTableClient.deleteMany({
+          where: this.scopedRelationWhere(relation, parentId, deleteWhere),
+        });
+      }
+
+      if (hasOwn(nestedOps, "disconnect")) {
+        const disconnectWhere = Array.isArray(nestedOps.disconnect) ? { OR: nestedOps.disconnect } : nestedOps.disconnect;
+        await relTableClient.updateMany({
+          where: this.scopedRelationWhere(relation, parentId, disconnectWhere),
+          data: { [relation.foreignKey]: null },
+        });
+      }
+
+      if (hasOwn(nestedOps, "update")) {
+        for (const item of asArray(nestedOps.update)) {
+          await relTableClient.update({
+            where: this.scopedRelationWhere(relation, parentId, item.where),
+            data: item.data,
+          });
+        }
+      }
+
+      if (hasOwn(nestedOps, "upsert")) {
+        for (const item of asArray(nestedOps.upsert)) {
+          await relTableClient.upsert({
+            where: this.scopedRelationWhere(relation, parentId, item.where),
+            create: { ...item.create, [relation.foreignKey]: parentId },
+            update: item.update,
+          });
+        }
+      }
+
       // Handle create
-      if (nestedOps.create) {
-        const createItems = Array.isArray(nestedOps.create) ? nestedOps.create : [nestedOps.create];
-        for (const item of createItems) {
+      if (hasOwn(nestedOps, "create")) {
+        for (const item of asArray(nestedOps.create)) {
           // Inject parent ID
           const itemData = { ...item, [relation.foreignKey]: parentId };
           await relTableClient.create({ data: itemData });
@@ -288,15 +532,12 @@ class TableClient<T = any> {
       }
 
       // Handle connect
-      if (nestedOps.connect) {
-        const connectItems = Array.isArray(nestedOps.connect) ? nestedOps.connect : [nestedOps.connect];
-        for (const item of connectItems) {
-          if (relation.relationType === "many") {
-            await relTableClient.update({
-              where: item,
-              data: { [relation.foreignKey]: parentId }
-            });
-          }
+      if (hasOwn(nestedOps, "connect")) {
+        for (const item of asArray(nestedOps.connect)) {
+          await relTableClient.update({
+            where: item,
+            data: { [relation.foreignKey]: parentId }
+          });
         }
       }
     }
@@ -328,9 +569,10 @@ class TableClient<T = any> {
         // Handle one-relation connect where we hold the FK
         for (const [key, value] of Object.entries(nestedData)) {
           const rel = modelRelations[key];
-          if (rel && rel.relationType === "one" && (value as any).connect) {
-            const connectObj = (value as any).connect;
-            const targetId = connectObj.id || Object.values(connectObj)[0];
+          const nestedValue = value && typeof value === "object" ? (value as any) : {};
+          if (rel && rel.relationType === "one" && (nestedValue.connect || nestedValue.set)) {
+            const connectObj = nestedValue.connect || nestedValue.set;
+            const targetId = connectObj[rel.localKey] || connectObj.id || Object.values(connectObj)[0];
             data[rel.foreignKey] = targetId;
           }
         }
@@ -422,10 +664,15 @@ class TableClient<T = any> {
       // Handle one-relation connect where we hold the FK
       for (const [key, value] of Object.entries(nestedData)) {
         const rel = modelRelations[key];
-        if (rel && rel.relationType === "one" && (value as any).connect) {
-          const connectObj = (value as any).connect;
-          const targetId = connectObj.id || Object.values(connectObj)[0];
-          data[rel.foreignKey] = targetId;
+        const nestedValue = value && typeof value === "object" ? (value as any) : {};
+        if (rel && rel.relationType === "one") {
+          if (nestedValue.connect || nestedValue.set) {
+            const connectObj = nestedValue.connect || nestedValue.set;
+            const targetId = connectObj[rel.localKey] || connectObj.id || Object.values(connectObj)[0];
+            data[rel.foreignKey] = targetId;
+          } else if (hasOwn(nestedValue, "disconnect") || value === null) {
+            data[rel.foreignKey] = null;
+          }
         }
       }
 
@@ -434,39 +681,21 @@ class TableClient<T = any> {
 
       for (const key of Object.keys(data)) {
         const val = data[key];
-        const col = quoteIdentifier(key);
-        const safeKey = sanitizeParamName(key);
-        if (val && typeof val === "object" && !(val instanceof Date)) {
-          if (val.increment !== undefined) {
-            sets.push(`${col} = ${col} + @${safeKey}_inc`);
-            p[`${safeKey}_inc`] = val.increment;
-            continue;
-          } else if (val.decrement !== undefined) {
-            sets.push(`${col} = ${col} - @${safeKey}_dec`);
-            p[`${safeKey}_dec`] = val.decrement;
-            continue;
-          } else if (val.set !== undefined) {
-            sets.push(`${col} = @${safeKey}_set`);
-            p[`${safeKey}_set`] = val.set;
-            continue;
-          }
-        }
-
-        sets.push(`${col} = @${safeKey}`);
-        p[safeKey] = val;
+        appendUpdateSet(sets, p, key, val);
       }
 
       const whereParams: Record<string, any> = {};
       const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
       Object.assign(p, whereParams);
 
-      const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} WHERE ${whereSql}`;
-      await this.executor(sqlText, p);
-
-      // Get parent ID for nested writes
       const existing = await this.findUnique({ where: finalArgs.where });
       if (!existing) throw new Error("Record not found to update");
       const parentId = (existing as any).id;
+
+      if (sets.length > 0) {
+        const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} WHERE ${whereSql}`;
+        await this.executor(sqlText, p);
+      }
 
       // Process nested writes
       await this.handleNestedWrites(nestedData, parentId);
@@ -494,27 +723,11 @@ class TableClient<T = any> {
       for (const key of Object.keys(data)) {
         const val = data[key];
         if (this.orm.metadata.relationMap[this.modelName]?.[key]) continue;
-        const col = quoteIdentifier(key);
-        const safeKey = sanitizeParamName(key);
+        appendUpdateSet(sets, p, key, val);
+      }
 
-        if (val && typeof val === "object" && !(val instanceof Date)) {
-          if (val.increment !== undefined) {
-            sets.push(`${col} = ${col} + @${safeKey}_inc`);
-            p[`${safeKey}_inc`] = val.increment;
-            continue;
-          } else if (val.decrement !== undefined) {
-            sets.push(`${col} = ${col} - @${safeKey}_dec`);
-            p[`${safeKey}_dec`] = val.decrement;
-            continue;
-          } else if (val.set !== undefined) {
-            sets.push(`${col} = @${safeKey}_set`);
-            p[`${safeKey}_set`] = val.set;
-            continue;
-          }
-        }
-
-        sets.push(`${col} = @${safeKey}`);
-        p[safeKey] = val;
+      if (sets.length === 0) {
+        return { count: 0 };
       }
 
       const whereParams: Record<string, any> = {};
@@ -522,7 +735,7 @@ class TableClient<T = any> {
       Object.assign(p, whereParams);
 
       const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} ${whereSql ? `WHERE ${whereSql}` : ""}`;
-      const count = await (await getAdapter())._executeRaw(sqlText, p);
+      const count = await this.executeRaw(sqlText, p);
       return { count };
     });
   }
@@ -549,7 +762,7 @@ class TableClient<T = any> {
       const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
       const sqlText = `DELETE FROM ${this.tableName} ${whereSql ? `WHERE ${whereSql}` : ""}`;
 
-      const count = await (await getAdapter())._executeRaw(sqlText, p);
+      const count = await this.executeRaw(sqlText, p);
       return { count };
     });
   }
@@ -614,6 +827,10 @@ class TableClient<T = any> {
 
         const isUnsupported = msg.includes("vector_distance") ||
           msg.includes("type vector") ||
+          msg.includes("type \"vector\"") ||
+          msg.includes("data type vector") ||
+          msg.includes("not a recognized built-in function") ||
+          msg.includes("not a defined system type") ||
           msg.includes("limit of 1998") ||
           err?.number === 195;
 
@@ -710,7 +927,7 @@ class TableClient<T = any> {
         });
 
         const sqlText = `INSERT INTO ${this.tableName} (${cols.map(quoteIdentifier).join(", ")}) VALUES ${rowPlaceholders.join(", ")}`;
-        await (await getAdapter())._executeRaw(sqlText, params);
+        await this.executeRaw(sqlText, params);
         return { count: rows.length };
       } catch (err: any) {
         logger.warn(`Bulk insert failed, falling back to sequential inserts: ${err.message}`);
@@ -737,25 +954,25 @@ class TableClient<T = any> {
 
       if (finalArgs._sum) {
         resultObj._sum = {};
-        for (const key of Object.keys(finalArgs._sum)) {
+        for (const key of selectedAggregateFields(finalArgs._sum)) {
           selects.push(aggSelect("SUM", key));
         }
       }
       if (finalArgs._avg) {
         resultObj._avg = {};
-        for (const key of Object.keys(finalArgs._avg)) {
+        for (const key of selectedAggregateFields(finalArgs._avg)) {
           selects.push(aggSelect("AVG", key));
         }
       }
       if (finalArgs._min) {
         resultObj._min = {};
-        for (const key of Object.keys(finalArgs._min)) {
+        for (const key of selectedAggregateFields(finalArgs._min)) {
           selects.push(aggSelect("MIN", key));
         }
       }
       if (finalArgs._max) {
         resultObj._max = {};
-        for (const key of Object.keys(finalArgs._max)) {
+        for (const key of selectedAggregateFields(finalArgs._max)) {
           selects.push(aggSelect("MAX", key));
         }
       }
@@ -764,7 +981,7 @@ class TableClient<T = any> {
         if (finalArgs._count === true || finalArgs._count._all) {
           selects.push(`COUNT(*) as count_all`);
         } else {
-          for (const key of Object.keys(finalArgs._count)) {
+          for (const key of selectedAggregateFields(finalArgs._count)) {
             selects.push(aggSelect("COUNT", key));
           }
         }
@@ -785,22 +1002,22 @@ class TableClient<T = any> {
       const row = rows[0] || {};
 
       if (finalArgs._sum) {
-        for (const key of Object.keys(finalArgs._sum)) {
+        for (const key of selectedAggregateFields(finalArgs._sum)) {
           resultObj._sum[key] = row[aggAlias("sum", key)] !== undefined ? row[aggAlias("sum", key)] : null;
         }
       }
       if (finalArgs._avg) {
-        for (const key of Object.keys(finalArgs._avg)) {
+        for (const key of selectedAggregateFields(finalArgs._avg)) {
           resultObj._avg[key] = row[aggAlias("avg", key)] !== undefined ? row[aggAlias("avg", key)] : null;
         }
       }
       if (finalArgs._min) {
-        for (const key of Object.keys(finalArgs._min)) {
+        for (const key of selectedAggregateFields(finalArgs._min)) {
           resultObj._min[key] = row[aggAlias("min", key)] !== undefined ? row[aggAlias("min", key)] : null;
         }
       }
       if (finalArgs._max) {
-        for (const key of Object.keys(finalArgs._max)) {
+        for (const key of selectedAggregateFields(finalArgs._max)) {
           resultObj._max[key] = row[aggAlias("max", key)] !== undefined ? row[aggAlias("max", key)] : null;
         }
       }
@@ -808,7 +1025,7 @@ class TableClient<T = any> {
         if (finalArgs._count === true || finalArgs._count._all) {
           resultObj._count._all = row[`count_all`] || 0;
         } else {
-          for (const key of Object.keys(finalArgs._count)) {
+          for (const key of selectedAggregateFields(finalArgs._count)) {
             resultObj._count[key] = row[aggAlias("count", key)] || 0;
           }
         }
@@ -821,7 +1038,7 @@ class TableClient<T = any> {
   async groupBy(args: any): Promise<any[]> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'groupBy', args }, async (params) => {
       const { args: finalArgs } = params;
-      const byFields = finalArgs.by || [];
+      const byFields = normalizeByFields(finalArgs.by);
       if (byFields.length === 0) {
         throw new Error("groupBy requires 'by' fields");
       }
@@ -832,28 +1049,28 @@ class TableClient<T = any> {
         if (finalArgs._count === true || finalArgs._count._all) {
           selects.push(`COUNT(*) as count_all`);
         } else {
-          for (const key of Object.keys(finalArgs._count)) {
+          for (const key of selectedAggregateFields(finalArgs._count)) {
             selects.push(aggSelect("COUNT", key));
           }
         }
       }
       if (finalArgs._sum) {
-        for (const key of Object.keys(finalArgs._sum)) {
+        for (const key of selectedAggregateFields(finalArgs._sum)) {
           selects.push(aggSelect("SUM", key));
         }
       }
       if (finalArgs._avg) {
-        for (const key of Object.keys(finalArgs._avg)) {
+        for (const key of selectedAggregateFields(finalArgs._avg)) {
           selects.push(aggSelect("AVG", key));
         }
       }
       if (finalArgs._min) {
-        for (const key of Object.keys(finalArgs._min)) {
+        for (const key of selectedAggregateFields(finalArgs._min)) {
           selects.push(aggSelect("MIN", key));
         }
       }
       if (finalArgs._max) {
-        for (const key of Object.keys(finalArgs._max)) {
+        for (const key of selectedAggregateFields(finalArgs._max)) {
           selects.push(aggSelect("MAX", key));
         }
       }
@@ -867,6 +1084,20 @@ class TableClient<T = any> {
 
       sqlText += ` GROUP BY ${byFields.map((f: string) => quoteIdentifier(f)).join(", ")}`;
 
+      const hasSkip = finalArgs?.skip !== undefined && finalArgs?.skip !== null;
+      const hasTake = finalArgs?.take !== undefined && finalArgs?.take !== null;
+      if (finalArgs?.orderBy) {
+        sqlText += buildOrderBy(finalArgs.orderBy);
+      } else if (hasSkip || hasTake) {
+        sqlText += ` ORDER BY ${byFields.map((f: string) => quoteIdentifier(f)).join(", ")}`;
+      }
+      if (hasSkip || hasTake) {
+        sqlText += ` OFFSET ${toNonNegativeInt(finalArgs.skip)} ROWS`;
+        if (hasTake) {
+          sqlText += ` FETCH NEXT ${toNonNegativeInt(finalArgs.take, 1)} ROWS ONLY`;
+        }
+      }
+
       const rows = await this.executor(sqlText, p);
 
       return rows.map((row: any) => {
@@ -878,34 +1109,34 @@ class TableClient<T = any> {
         if (finalArgs._count) {
           item._count = {};
           if (finalArgs._count === true || finalArgs._count._all) {
-            item._count._all = row[`count_all`] || 0;
-          } else {
-            for (const key of Object.keys(finalArgs._count)) {
+          item._count._all = row[`count_all`] || 0;
+        } else {
+            for (const key of selectedAggregateFields(finalArgs._count)) {
               item._count[key] = row[aggAlias("count", key)] || 0;
             }
           }
         }
         if (finalArgs._sum) {
           item._sum = {};
-          for (const key of Object.keys(finalArgs._sum)) {
+          for (const key of selectedAggregateFields(finalArgs._sum)) {
             item._sum[key] = row[aggAlias("sum", key)] !== undefined ? row[aggAlias("sum", key)] : null;
           }
         }
         if (finalArgs._avg) {
           item._avg = {};
-          for (const key of Object.keys(finalArgs._avg)) {
+          for (const key of selectedAggregateFields(finalArgs._avg)) {
             item._avg[key] = row[aggAlias("avg", key)] !== undefined ? row[aggAlias("avg", key)] : null;
           }
         }
         if (finalArgs._min) {
           item._min = {};
-          for (const key of Object.keys(finalArgs._min)) {
+          for (const key of selectedAggregateFields(finalArgs._min)) {
             item._min[key] = row[aggAlias("min", key)] !== undefined ? row[aggAlias("min", key)] : null;
           }
         }
         if (finalArgs._max) {
           item._max = {};
-          for (const key of Object.keys(finalArgs._max)) {
+          for (const key of selectedAggregateFields(finalArgs._max)) {
             item._max[key] = row[aggAlias("max", key)] !== undefined ? row[aggAlias("max", key)] : null;
           }
         }
@@ -913,6 +1144,14 @@ class TableClient<T = any> {
         return item;
       });
     });
+  }
+
+  private async sequentialUpsert(finalArgs: any): Promise<T> {
+    const existing = await this.findUnique({ where: finalArgs.where });
+    if (existing) {
+      return this.update({ where: finalArgs.where, data: finalArgs.update, include: finalArgs.include });
+    }
+    return this.create({ data: finalArgs.create, include: finalArgs.include });
   }
 
   async upsert(args: any): Promise<T> {
@@ -938,8 +1177,12 @@ class TableClient<T = any> {
       if (!cleanCreate.updatedAt && this.orm.metadata.modelFields[this.modelName]?.updatedAt) cleanCreate.updatedAt = now;
       if (!cleanUpdate.updatedAt && this.orm.metadata.modelFields[this.modelName]?.updatedAt) cleanUpdate.updatedAt = now;
 
+      const atomicWhere = flattenSimpleEqualityWhere(where);
+      if (!atomicWhere || Object.keys(cleanUpdate).length === 0) {
+        return this.sequentialUpsert(finalArgs);
+      }
+
       const p: Record<string, any> = {};
-      const whereSql = this.orm.parseWhere(this.modelName, where, p, "upw_");
 
       const allKeys = Array.from(new Set([...Object.keys(cleanCreate), ...Object.keys(cleanUpdate)]));
       const cParam = (k: string) => `c_${sanitizeParamName(k)}`;
@@ -947,6 +1190,9 @@ class TableClient<T = any> {
       for (const k of allKeys) {
         if (cleanCreate[k] !== undefined) p[cParam(k)] = cleanCreate[k];
         if (cleanUpdate[k] !== undefined) p[uParam(k)] = cleanUpdate[k];
+      }
+      for (const [k, v] of Object.entries(atomicWhere)) {
+        p[`upw_${sanitizeParamName(k)}`] = v;
       }
 
       const sourceSelect = allKeys.map(k => {
@@ -958,18 +1204,9 @@ class TableClient<T = any> {
       const insertCols = Object.keys(cleanCreate).map(k => quoteIdentifier(k)).join(", ");
       const insertVals = Object.keys(cleanCreate).map(k => `source.${quoteIdentifier(k)}`).join(", ");
 
-      // Note: This MERGE assumes the 'where' translates to a simple ON clause.
-      // For complex 'where', parseWhere might return something not easily usable in ON.
-      // We'll try to extract simple equality for ON if possible, or fallback to sequential.
-
-      const onClause = Object.keys(where).map(k => {
-        if (typeof where[k] === 'object' && where[k] !== null && !(where[k] instanceof Date)) {
-          // Flatten unique object if needed
-          const inner = where[k];
-          return Object.keys(inner).map(ik => `target.${quoteIdentifier(ik)} = @${sanitizeParamName(`upw_${k}_${ik}`)}`).join(" AND ");
-        }
-        return `target.${quoteIdentifier(k)} = @${sanitizeParamName(`upw_${k}`)}`;
-      }).join(" AND ");
+      const onClause = Object.keys(atomicWhere)
+        .map(k => `target.${quoteIdentifier(k)} = @upw_${sanitizeParamName(k)}`)
+        .join(" AND ");
 
       const sqlText = `
         MERGE INTO ${this.tableName} WITH (HOLDLOCK) AS target
@@ -991,12 +1228,7 @@ class TableClient<T = any> {
         return result as T;
       } catch (err: any) {
         logger.warn(`Atomic upsert failed, falling back to sequential: ${err.message}`);
-        const existing = await this.findUnique({ where: finalArgs.where });
-        if (existing) {
-          return this.update({ where: finalArgs.where, data: finalArgs.update, include: finalArgs.include });
-        } else {
-          return this.create({ data: finalArgs.create, include: finalArgs.include });
-        }
+        return this.sequentialUpsert(finalArgs);
       }
     });
   }
@@ -1100,7 +1332,7 @@ export class An5ORM {
     });
 
     return new Proxy(this, {
-      get(target, prop: string) {
+      get(target, prop: string, receiver) {
         if (prop === "$use") {
           return target.$use.bind(target);
         }
@@ -1133,7 +1365,7 @@ export class An5ORM {
               prop,
               tableName,
               target.customExecutor || execQuery,
-              target // Pass ORM instance for middleware access
+              receiver // Pass the proxied ORM so nested writes can resolve model clients.
             );
           }
         }
@@ -1250,8 +1482,10 @@ export class An5ORM {
     }
 
     queryText = addNoLockToQuery(queryText, this.metadata);
-    const result = (await executor(queryText, params)) as any;
-    return result.rowsAffected?.[0] || 0;
+    if (executor.executeRaw) {
+      return executor.executeRaw(queryText, params);
+    }
+    return normalizeAffectedCount(await executor(queryText, params));
   }
 
   async $executeRawUnsafe(queryText: string, ...values: any[]): Promise<number> {
@@ -1265,8 +1499,10 @@ export class An5ORM {
     }
 
     const modifiedQueryText = addNoLockToQuery(queryText, this.metadata);
-    const result = (await executor(modifiedQueryText, params)) as any;
-    return result.rowsAffected?.[0] || 0;
+    if (executor.executeRaw) {
+      return executor.executeRaw(modifiedQueryText, params);
+    }
+    return normalizeAffectedCount(await executor(modifiedQueryText, params));
   }
 
   async $transaction<R>(
@@ -1277,13 +1513,11 @@ export class An5ORM {
       return Promise.all(fn);
     }
 
-    const a = await getAdapter();
-    return a.$transaction(async (tx) => {
-      const txExecutor: ExecutorFn = async (queryText: string, params?: Record<string, any>) => {
-        const rows = await tx.exec(queryText, params);
-        return rows;
-      };
-
+    const executor = this.customExecutor || execQuery;
+    if (!executor.transaction) {
+      throw new Error("Transactions require an executor with transaction support");
+    }
+    return executor.transaction(async (txExecutor) => {
       const txClient = new An5ORM(txExecutor, this.metadata);
       return fn(txClient);
     }, options);

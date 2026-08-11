@@ -15,11 +15,185 @@ export class DotnetGenerator {
       this.generateEntityClass(model);
     }
     
-    // 2. Generate DbContext / Client metadata file
+    // 2. Generate per-model ORM types (WhereInput, OrderByInput, FindManyArgs, etc.)
+    this.generateOrmTypes(models);
+
+    // 3. Generate DbContext / Client metadata file
     this.generateDbContext(models);
 
-    // 3. Generate configuration helper class
+    // 4. Generate configuration helper class
     this.generateConfigClass();
+  }
+
+  private getCsFilterType(fieldType: string, isOptional: boolean): string {
+    const lower = fieldType.toLowerCase();
+    if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset'].includes(lower)) return 'DateTimeFilter';
+    if (['bool', 'boolean', 'bit'].includes(lower)) return 'BoolFilter';
+    if (['int', 'integer', 'smallint', 'tinyint', 'number'].includes(lower)) return 'IntFilter';
+    if (['bigint', 'long', 'float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower)) return 'NumberFilter';
+    return 'StringFilter';
+  }
+
+  private generateOrmTypes(models: Model[]) {
+    let content = `// This file is auto-generated. Do not edit directly.
+using System;
+using System.Collections.Generic;
+
+namespace An5Orm
+{
+    // ── Base Filter Types ──────────────────────────────────────────────────────
+
+    /// <summary>Type-safe filter for string fields.</summary>
+    public class StringFilter
+    {
+        public new string Equals { get; set; }
+        public string Not { get; set; }
+        public List<string> In { get; set; }
+        public List<string> NotIn { get; set; }
+        public string Contains { get; set; }
+        public string StartsWith { get; set; }
+        public string EndsWith { get; set; }
+        public string Gt { get; set; }
+        public string Gte { get; set; }
+        public string Lt { get; set; }
+        public string Lte { get; set; }
+    }
+
+    /// <summary>Type-safe filter for integer fields.</summary>
+    public class IntFilter
+    {
+        public new int? Equals { get; set; }
+        public int? Not { get; set; }
+        public List<int> In { get; set; }
+        public List<int> NotIn { get; set; }
+        public int? Gt { get; set; }
+        public int? Gte { get; set; }
+        public int? Lt { get; set; }
+        public int? Lte { get; set; }
+    }
+
+    /// <summary>Type-safe filter for numeric/float fields.</summary>
+    public class NumberFilter
+    {
+        public new double? Equals { get; set; }
+        public double? Not { get; set; }
+        public List<double> In { get; set; }
+        public List<double> NotIn { get; set; }
+        public double? Gt { get; set; }
+        public double? Gte { get; set; }
+        public double? Lt { get; set; }
+        public double? Lte { get; set; }
+    }
+
+    /// <summary>Type-safe filter for boolean fields.</summary>
+    public class BoolFilter
+    {
+        public new bool? Equals { get; set; }
+    }
+
+    /// <summary>Type-safe filter for DateTime fields.</summary>
+    public class DateTimeFilter
+    {
+        public new DateTime? Equals { get; set; }
+        public DateTime? Not { get; set; }
+        public List<DateTime> In { get; set; }
+        public List<DateTime> NotIn { get; set; }
+        public DateTime? Gt { get; set; }
+        public DateTime? Gte { get; set; }
+        public DateTime? Lt { get; set; }
+        public DateTime? Lte { get; set; }
+    }
+
+`;
+
+    for (const model of models) {
+      const name = this.capitalize(model.name);
+      const csType = (f: { type: string; isOptional: boolean }) => this.mapType(f.type, f.isOptional);
+
+      content += `    // ── ${name} ORM Types ──────────────────────────────────────────────────────\n\n`;
+
+      // WhereInput
+      content += `    /// <summary>Type-safe WHERE filter for ${name} queries.</summary>\n`;
+      content += `    public class ${name}WhereInput\n    {\n`;
+      content += `        public List<${name}WhereInput> AND { get; set; }\n`;
+      content += `        public List<${name}WhereInput> OR { get; set; }\n`;
+      content += `        public ${name}WhereInput NOT { get; set; }\n`;
+      for (const f of model.fields) {
+        const ft = this.getCsFilterType(f.type, f.isOptional);
+        content += `        public ${ft} ${this.capitalize(f.name)} { get; set; }\n`;
+      }
+      content += `    }\n\n`;
+
+      // OrderByInput
+      content += `    /// <summary>Type-safe ORDER BY for ${name} queries.</summary>\n`;
+      content += `    public class ${name}OrderByInput\n    {\n`;
+      for (const f of model.fields) {
+        content += `        public string ${this.capitalize(f.name)} { get; set; } // "asc" or "desc"\n`;
+      }
+      content += `    }\n\n`;
+
+      // CreateInput
+      content += `    /// <summary>Typed data for creating a new ${name} record.</summary>\n`;
+      content += `    public class ${name}CreateInput\n    {\n`;
+      for (const f of model.fields) {
+        if (!f.isId) {
+          const ct = this.mapType(f.type, f.isOptional || f.hasDefault);
+          content += `        public ${ct} ${this.capitalize(f.name)} { get; set; }\n`;
+        }
+      }
+      content += `    }\n\n`;
+
+      // UpdateInput
+      content += `    /// <summary>Typed data for updating an existing ${name} record.</summary>\n`;
+      content += `    public class ${name}UpdateInput\n    {\n`;
+      for (const f of model.fields) {
+        if (!f.isId) {
+          const ut = this.mapType(f.type, true); // always nullable for update
+          content += `        public ${ut} ${this.capitalize(f.name)} { get; set; }\n`;
+        }
+      }
+      content += `    }\n\n`;
+
+      // FindManyArgs
+      content += `    /// <summary>ORM-style args for ${name}.FindMany().</summary>\n`;
+      content += `    public class ${name}FindManyArgs\n    {\n`;
+      content += `        public ${name}WhereInput Where { get; set; }\n`;
+      content += `        public ${name}OrderByInput OrderBy { get; set; }\n`;
+      content += `        public int? Take { get; set; }\n`;
+      content += `        public int? Skip { get; set; }\n`;
+      content += `        public List<string> Select { get; set; }\n`;
+      content += `    }\n\n`;
+
+      // FindFirstArgs
+      content += `    /// <summary>ORM-style args for ${name}.FindFirst().</summary>\n`;
+      content += `    public class ${name}FindFirstArgs\n    {\n`;
+      content += `        public ${name}WhereInput Where { get; set; }\n`;
+      content += `        public ${name}OrderByInput OrderBy { get; set; }\n`;
+      content += `        public List<string> Select { get; set; }\n`;
+      content += `    }\n\n`;
+
+      // FindUniqueArgs
+      content += `    /// <summary>ORM-style args for ${name}.FindUnique().</summary>\n`;
+      content += `    public class ${name}FindUniqueArgs\n    {\n`;
+      content += `        public ${name}WhereInput Where { get; set; }\n`;
+      content += `    }\n\n`;
+
+      // DeleteManyArgs
+      content += `    /// <summary>ORM-style args for ${name}.DeleteMany().</summary>\n`;
+      content += `    public class ${name}DeleteManyArgs\n    {\n`;
+      content += `        public ${name}WhereInput Where { get; set; }\n`;
+      content += `    }\n\n`;
+
+      // CountArgs
+      content += `    /// <summary>ORM-style args for ${name}.Count().</summary>\n`;
+      content += `    public class ${name}CountArgs\n    {\n`;
+      content += `        public ${name}WhereInput Where { get; set; }\n`;
+      content += `    }\n\n`;
+    }
+
+    content += `}\n`;
+
+    fs.writeFileSync(path.join(this.outputDir, 'An5OrmTypes.cs'), content);
   }
 
   private generateConfigClass() {
@@ -115,6 +289,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using An5Orm.Entities;
 
@@ -166,7 +341,9 @@ namespace An5Orm
 `;
 
     for (const model of models) {
-      content += `        public TableClient<${model.name}> ${this.capitalize(model.name)}s => new TableClient<${model.name}>(ConnectionString, "${model.schemaName}.${model.tableName}");\n`;
+      const name = this.capitalize(model.name);
+      content += `        public TableClient<${model.name}> ${name}s => new TableClient<${model.name}>(ConnectionString, "${model.schemaName}.${model.tableName}");\n`;
+      content += `        public TableClient<${model.name}> ${name} => ${name}s;\n`;
     }
 
     content += `    }
@@ -229,6 +406,51 @@ namespace An5Orm
                 cmd.Transaction = activeTx;
             }
             return cmd;
+        }
+
+        public List<T> QueryRaw(string query, Dictionary<string, object> parameters = null)
+        {
+            var list = new List<T>();
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using (var cmd = CreateCommand(conn, query))
+                {
+                    if (parameters != null)
+                    {
+                        foreach (var kvp in parameters)
+                        {
+                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                        }
+                    }
+
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                        while (reader.Read())
+                        {
+                            var item = new T();
+                            foreach (var prop in properties)
+                            {
+                                if (HasColumn(reader, prop.Name))
+                                {
+                                    var val = reader[prop.Name];
+                                    if (val != DBNull.Value)
+                                    {
+                                        prop.SetValue(item, val);
+                                    }
+                                }
+                            }
+                            list.Add(item);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (!isTx) conn.Dispose();
+            }
+            return list;
         }
 
         public List<T> FindMany(string whereClause = null, Dictionary<string, object> parameters = null)
@@ -439,15 +661,132 @@ namespace An5Orm
             }
         }
 
+        public int Count(string whereClause = null, Dictionary<string, object> parameters = null)
+        {
+            string query = $"SELECT COUNT(*) FROM {TableName}";
+            if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using (var cmd = CreateCommand(conn, query))
+                {
+                    if (parameters != null)
+                    {
+                        foreach (var kvp in parameters)
+                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                    }
+                    var res = cmd.ExecuteScalar();
+                    return res != null && res != DBNull.Value ? Convert.ToInt32(res) : 0;
+                }
+            }
+            finally { if (!isTx) conn.Dispose(); }
+        }
+
+        public int CreateMany(IEnumerable<T> entities)
+        {
+            int count = 0;
+            foreach (var entity in entities)
+            {
+                Create(entity);
+                count++;
+            }
+            return count;
+        }
+
+        public int UpdateMany(string whereClause, Dictionary<string, object> updateData, Dictionary<string, object> parameters = null)
+        {
+            if (updateData == null || updateData.Count == 0) return 0;
+            var sets = new List<string>();
+            var sqlParams = new List<SqlParameter>();
+            int pIndex = 0;
+            foreach (var kvp in updateData)
+            {
+                string paramName = "@u_" + pIndex++;
+                sets.Add($"{kvp.Key} = {paramName}");
+                sqlParams.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
+            }
+            string query = $"UPDATE {TableName} SET {string.Join(", ", sets)}";
+            if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using (var cmd = CreateCommand(conn, query))
+                {
+                    cmd.Parameters.AddRange(sqlParams.ToArray());
+                    if (parameters != null)
+                    {
+                        foreach (var kvp in parameters)
+                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                    }
+                    return cmd.ExecuteNonQuery();
+                }
+            }
+            finally { if (!isTx) conn.Dispose(); }
+        }
+
+        public int DeleteMany(string whereClause = null, Dictionary<string, object> parameters = null)
+        {
+            string query = $"DELETE FROM {TableName}";
+            if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using (var cmd = CreateCommand(conn, query))
+                {
+                    if (parameters != null)
+                    {
+                        foreach (var kvp in parameters)
+                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                    }
+                    return cmd.ExecuteNonQuery();
+                }
+            }
+            finally { if (!isTx) conn.Dispose(); }
+        }
+
+        public T Upsert(T entity, string idColumnName = "Id")
+        {
+            var prop = typeof(T).GetProperty(idColumnName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (prop == null) throw new InvalidOperationException($"Property '{idColumnName}' not found on entity.");
+            var idVal = prop.GetValue(entity);
+            var existing = idVal != null ? FindUnique(idVal) : default;
+            if (existing != null) return Update(entity);
+            return Create(entity);
+        }
+
         public List<T> VectorSearch(List<double> vector, int take = 10, string whereClause = null, Dictionary<string, object> parameters = null, string vectorField = "Embedding", string distanceMetric = "cosine")
         {
+            // 1. Primary path: Native database SQL vector query execution (VECTOR_DISTANCE)
+            try
+            {
+                var dim = vector.Count;
+                var vecJson = JsonSerializer.Serialize(vector);
+                var sql = $"SELECT TOP ({take}) *, VECTOR_DISTANCE('{distanceMetric}', CAST([{vectorField}] AS VECTOR({dim}, float32)), CAST(@query_vector AS VECTOR({dim}, float32))) AS distance FROM {TableName} WITH (NOLOCK)";
+
+                var p = parameters != null ? new Dictionary<string, object>(parameters) : new Dictionary<string, object>();
+                p["query_vector"] = vecJson;
+
+                if (!string.IsNullOrWhiteSpace(whereClause))
+                    sql += $" WHERE [{vectorField}] IS NOT NULL AND ({whereClause})";
+                else
+                    sql += $" WHERE [{vectorField}] IS NOT NULL";
+                sql += " ORDER BY distance ASC";
+
+                var nativeRows = QueryRaw(sql, p);
+                if (nativeRows != null) return nativeRows;
+            }
+            catch
+            {
+                // Fallback to in-memory similarity computation if DB instance lacks native VECTOR_DISTANCE
+            }
+
+            // 2. Secondary fallback: In-memory similarity computation
             var rows = FindMany(whereClause, parameters);
             var results = new List<Tuple<T, double>>();
 
             var propInfo = typeof(T).GetProperty(vectorField, BindingFlags.Public | BindingFlags.Instance);
             if (propInfo == null)
             {
-                // Fallback case-insensitive
                 propInfo = typeof(T).GetProperty(vectorField, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
             }
             if (propInfo == null) return rows;
@@ -477,12 +816,11 @@ namespace An5Orm
             }
 
             results.Sort((a, b) => a.Item2.CompareTo(b.Item2));
-            
+
             var output = new List<T>();
             int limit = Math.Min(take, results.Count);
             for (int i = 0; i < limit; i++)
             {
-                // Set the distance property if the model has a public property named Distance
                 var distanceProp = typeof(T).GetProperty("Distance", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
                 if (distanceProp != null && distanceProp.PropertyType == typeof(double))
                 {

@@ -4,14 +4,14 @@ SQL Server ORM. Proxy client. CRUD. Vector search. Middleware. Raw queries. Tran
 
 ## Features
 
--   **Proxy Client.** Model access. `db.modelName` syntax.
--   **CRUD.** `findMany`, `findFirst`, `findUnique`, `create`, `update`, `delete`, `upsert`.
+-   **Proxy Client.** Flexible model access (`db.User`, `db.user`, `db.Users`, `db.users`).
+-   **CRUD.** `findMany`, `findFirst`, `findUnique`, `count`, `create`, `createMany`, `update`, `updateMany`, `delete`, `deleteMany`, `upsert`.
 -   **Advanced Queries.** OR/AND, nested relations, aggregates, `groupBy`.
 -   **Vector Search.** Native SQL Server `VECTOR_DISTANCE`. In-memory fallback.
 -   **Middleware.** Hook ORM operations: logging, auth, validation.
 -   **Raw Queries.** `$queryRaw`, `$executeRaw`. Auto `NOLOCK`.
 -   **Transactions.** `$transaction`. Rollback support.
--   **Schema Generator.** Parse `.an5` files. Generate TypeScript/Python/.NET code.
+-   **Schema Generator.** Parse `.an5` files. Generate TypeScript, Python, .NET (C#), and Golang code.
 
 ## Quick Start
 

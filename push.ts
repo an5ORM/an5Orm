@@ -20,8 +20,15 @@ try {
 const schemaDir = path.resolve(rootDir, config.schemaDir || "an5Schema");
 
 let _adapter: An5Adapter | null = null;
+function requireDatabaseUrl(): void {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is required for db:push.");
+  }
+}
+
 async function getDb(): Promise<An5Adapter> {
   if (!_adapter) {
+    requireDatabaseUrl();
     _adapter = new An5Adapter({ connectionString: process.env.DATABASE_URL! });
     await _adapter.$connect();
   }
@@ -69,6 +76,8 @@ function safeIdentifierName(raw: string): string {
 }
 
 async function push() {
+  requireDatabaseUrl();
+
   let schemaText = "";
   if (fs.existsSync(schemaDir)) {
     const files = fs.readdirSync(schemaDir).filter(f => f.endsWith(".an5"));
@@ -298,6 +307,6 @@ async function push() {
 }
 
 push().catch((err) => {
-  console.error("❌ Push failed:", err);
+  console.error(`❌ Push failed: ${err instanceof Error ? err.message : err}`);
   process.exit(1);
 });

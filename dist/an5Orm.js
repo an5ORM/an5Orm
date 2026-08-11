@@ -8,7 +8,7 @@ const errors_1 = require("./errors");
 const metadata_1 = require("./metadata");
 const sql_utils_1 = require("./sql-utils");
 function aggSelect(fn, key) {
-    return `${fn}(${(0, sql_utils_1.quoteIdentifier)(key)}) as ${aggAlias(fn, key)}`;
+    return `${fn}(${(0, sql_utils_1.quoteIdentifier)(key)}) as ${aggAlias(fn.toLowerCase(), key)}`;
 }
 function aggAlias(fn, key) {
     return (0, sql_utils_1.sanitizeParamName)(`${fn}_${key}`);
@@ -21,9 +21,127 @@ async function getAdapter() {
     }
     return adapter;
 }
-async function execQuery(queryText, params) {
+const execQuery = Object.assign(async (queryText, params) => {
     const a = await getAdapter();
     return a.exec(queryText, params);
+}, {
+    executeRaw: async (queryText, params) => {
+        const a = await getAdapter();
+        return a._executeRaw(queryText, params);
+    },
+    transaction: async (fn, options) => {
+        const a = await getAdapter();
+        return a.$transaction(async (tx) => fn(executorFromAdapterLike(tx)), options);
+    },
+});
+function normalizeAffectedCount(result) {
+    if (typeof result === "number")
+        return result;
+    if (!result)
+        return 0;
+    if (Array.isArray(result.rowsAffected))
+        return Number(result.rowsAffected[0] ?? 0);
+    if (typeof result.rowsAffected === "number")
+        return result.rowsAffected;
+    if (typeof result.count === "number")
+        return result.count;
+    if (Array.isArray(result) && result.length === 1)
+        return normalizeAffectedCount(result[0]);
+    return 0;
+}
+const FILTER_OPERATOR_KEYS = new Set(["in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt"]);
+function executorFromAdapterLike(adapterLike) {
+    return Object.assign(async (queryText, params) => {
+        return adapterLike.exec(queryText, params);
+    }, {
+        executeRaw: async (queryText, params) => {
+            if (typeof adapterLike._executeRaw === "function") {
+                return adapterLike._executeRaw(queryText, params);
+            }
+            if (typeof adapterLike.executeRaw === "function") {
+                return adapterLike.executeRaw(queryText, params);
+            }
+            return normalizeAffectedCount(await adapterLike.exec(queryText, params));
+        },
+    });
+}
+function flattenSimpleEqualityWhere(where) {
+    if (!where || typeof where !== "object" || where instanceof Date || Array.isArray(where)) {
+        return null;
+    }
+    const flat = {};
+    for (const [key, value] of Object.entries(where)) {
+        if (value === null || value === undefined)
+            return null;
+        if (value instanceof Date || typeof value !== "object") {
+            flat[key] = value;
+            continue;
+        }
+        if (Array.isArray(value))
+            return null;
+        if (!key.includes("_"))
+            return null;
+        for (const [innerKey, innerValue] of Object.entries(value)) {
+            if (FILTER_OPERATOR_KEYS.has(innerKey))
+                return null;
+            if (innerValue === null || innerValue === undefined || (typeof innerValue === "object" && !(innerValue instanceof Date))) {
+                return null;
+            }
+            flat[innerKey] = innerValue;
+        }
+    }
+    return Object.keys(flat).length > 0 ? flat : null;
+}
+function asArray(value) {
+    if (value === undefined)
+        return [];
+    return Array.isArray(value) ? value : [value];
+}
+function hasOwn(obj, key) {
+    return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+function appendUpdateSet(sets, params, key, val) {
+    const col = (0, sql_utils_1.quoteIdentifier)(key);
+    const safeKey = (0, sql_utils_1.sanitizeParamName)(key);
+    if (val && typeof val === "object" && !(val instanceof Date)) {
+        if (val.increment !== undefined) {
+            sets.push(`${col} = ${col} + @${safeKey}_inc`);
+            params[`${safeKey}_inc`] = val.increment;
+            return;
+        }
+        if (val.decrement !== undefined) {
+            sets.push(`${col} = ${col} - @${safeKey}_dec`);
+            params[`${safeKey}_dec`] = val.decrement;
+            return;
+        }
+        if (val.multiply !== undefined) {
+            sets.push(`${col} = ${col} * @${safeKey}_mul`);
+            params[`${safeKey}_mul`] = val.multiply;
+            return;
+        }
+        if (val.divide !== undefined) {
+            sets.push(`${col} = ${col} / @${safeKey}_div`);
+            params[`${safeKey}_div`] = val.divide;
+            return;
+        }
+        if (val.set !== undefined) {
+            sets.push(`${col} = @${safeKey}_set`);
+            params[`${safeKey}_set`] = val.set;
+            return;
+        }
+    }
+    sets.push(`${col} = @${safeKey}`);
+    params[safeKey] = val;
+}
+function normalizeByFields(by) {
+    if (typeof by === "string")
+        return [by];
+    return Array.isArray(by) ? by.filter((field) => typeof field === "string" && field.length > 0) : [];
+}
+function selectedAggregateFields(fields) {
+    if (!fields || typeof fields !== "object")
+        return [];
+    return Object.keys(fields).filter((key) => fields[key]);
 }
 function projectFields(row, select) {
     if (!row || !select)
@@ -39,6 +157,48 @@ function projectFields(row, select) {
     }
     return projected;
 }
+function collectRelationSelections(modelName, select, metadata) {
+    if (!select || typeof select !== "object")
+        return undefined;
+    const modelRelations = metadata.relationMap[modelName] || {};
+    const relationSelections = {};
+    for (const [key, value] of Object.entries(select)) {
+        if (!value)
+            continue;
+        if (key === "_count" || modelRelations[key]) {
+            relationSelections[key] = value;
+        }
+    }
+    return Object.keys(relationSelections).length > 0 ? relationSelections : undefined;
+}
+function mergeIncludes(primary, secondary) {
+    if (!primary)
+        return secondary;
+    if (!secondary)
+        return primary;
+    return { ...secondary, ...primary };
+}
+function requiredRelationKeys(modelName, include, metadata) {
+    if (!include || typeof include !== "object")
+        return [];
+    const modelRelations = metadata.relationMap[modelName] || {};
+    const keys = new Set();
+    for (const [key, value] of Object.entries(include)) {
+        if (!value)
+            continue;
+        const relation = modelRelations[key];
+        if (!relation) {
+            if (key === "_count") {
+                for (const rel of Object.values(modelRelations)) {
+                    keys.add(rel.localKey);
+                }
+            }
+            continue;
+        }
+        keys.add(relation.relationType === "one" ? relation.foreignKey : relation.localKey);
+    }
+    return Array.from(keys);
+}
 // Helper to batch-query and resolve relationships
 async function resolveIncludes(modelName, rows, include, executor, metadata) {
     if (!rows || rows.length === 0 || !include)
@@ -51,12 +211,14 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
             continue;
         const relation = modelRelations[key];
         if (!relation) {
-            if (key === "_count" && value && typeof value === "object") {
-                const countFields = Object.keys(value.select || {});
+            if (key === "_count" && value) {
+                const countFields = value === true
+                    ? Object.keys(modelRelations)
+                    : Object.keys(value.select || {}).filter((field) => value.select[field]);
                 for (const countField of countFields) {
                     const rel = modelRelations[countField];
                     if (rel) {
-                        const relTable = metadata.modelToTable[rel.modelName];
+                        const relTable = (0, sql_utils_1.quoteTableIdentifier)(metadata.modelToTable[rel.modelName] || rel.modelName);
                         const localKeys = rows.map(r => r[rel.localKey]).filter(Boolean);
                         if (localKeys.length === 0) {
                             rows.forEach(r => { r._count = { ...r._count, [countField]: 0 }; });
@@ -82,7 +244,7 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
             }
             continue;
         }
-        const relTable = metadata.modelToTable[relation.modelName];
+        const relTable = (0, sql_utils_1.quoteTableIdentifier)(metadata.modelToTable[relation.modelName] || relation.modelName);
         const isMany = relation.relationType === "many";
         const matchKey = relation.relationType === "one" ? relation.foreignKey : relation.localKey;
         const searchKey = relation.relationType === "one" ? relation.localKey : relation.foreignKey;
@@ -112,25 +274,30 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
         uniqueKeys.forEach((k, i) => { subParams[`k_${i}`] = k; });
         if (value && typeof value === "object") {
             const subArgs = value;
+            const subWhereSql = (0, sql_utils_1.parseWhere)(relation.modelName, subArgs.where, subParams, `rel_${key}_`, {
+                relationMap: metadata.relationMap,
+                modelToTable: metadata.modelToTable,
+            });
+            if (subWhereSql) {
+                sqlText += ` AND ${subWhereSql}`;
+            }
             if (subArgs.orderBy) {
                 sqlText += (0, sql_utils_1.buildOrderBy)(subArgs.orderBy);
             }
         }
         const relatedRows = await executor(sqlText, subParams);
-        if (value && typeof value === "object" && value.select) {
-            relatedRows.forEach((r, idx) => {
-                relatedRows[idx] = projectFields(r, value.select);
-            });
-        }
         if (value && typeof value === "object" && value.include) {
             await resolveIncludes(relation.modelName, relatedRows, value.include, executor, metadata);
         }
+        const outputRows = value && typeof value === "object" && value.select
+            ? relatedRows.map((r) => projectFields(r, value.select))
+            : relatedRows;
         const groupMap = new Map();
-        relatedRows.forEach((r) => {
+        relatedRows.forEach((r, idx) => {
             const k = r[searchKey];
             if (!groupMap.has(k))
                 groupMap.set(k, []);
-            groupMap.get(k).push(r);
+            groupMap.get(k).push(outputRows[idx]);
         });
         rows.forEach(r => {
             const k = r[matchKey];
@@ -148,20 +315,33 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
 class TableClient {
     constructor(modelName, tableName, executor, orm) {
         this.modelName = modelName;
-        this.tableName = tableName;
         this.executor = executor;
         this.orm = orm;
+        this.tableName = (0, sql_utils_1.quoteTableIdentifier)(tableName);
+    }
+    async executeRaw(queryText, params) {
+        if (this.executor.executeRaw) {
+            return this.executor.executeRaw(queryText, params);
+        }
+        return normalizeAffectedCount(await this.executor(queryText, params));
     }
     async findMany(args) {
         return this.orm._executeMiddleware({ model: this.modelName, action: 'findMany', args }, async (params) => {
             const { args: finalArgs } = params;
             const hasSkip = finalArgs?.skip !== undefined && finalArgs?.skip !== null;
+            const selectedRelations = collectRelationSelections(this.modelName, finalArgs?.select, this.orm.metadata);
+            const include = mergeIncludes(finalArgs?.include, selectedRelations);
             let cols = "*";
             if (finalArgs?.select) {
                 const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
-                const selectedCols = Object.keys(finalArgs.select)
-                    .filter(k => finalArgs.select[k] && !modelRelations[k])
-                    .map(k => (0, sql_utils_1.quoteIdentifier)(k));
+                const selectedColNames = Object.keys(finalArgs.select)
+                    .filter(k => finalArgs.select[k] && !modelRelations[k] && k !== "_count");
+                for (const key of requiredRelationKeys(this.modelName, include, this.orm.metadata)) {
+                    if (!selectedColNames.includes(key)) {
+                        selectedColNames.push(key);
+                    }
+                }
+                const selectedCols = selectedColNames.map(k => (0, sql_utils_1.quoteIdentifier)(k));
                 if (selectedCols.length > 0) {
                     cols = selectedCols.join(", ");
                 }
@@ -190,13 +370,13 @@ class TableClient {
                 }
             }
             const rows = await this.executor(sqlText, p);
+            if (include) {
+                await resolveIncludes(this.modelName, rows, include, this.executor, this.orm.metadata);
+            }
             if (finalArgs?.select) {
                 rows.forEach((r, idx) => {
                     rows[idx] = projectFields(r, finalArgs.select);
                 });
-            }
-            if (finalArgs?.include) {
-                await resolveIncludes(this.modelName, rows, finalArgs.include, this.executor, this.orm.metadata);
             }
             return rows;
         });
@@ -225,6 +405,12 @@ class TableClient {
             return result[0]?.count || 0;
         });
     }
+    scopedRelationWhere(relation, parentId, where) {
+        const parentWhere = { [relation.foreignKey]: parentId };
+        if (!where || Object.keys(where).length === 0)
+            return parentWhere;
+        return { AND: [where, parentWhere] };
+    }
     async handleNestedWrites(data, parentId) {
         const modelRelations = this.orm.metadata.relationMap[this.modelName] || {};
         for (const [key, value] of Object.entries(data)) {
@@ -235,32 +421,72 @@ class TableClient {
             if (!relTableClient)
                 continue;
             const nestedOps = value;
+            if (relation.relationType !== "many")
+                continue;
+            if (hasOwn(nestedOps, "set")) {
+                await relTableClient.updateMany({
+                    where: { [relation.foreignKey]: parentId },
+                    data: { [relation.foreignKey]: null },
+                });
+                for (const item of asArray(nestedOps.set)) {
+                    await relTableClient.update({
+                        where: item,
+                        data: { [relation.foreignKey]: parentId }
+                    });
+                }
+            }
             // Handle deleteMany (an5Orm-style)
-            if (nestedOps.deleteMany) {
+            if (hasOwn(nestedOps, "deleteMany")) {
                 const deleteWhere = Array.isArray(nestedOps.deleteMany) ? { OR: nestedOps.deleteMany } : nestedOps.deleteMany;
                 // Scope deletion to parent
-                const scopedWhere = { ...deleteWhere, [relation.foreignKey]: parentId };
+                const scopedWhere = this.scopedRelationWhere(relation, parentId, deleteWhere);
                 await relTableClient.deleteMany({ where: scopedWhere });
             }
+            if (hasOwn(nestedOps, "delete")) {
+                const deleteWhere = Array.isArray(nestedOps.delete) ? { OR: nestedOps.delete } : nestedOps.delete;
+                await relTableClient.deleteMany({
+                    where: this.scopedRelationWhere(relation, parentId, deleteWhere),
+                });
+            }
+            if (hasOwn(nestedOps, "disconnect")) {
+                const disconnectWhere = Array.isArray(nestedOps.disconnect) ? { OR: nestedOps.disconnect } : nestedOps.disconnect;
+                await relTableClient.updateMany({
+                    where: this.scopedRelationWhere(relation, parentId, disconnectWhere),
+                    data: { [relation.foreignKey]: null },
+                });
+            }
+            if (hasOwn(nestedOps, "update")) {
+                for (const item of asArray(nestedOps.update)) {
+                    await relTableClient.update({
+                        where: this.scopedRelationWhere(relation, parentId, item.where),
+                        data: item.data,
+                    });
+                }
+            }
+            if (hasOwn(nestedOps, "upsert")) {
+                for (const item of asArray(nestedOps.upsert)) {
+                    await relTableClient.upsert({
+                        where: this.scopedRelationWhere(relation, parentId, item.where),
+                        create: { ...item.create, [relation.foreignKey]: parentId },
+                        update: item.update,
+                    });
+                }
+            }
             // Handle create
-            if (nestedOps.create) {
-                const createItems = Array.isArray(nestedOps.create) ? nestedOps.create : [nestedOps.create];
-                for (const item of createItems) {
+            if (hasOwn(nestedOps, "create")) {
+                for (const item of asArray(nestedOps.create)) {
                     // Inject parent ID
                     const itemData = { ...item, [relation.foreignKey]: parentId };
                     await relTableClient.create({ data: itemData });
                 }
             }
             // Handle connect
-            if (nestedOps.connect) {
-                const connectItems = Array.isArray(nestedOps.connect) ? nestedOps.connect : [nestedOps.connect];
-                for (const item of connectItems) {
-                    if (relation.relationType === "many") {
-                        await relTableClient.update({
-                            where: item,
-                            data: { [relation.foreignKey]: parentId }
-                        });
-                    }
+            if (hasOwn(nestedOps, "connect")) {
+                for (const item of asArray(nestedOps.connect)) {
+                    await relTableClient.update({
+                        where: item,
+                        data: { [relation.foreignKey]: parentId }
+                    });
                 }
             }
         }
@@ -290,9 +516,10 @@ class TableClient {
                 // Handle one-relation connect where we hold the FK
                 for (const [key, value] of Object.entries(nestedData)) {
                     const rel = modelRelations[key];
-                    if (rel && rel.relationType === "one" && value.connect) {
-                        const connectObj = value.connect;
-                        const targetId = connectObj.id || Object.values(connectObj)[0];
+                    const nestedValue = value && typeof value === "object" ? value : {};
+                    if (rel && rel.relationType === "one" && (nestedValue.connect || nestedValue.set)) {
+                        const connectObj = nestedValue.connect || nestedValue.set;
+                        const targetId = connectObj[rel.localKey] || connectObj.id || Object.values(connectObj)[0];
                         data[rel.foreignKey] = targetId;
                     }
                 }
@@ -369,48 +596,35 @@ class TableClient {
             // Handle one-relation connect where we hold the FK
             for (const [key, value] of Object.entries(nestedData)) {
                 const rel = modelRelations[key];
-                if (rel && rel.relationType === "one" && value.connect) {
-                    const connectObj = value.connect;
-                    const targetId = connectObj.id || Object.values(connectObj)[0];
-                    data[rel.foreignKey] = targetId;
+                const nestedValue = value && typeof value === "object" ? value : {};
+                if (rel && rel.relationType === "one") {
+                    if (nestedValue.connect || nestedValue.set) {
+                        const connectObj = nestedValue.connect || nestedValue.set;
+                        const targetId = connectObj[rel.localKey] || connectObj.id || Object.values(connectObj)[0];
+                        data[rel.foreignKey] = targetId;
+                    }
+                    else if (hasOwn(nestedValue, "disconnect") || value === null) {
+                        data[rel.foreignKey] = null;
+                    }
                 }
             }
             const sets = [];
             const p = {};
             for (const key of Object.keys(data)) {
                 const val = data[key];
-                const col = (0, sql_utils_1.quoteIdentifier)(key);
-                const safeKey = (0, sql_utils_1.sanitizeParamName)(key);
-                if (val && typeof val === "object" && !(val instanceof Date)) {
-                    if (val.increment !== undefined) {
-                        sets.push(`${col} = ${col} + @${safeKey}_inc`);
-                        p[`${safeKey}_inc`] = val.increment;
-                        continue;
-                    }
-                    else if (val.decrement !== undefined) {
-                        sets.push(`${col} = ${col} - @${safeKey}_dec`);
-                        p[`${safeKey}_dec`] = val.decrement;
-                        continue;
-                    }
-                    else if (val.set !== undefined) {
-                        sets.push(`${col} = @${safeKey}_set`);
-                        p[`${safeKey}_set`] = val.set;
-                        continue;
-                    }
-                }
-                sets.push(`${col} = @${safeKey}`);
-                p[safeKey] = val;
+                appendUpdateSet(sets, p, key, val);
             }
             const whereParams = {};
             const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
             Object.assign(p, whereParams);
-            const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} WHERE ${whereSql}`;
-            await this.executor(sqlText, p);
-            // Get parent ID for nested writes
             const existing = await this.findUnique({ where: finalArgs.where });
             if (!existing)
                 throw new Error("Record not found to update");
             const parentId = existing.id;
+            if (sets.length > 0) {
+                const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} WHERE ${whereSql}`;
+                await this.executor(sqlText, p);
+            }
             // Process nested writes
             await this.handleNestedWrites(nestedData, parentId);
             const updated = await this.findUnique({ where: finalArgs.where, include: finalArgs.include });
@@ -434,33 +648,16 @@ class TableClient {
                 const val = data[key];
                 if (this.orm.metadata.relationMap[this.modelName]?.[key])
                     continue;
-                const col = (0, sql_utils_1.quoteIdentifier)(key);
-                const safeKey = (0, sql_utils_1.sanitizeParamName)(key);
-                if (val && typeof val === "object" && !(val instanceof Date)) {
-                    if (val.increment !== undefined) {
-                        sets.push(`${col} = ${col} + @${safeKey}_inc`);
-                        p[`${safeKey}_inc`] = val.increment;
-                        continue;
-                    }
-                    else if (val.decrement !== undefined) {
-                        sets.push(`${col} = ${col} - @${safeKey}_dec`);
-                        p[`${safeKey}_dec`] = val.decrement;
-                        continue;
-                    }
-                    else if (val.set !== undefined) {
-                        sets.push(`${col} = @${safeKey}_set`);
-                        p[`${safeKey}_set`] = val.set;
-                        continue;
-                    }
-                }
-                sets.push(`${col} = @${safeKey}`);
-                p[safeKey] = val;
+                appendUpdateSet(sets, p, key, val);
+            }
+            if (sets.length === 0) {
+                return { count: 0 };
             }
             const whereParams = {};
             const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
             Object.assign(p, whereParams);
             const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} ${whereSql ? `WHERE ${whereSql}` : ""}`;
-            const count = await (await getAdapter())._executeRaw(sqlText, p);
+            const count = await this.executeRaw(sqlText, p);
             return { count };
         });
     }
@@ -483,7 +680,7 @@ class TableClient {
             const p = {};
             const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
             const sqlText = `DELETE FROM ${this.tableName} ${whereSql ? `WHERE ${whereSql}` : ""}`;
-            const count = await (await getAdapter())._executeRaw(sqlText, p);
+            const count = await this.executeRaw(sqlText, p);
             return { count };
         });
     }
@@ -532,6 +729,10 @@ class TableClient {
                 }
                 const isUnsupported = msg.includes("vector_distance") ||
                     msg.includes("type vector") ||
+                    msg.includes("type \"vector\"") ||
+                    msg.includes("data type vector") ||
+                    msg.includes("not a recognized built-in function") ||
+                    msg.includes("not a defined system type") ||
                     msg.includes("limit of 1998") ||
                     err?.number === 195;
                 if (!isUnsupported) {
@@ -618,7 +819,7 @@ class TableClient {
                     rowPlaceholders.push(`(${vals.join(", ")})`);
                 });
                 const sqlText = `INSERT INTO ${this.tableName} (${cols.map(sql_utils_1.quoteIdentifier).join(", ")}) VALUES ${rowPlaceholders.join(", ")}`;
-                await (await getAdapter())._executeRaw(sqlText, params);
+                await this.executeRaw(sqlText, params);
                 return { count: rows.length };
             }
             catch (err) {
@@ -646,25 +847,25 @@ class TableClient {
             const resultObj = {};
             if (finalArgs._sum) {
                 resultObj._sum = {};
-                for (const key of Object.keys(finalArgs._sum)) {
+                for (const key of selectedAggregateFields(finalArgs._sum)) {
                     selects.push(aggSelect("SUM", key));
                 }
             }
             if (finalArgs._avg) {
                 resultObj._avg = {};
-                for (const key of Object.keys(finalArgs._avg)) {
+                for (const key of selectedAggregateFields(finalArgs._avg)) {
                     selects.push(aggSelect("AVG", key));
                 }
             }
             if (finalArgs._min) {
                 resultObj._min = {};
-                for (const key of Object.keys(finalArgs._min)) {
+                for (const key of selectedAggregateFields(finalArgs._min)) {
                     selects.push(aggSelect("MIN", key));
                 }
             }
             if (finalArgs._max) {
                 resultObj._max = {};
-                for (const key of Object.keys(finalArgs._max)) {
+                for (const key of selectedAggregateFields(finalArgs._max)) {
                     selects.push(aggSelect("MAX", key));
                 }
             }
@@ -674,7 +875,7 @@ class TableClient {
                     selects.push(`COUNT(*) as count_all`);
                 }
                 else {
-                    for (const key of Object.keys(finalArgs._count)) {
+                    for (const key of selectedAggregateFields(finalArgs._count)) {
                         selects.push(aggSelect("COUNT", key));
                     }
                 }
@@ -691,22 +892,22 @@ class TableClient {
             const rows = await this.executor(sqlText, p);
             const row = rows[0] || {};
             if (finalArgs._sum) {
-                for (const key of Object.keys(finalArgs._sum)) {
+                for (const key of selectedAggregateFields(finalArgs._sum)) {
                     resultObj._sum[key] = row[aggAlias("sum", key)] !== undefined ? row[aggAlias("sum", key)] : null;
                 }
             }
             if (finalArgs._avg) {
-                for (const key of Object.keys(finalArgs._avg)) {
+                for (const key of selectedAggregateFields(finalArgs._avg)) {
                     resultObj._avg[key] = row[aggAlias("avg", key)] !== undefined ? row[aggAlias("avg", key)] : null;
                 }
             }
             if (finalArgs._min) {
-                for (const key of Object.keys(finalArgs._min)) {
+                for (const key of selectedAggregateFields(finalArgs._min)) {
                     resultObj._min[key] = row[aggAlias("min", key)] !== undefined ? row[aggAlias("min", key)] : null;
                 }
             }
             if (finalArgs._max) {
-                for (const key of Object.keys(finalArgs._max)) {
+                for (const key of selectedAggregateFields(finalArgs._max)) {
                     resultObj._max[key] = row[aggAlias("max", key)] !== undefined ? row[aggAlias("max", key)] : null;
                 }
             }
@@ -715,7 +916,7 @@ class TableClient {
                     resultObj._count._all = row[`count_all`] || 0;
                 }
                 else {
-                    for (const key of Object.keys(finalArgs._count)) {
+                    for (const key of selectedAggregateFields(finalArgs._count)) {
                         resultObj._count[key] = row[aggAlias("count", key)] || 0;
                     }
                 }
@@ -726,7 +927,7 @@ class TableClient {
     async groupBy(args) {
         return this.orm._executeMiddleware({ model: this.modelName, action: 'groupBy', args }, async (params) => {
             const { args: finalArgs } = params;
-            const byFields = finalArgs.by || [];
+            const byFields = normalizeByFields(finalArgs.by);
             if (byFields.length === 0) {
                 throw new Error("groupBy requires 'by' fields");
             }
@@ -736,28 +937,28 @@ class TableClient {
                     selects.push(`COUNT(*) as count_all`);
                 }
                 else {
-                    for (const key of Object.keys(finalArgs._count)) {
+                    for (const key of selectedAggregateFields(finalArgs._count)) {
                         selects.push(aggSelect("COUNT", key));
                     }
                 }
             }
             if (finalArgs._sum) {
-                for (const key of Object.keys(finalArgs._sum)) {
+                for (const key of selectedAggregateFields(finalArgs._sum)) {
                     selects.push(aggSelect("SUM", key));
                 }
             }
             if (finalArgs._avg) {
-                for (const key of Object.keys(finalArgs._avg)) {
+                for (const key of selectedAggregateFields(finalArgs._avg)) {
                     selects.push(aggSelect("AVG", key));
                 }
             }
             if (finalArgs._min) {
-                for (const key of Object.keys(finalArgs._min)) {
+                for (const key of selectedAggregateFields(finalArgs._min)) {
                     selects.push(aggSelect("MIN", key));
                 }
             }
             if (finalArgs._max) {
-                for (const key of Object.keys(finalArgs._max)) {
+                for (const key of selectedAggregateFields(finalArgs._max)) {
                     selects.push(aggSelect("MAX", key));
                 }
             }
@@ -768,6 +969,20 @@ class TableClient {
                 sqlText += ` WHERE ${whereSql}`;
             }
             sqlText += ` GROUP BY ${byFields.map((f) => (0, sql_utils_1.quoteIdentifier)(f)).join(", ")}`;
+            const hasSkip = finalArgs?.skip !== undefined && finalArgs?.skip !== null;
+            const hasTake = finalArgs?.take !== undefined && finalArgs?.take !== null;
+            if (finalArgs?.orderBy) {
+                sqlText += (0, sql_utils_1.buildOrderBy)(finalArgs.orderBy);
+            }
+            else if (hasSkip || hasTake) {
+                sqlText += ` ORDER BY ${byFields.map((f) => (0, sql_utils_1.quoteIdentifier)(f)).join(", ")}`;
+            }
+            if (hasSkip || hasTake) {
+                sqlText += ` OFFSET ${(0, sql_utils_1.toNonNegativeInt)(finalArgs.skip)} ROWS`;
+                if (hasTake) {
+                    sqlText += ` FETCH NEXT ${(0, sql_utils_1.toNonNegativeInt)(finalArgs.take, 1)} ROWS ONLY`;
+                }
+            }
             const rows = await this.executor(sqlText, p);
             return rows.map((row) => {
                 const item = {};
@@ -780,38 +995,45 @@ class TableClient {
                         item._count._all = row[`count_all`] || 0;
                     }
                     else {
-                        for (const key of Object.keys(finalArgs._count)) {
+                        for (const key of selectedAggregateFields(finalArgs._count)) {
                             item._count[key] = row[aggAlias("count", key)] || 0;
                         }
                     }
                 }
                 if (finalArgs._sum) {
                     item._sum = {};
-                    for (const key of Object.keys(finalArgs._sum)) {
+                    for (const key of selectedAggregateFields(finalArgs._sum)) {
                         item._sum[key] = row[aggAlias("sum", key)] !== undefined ? row[aggAlias("sum", key)] : null;
                     }
                 }
                 if (finalArgs._avg) {
                     item._avg = {};
-                    for (const key of Object.keys(finalArgs._avg)) {
+                    for (const key of selectedAggregateFields(finalArgs._avg)) {
                         item._avg[key] = row[aggAlias("avg", key)] !== undefined ? row[aggAlias("avg", key)] : null;
                     }
                 }
                 if (finalArgs._min) {
                     item._min = {};
-                    for (const key of Object.keys(finalArgs._min)) {
+                    for (const key of selectedAggregateFields(finalArgs._min)) {
                         item._min[key] = row[aggAlias("min", key)] !== undefined ? row[aggAlias("min", key)] : null;
                     }
                 }
                 if (finalArgs._max) {
                     item._max = {};
-                    for (const key of Object.keys(finalArgs._max)) {
+                    for (const key of selectedAggregateFields(finalArgs._max)) {
                         item._max[key] = row[aggAlias("max", key)] !== undefined ? row[aggAlias("max", key)] : null;
                     }
                 }
                 return item;
             });
         });
+    }
+    async sequentialUpsert(finalArgs) {
+        const existing = await this.findUnique({ where: finalArgs.where });
+        if (existing) {
+            return this.update({ where: finalArgs.where, data: finalArgs.update, include: finalArgs.include });
+        }
+        return this.create({ data: finalArgs.create, include: finalArgs.include });
     }
     async upsert(args) {
         return this.orm._executeMiddleware({ model: this.modelName, action: 'upsert', args }, async (params) => {
@@ -838,8 +1060,11 @@ class TableClient {
                 cleanCreate.updatedAt = now;
             if (!cleanUpdate.updatedAt && this.orm.metadata.modelFields[this.modelName]?.updatedAt)
                 cleanUpdate.updatedAt = now;
+            const atomicWhere = flattenSimpleEqualityWhere(where);
+            if (!atomicWhere || Object.keys(cleanUpdate).length === 0) {
+                return this.sequentialUpsert(finalArgs);
+            }
             const p = {};
-            const whereSql = this.orm.parseWhere(this.modelName, where, p, "upw_");
             const allKeys = Array.from(new Set([...Object.keys(cleanCreate), ...Object.keys(cleanUpdate)]));
             const cParam = (k) => `c_${(0, sql_utils_1.sanitizeParamName)(k)}`;
             const uParam = (k) => `u_${(0, sql_utils_1.sanitizeParamName)(k)}`;
@@ -849,6 +1074,9 @@ class TableClient {
                 if (cleanUpdate[k] !== undefined)
                     p[uParam(k)] = cleanUpdate[k];
             }
+            for (const [k, v] of Object.entries(atomicWhere)) {
+                p[`upw_${(0, sql_utils_1.sanitizeParamName)(k)}`] = v;
+            }
             const sourceSelect = allKeys.map(k => {
                 const val = cleanCreate[k] !== undefined ? `@${cParam(k)}` : (cleanUpdate[k] !== undefined ? `@${uParam(k)}` : "NULL");
                 return `${val} as ${(0, sql_utils_1.quoteIdentifier)(k)}`;
@@ -856,17 +1084,9 @@ class TableClient {
             const updateSets = Object.keys(cleanUpdate).map(k => `target.${(0, sql_utils_1.quoteIdentifier)(k)} = source.${(0, sql_utils_1.quoteIdentifier)(k)}`).join(", ");
             const insertCols = Object.keys(cleanCreate).map(k => (0, sql_utils_1.quoteIdentifier)(k)).join(", ");
             const insertVals = Object.keys(cleanCreate).map(k => `source.${(0, sql_utils_1.quoteIdentifier)(k)}`).join(", ");
-            // Note: This MERGE assumes the 'where' translates to a simple ON clause.
-            // For complex 'where', parseWhere might return something not easily usable in ON.
-            // We'll try to extract simple equality for ON if possible, or fallback to sequential.
-            const onClause = Object.keys(where).map(k => {
-                if (typeof where[k] === 'object' && where[k] !== null && !(where[k] instanceof Date)) {
-                    // Flatten unique object if needed
-                    const inner = where[k];
-                    return Object.keys(inner).map(ik => `target.${(0, sql_utils_1.quoteIdentifier)(ik)} = @${(0, sql_utils_1.sanitizeParamName)(`upw_${k}_${ik}`)}`).join(" AND ");
-                }
-                return `target.${(0, sql_utils_1.quoteIdentifier)(k)} = @${(0, sql_utils_1.sanitizeParamName)(`upw_${k}`)}`;
-            }).join(" AND ");
+            const onClause = Object.keys(atomicWhere)
+                .map(k => `target.${(0, sql_utils_1.quoteIdentifier)(k)} = @upw_${(0, sql_utils_1.sanitizeParamName)(k)}`)
+                .join(" AND ");
             const sqlText = `
         MERGE INTO ${this.tableName} WITH (HOLDLOCK) AS target
         USING (SELECT ${sourceSelect}) AS source
@@ -887,13 +1107,7 @@ class TableClient {
             }
             catch (err) {
                 logger_1.logger.warn(`Atomic upsert failed, falling back to sequential: ${err.message}`);
-                const existing = await this.findUnique({ where: finalArgs.where });
-                if (existing) {
-                    return this.update({ where: finalArgs.where, data: finalArgs.update, include: finalArgs.include });
-                }
-                else {
-                    return this.create({ data: finalArgs.create, include: finalArgs.include });
-                }
+                return this.sequentialUpsert(finalArgs);
             }
         });
     }
@@ -976,7 +1190,7 @@ class An5ORM {
             }
         });
         return new Proxy(this, {
-            get(target, prop) {
+            get(target, prop, receiver) {
                 if (prop === "$use") {
                     return target.$use.bind(target);
                 }
@@ -1005,7 +1219,7 @@ class An5ORM {
                     // Resolve modelName in camelCase and map to table name
                     const tableName = target.metadata.modelToTable[prop];
                     if (tableName) {
-                        target[prop] = new TableClient(prop, tableName, target.customExecutor || execQuery, target // Pass ORM instance for middleware access
+                        target[prop] = new TableClient(prop, tableName, target.customExecutor || execQuery, receiver // Pass the proxied ORM so nested writes can resolve model clients.
                         );
                     }
                 }
@@ -1116,8 +1330,10 @@ class An5ORM {
             throw new Error("Invalid query format for $executeRaw");
         }
         queryText = addNoLockToQuery(queryText, this.metadata);
-        const result = (await executor(queryText, params));
-        return result.rowsAffected?.[0] || 0;
+        if (executor.executeRaw) {
+            return executor.executeRaw(queryText, params);
+        }
+        return normalizeAffectedCount(await executor(queryText, params));
     }
     async $executeRawUnsafe(queryText, ...values) {
         const executor = this.customExecutor || execQuery;
@@ -1129,19 +1345,20 @@ class An5ORM {
             });
         }
         const modifiedQueryText = addNoLockToQuery(queryText, this.metadata);
-        const result = (await executor(modifiedQueryText, params));
-        return result.rowsAffected?.[0] || 0;
+        if (executor.executeRaw) {
+            return executor.executeRaw(modifiedQueryText, params);
+        }
+        return normalizeAffectedCount(await executor(modifiedQueryText, params));
     }
     async $transaction(fn, options) {
         if (Array.isArray(fn)) {
             return Promise.all(fn);
         }
-        const a = await getAdapter();
-        return a.$transaction(async (tx) => {
-            const txExecutor = async (queryText, params) => {
-                const rows = await tx.exec(queryText, params);
-                return rows;
-            };
+        const executor = this.customExecutor || execQuery;
+        if (!executor.transaction) {
+            throw new Error("Transactions require an executor with transaction support");
+        }
+        return executor.transaction(async (txExecutor) => {
             const txClient = new An5ORM(txExecutor, this.metadata);
             return fn(txClient);
         }, options);

@@ -61,26 +61,41 @@ export class MetadataGenerator {
 
   private getAllPropertyVariations(modelName: string): string[] {
     const variations = new Set<string>();
-    
-    // 1. Standard camelCase (e.g. User -> user, McpServer -> mcpServer)
+
+    // 1. PascalCase (User)
+    variations.add(modelName);
+
+    // 2. camelCase (user)
     variations.add(this.toCamelCase(modelName));
 
-    // 2. Handle known acronyms at start (e.g. LLMProvider -> lLMProvider)
-    // This is already handled by toCamelCase if it only lowercases the first letter.
-    // But we might want 'llmProvider' as well.
+    // 3. Plural PascalCase (Users)
+    variations.add(modelName + 's');
+
+    // 4. Plural camelCase (users)
+    variations.add(this.toCamelCase(modelName) + 's');
+
+    // 5. snake_case (user, mc_server)
+    variations.add(this.toSnakeCase(modelName));
+    variations.add(this.toSnakeCase(modelName) + 's');
+
     const acronyms = ['LLM', 'AI', 'MCP', 'IT', 'QC', 'HR', 'MR', 'WH', 'SSIS', 'API', 'URL', 'ID', 'JSON'];
-    
     for (const acronym of acronyms) {
       if (modelName.startsWith(acronym)) {
-        // e.g. LLMProvider -> llmProvider
         variations.add(acronym.toLowerCase() + modelName.slice(acronym.length));
-        
-        // e.g. LLMProvider -> lLMProvider (Prisma style)
         variations.add(acronym[0].toLowerCase() + acronym.slice(1) + modelName.slice(acronym.length));
+        variations.add(acronym.toLowerCase() + modelName.slice(acronym.length) + 's');
       }
     }
 
     return Array.from(variations);
+  }
+
+  private toSnakeCase(str: string): string {
+    if (!str) return '';
+    return str
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+      .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+      .toLowerCase();
   }
 
   private formatFieldMetadata(field: Model['fields'][number]): string {

@@ -5,12 +5,27 @@
  * Usage:
  *   npx tsx migrate.ts diff       # Show differences
  *   npx tsx migrate.ts generate   # Generate migration file
+ *   npx tsx migrate.ts apply      # Apply pending migrations
+ *   npx tsx migrate.ts rollback [steps|--to file] # Roll back applied migrations
  *   npx tsx migrate.ts status     # Show migration status
  */
 import 'dotenv/config';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { An5Adapter } from '@an5/adapters';
+import {
+  DbColumn,
+  SchemaModel,
+  TableArtifacts,
+  buildMigrationFile,
+  generateDiff,
+  parseMigrationCommandOptions,
+  parseMigrationSections,
+  parseRollbackSelection,
+  parseSchemaText,
+  splitSqlBatches,
+} from './migration-core';
 
 const rootDir = process.cwd();
 let config: any = {};
@@ -26,55 +41,28 @@ try {
 
 const schemaDir = path.resolve(rootDir, config.schemaDir || 'an5Schema');
 const migrationsDir = path.resolve(rootDir, 'migrations');
+const migrationTableName = '[dbo].[_an5_migrations]';
 
 let _adapter: An5Adapter | null = null;
+function requireDatabaseUrl(): void {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required for migration commands.');
+  }
+}
+
 async function getDb(): Promise<An5Adapter> {
   if (!_adapter) {
+    requireDatabaseUrl();
     _adapter = new An5Adapter({ connectionString: process.env.DATABASE_URL! });
     await _adapter.$connect();
   }
   return _adapter;
 }
 
-// ─── Supported SQL Server Types ──────────────────────────────────────────────
-
-const AN5_TYPES = new Set([
-  'NVARCHAR', 'VARCHAR', 'CHAR', 'NCHAR', 'TEXT', 'NTEXT', 'XML',
-  'INT', 'SMALLINT', 'TINYINT', 'BIGINT', 'FLOAT', 'REAL', 'DECIMAL', 'NUMERIC',
-  'MONEY', 'SMALLMONEY', 'BIT',
-  'DATETIME', 'DATETIME2', 'SMALLDATETIME', 'DATE', 'TIME', 'DATETIMEOFFSET',
-  'VARBINARY', 'BINARY', 'IMAGE',
-  'UNIQUEIDENTIFIER', 'SQL_VARIANT', 'ROWVERSION',
-  'HIERARCHYID', 'GEOGRAPHY', 'GEOMETRY', 'VECTOR',
-]);
-
-function parseSqlType(raw: string): string {
-  const match = raw.match(/^(\w+)/);
-  return match ? match[1].toUpperCase() : raw.toUpperCase();
-}
-
 // ─── Schema Parser ───────────────────────────────────────────────────────────
 
-interface SchemaField {
-  name: string;
-  sqlType: string;    // Full SQL type like "NVARCHAR(255)"
-  isOptional: boolean;
-  isId: boolean;
-  isUnique: boolean;
-  defaultValue?: string;
-}
-
-interface SchemaModel {
-  name: string;
-  tableName: string;
-  fields: SchemaField[];
-  compoundUniques: string[][];
-  indexes: string[][];
-}
-
 function parseSchema(): SchemaModel[] {
-  const models: SchemaModel[] = [];
-  if (!fs.existsSync(schemaDir)) return models;
+  if (!fs.existsSync(schemaDir)) return [];
 
   const files = fs.readdirSync(schemaDir).filter(f => f.endsWith('.an5'));
   let text = '';
@@ -82,87 +70,19 @@ function parseSchema(): SchemaModel[] {
     text += fs.readFileSync(path.join(schemaDir, file), 'utf8') + '\n';
   }
 
-  const lines = text.split('\n');
-  let current: SchemaModel | null = null;
-
-  for (let line of lines) {
-    line = line.trim();
-    if (!line || line.startsWith('//')) continue;
-
-    const modelMatch = line.match(/^model\s+(\w+)\s*\{/);
-    if (modelMatch) {
-      current = {
-        name: modelMatch[1],
-        tableName: modelMatch[1].toLowerCase() + 's',
-        fields: [],
-        compoundUniques: [],
-        indexes: [],
-      };
-      models.push(current);
-      continue;
-    }
-
-    if (line === '}') { current = null; continue; }
-    if (!current) continue;
-
-    if (line.startsWith('@@map')) {
-      const m = line.match(/@@map\("(.+)"\)/);
-      if (m) current.tableName = m[1];
-      continue;
-    }
-    if (line.startsWith('@@unique')) {
-      const m = line.match(/@@unique\(\[([\w,\s]+)\]\)/);
-      if (m) current.compoundUniques.push(m[1].split(',').map(f => f.trim()));
-      continue;
-    }
-    if (line.startsWith('@@index')) {
-      const m = line.match(/@@index\(\[([\w,\s]+)\]\)/);
-      if (m) current.indexes.push(m[1].split(',').map(f => f.trim()));
-      continue;
-    }
-    if (line.startsWith('@@')) continue;
-
-    const parts = line.split(/\s+/);
-    const fieldName = parts[0];
-    const fieldType = parts[1];
-    if (!fieldName || !fieldType) continue;
-
-    // Parse SQL Server type directly
-    const cleanType = fieldType.replace('[]', '').replace('?', '');
-    const sqlBase = parseSqlType(cleanType);
-
-    // Skip if not a known SQL Server type (might be a relation)
-    if (!AN5_TYPES.has(sqlBase)) continue;
-
-    current.fields.push({
-      name: fieldName,
-      sqlType: cleanType.toUpperCase(),
-      isOptional: fieldType.endsWith('?'),
-      isId: line.includes('@id'),
-      isUnique: line.includes('@unique'),
-      defaultValue: line.match(/@default\((.*)\)/)?.[1],
-    });
-  }
-
-  return models;
+  return parseSchemaText(text);
 }
 
 // ─── Database Introspection ──────────────────────────────────────────────────
 
-interface DbColumn {
-  columnName: string;
-  dataType: string;
-  isNullable: boolean;
-  isPrimaryKey: boolean;
-  isIdentity: boolean;
-  defaultValue?: string;
-}
-
 async function introspectTable(tableName: string): Promise<DbColumn[]> {
-  return (await getDb()).$queryRawUnsafe<DbColumn[]>(`
+  return (await getDb()).$queryRawUnsafe<DbColumn>(`
     SELECT
       c.name AS columnName,
       ty.name AS dataType,
+      c.max_length AS maxLength,
+      c.precision AS precision,
+      c.scale AS scale,
       c.is_nullable AS isNullable,
       pk.is_primary_key AS isPrimaryKey,
       c.is_identity AS isIdentity,
@@ -182,144 +102,102 @@ async function introspectTable(tableName: string): Promise<DbColumn[]> {
 }
 
 async function getExistingTables(): Promise<string[]> {
-  const rows = await (await getDb()).$queryRawUnsafe<{ name: string }[]>(`
+  const rows = await (await getDb()).$queryRawUnsafe<{ name: string }>(`
     SELECT name FROM sys.tables WHERE is_ms_shipped = 0 ORDER BY name
   `);
   return rows.map(r => r.name);
 }
 
+function listMigrationFiles(): string[] {
+  if (!fs.existsSync(migrationsDir)) {
+    fs.mkdirSync(migrationsDir, { recursive: true });
+  }
+  return fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
+}
+
+function checksum(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+async function ensureMigrationTable(): Promise<void> {
+  await (await getDb()).$executeRawUnsafe(`
+    IF OBJECT_ID('dbo._an5_migrations', 'U') IS NULL
+    CREATE TABLE ${migrationTableName} (
+      [id] NVARCHAR(255) NOT NULL PRIMARY KEY,
+      [checksum] NVARCHAR(64) NOT NULL,
+      [appliedAt] DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+    )
+  `);
+}
+
+async function migrationTableExists(): Promise<boolean> {
+  const rows = await (await getDb()).$queryRawUnsafe<{ name: string }>(
+    `SELECT name FROM sys.tables WHERE object_id = OBJECT_ID('dbo._an5_migrations')`
+  );
+  return rows.length > 0;
+}
+
+async function getAppliedMigrations(options: { ensure?: boolean } = {}): Promise<{ id: string; checksum: string; appliedAt: Date | string }[]> {
+  if (options.ensure) {
+    await ensureMigrationTable();
+  } else if (!(await migrationTableExists())) {
+    return [];
+  }
+  return (await getDb()).$queryRawUnsafe<{ id: string; checksum: string; appliedAt: Date | string }>(
+    `SELECT [id], [checksum], [appliedAt] FROM ${migrationTableName} ORDER BY [id] ASC`
+  );
+}
+
+async function executeBatches(executor: { _executeRaw?: (sql: string, params?: Record<string, any>) => Promise<number>; $executeRawUnsafe?: (sql: string, ...values: any[]) => Promise<number> }, sql: string): Promise<void> {
+  for (const batch of splitSqlBatches(sql)) {
+    if (executor._executeRaw) {
+      await executor._executeRaw(batch);
+    } else if (executor.$executeRawUnsafe) {
+      await executor.$executeRawUnsafe(batch);
+    } else {
+      throw new Error('Migration executor does not support raw execution.');
+    }
+  }
+}
+
+function printBatches(title: string, sql: string): void {
+  const batches = splitSqlBatches(sql);
+  console.log(title);
+  for (let i = 0; i < batches.length; i++) {
+    console.log(`-- batch ${i + 1}`);
+    console.log(batches[i]);
+  }
+}
+
+async function introspectTableArtifacts(tableName: string): Promise<TableArtifacts> {
+  const indexes = await (await getDb()).$queryRawUnsafe<{ name: string }>(`
+    SELECT name
+    FROM sys.indexes
+    WHERE object_id = OBJECT_ID(@p_0)
+      AND is_primary_key = 0
+      AND is_unique_constraint = 0
+      AND name IS NOT NULL
+  `, tableName);
+
+  const uniqueConstraints = await (await getDb()).$queryRawUnsafe<{ name: string }>(`
+    SELECT name
+    FROM sys.objects
+    WHERE type = 'UQ'
+      AND parent_object_id = OBJECT_ID(@p_0)
+  `, tableName);
+
+  return {
+    indexes: indexes.map(row => row.name),
+    uniqueConstraints: uniqueConstraints.map(row => row.name),
+  };
+}
+
 // ─── Diff Engine ─────────────────────────────────────────────────────────────
-
-interface MigrationOp {
-  type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'DROP_INDEX' | 'DROP_TABLE';
-  table: string;
-  column?: string;
-  details?: string;
-  sql?: string;
-}
-
-function generateColumnDiff(
-  model: SchemaModel,
-  dbColumns: DbColumn[],
-  ops: MigrationOp[]
-): void {
-  const dbColumnMap = new Map(dbColumns.map(c => [c.columnName.toLowerCase(), c]));
-  const schemaFields = model.fields;
-
-  // ADD_COLUMN: in schema but not in DB
-  for (const f of schemaFields) {
-    const existing = dbColumnMap.get(f.name.toLowerCase());
-    if (!existing) {
-      let def = `[${f.name}] ${f.sqlType}`;
-      if (f.isId) def += ' PRIMARY KEY';
-      if (f.defaultValue) def += ` ${mapDefault(f.defaultValue)}`;
-      if (!f.isOptional && !f.defaultValue && !f.isId) def += ' NOT NULL';
-      if (f.isUnique && !f.isId) def += ' UNIQUE';
-      ops.push({
-        type: 'ADD_COLUMN',
-        table: model.tableName,
-        column: f.name,
-        sql: `ALTER TABLE [${model.tableName}] ADD ${def}`,
-      });
-      continue;
-    }
-
-    // ALTER_COLUMN: type or nullability drifted
-    const schemaBase = parseSqlType(f.sqlType);
-    const dbBase = parseSqlType(existing.dataType || '');
-    const schemaNullable = f.isOptional;
-    const dbNullable = Boolean(existing.isNullable);
-    const typeChanged = schemaBase !== dbBase;
-    const nullableChanged = schemaNullable !== dbNullable;
-
-    if (typeChanged || nullableChanged) {
-      const def = `[${f.name}] ${f.sqlType}`;
-      const alterSql = `ALTER TABLE [${model.tableName}] ALTER COLUMN ${def}`;
-      ops.push({
-        type: 'ALTER_COLUMN',
-        table: model.tableName,
-        column: f.name,
-        details: typeChanged
-          ? `type ${dbBase} -> ${schemaBase}${nullableChanged ? `, nullable ${dbNullable} -> ${schemaNullable}` : ''}`
-          : `nullable ${dbNullable} -> ${schemaNullable}`,
-        sql: alterSql,
-      });
-    }
-  }
-
-  // DROP_COLUMN: in DB but not in schema (non-destructive: commented out)
-  const schemaColumnNames = new Set(schemaFields.map(f => f.name.toLowerCase()));
-  for (const c of dbColumns) {
-    if (!schemaColumnNames.has(c.columnName.toLowerCase())) {
-      ops.push({
-        type: 'DROP_COLUMN',
-        table: model.tableName,
-        column: c.columnName,
-        details: `Column not in schema`,
-        sql: `-- ALTER TABLE [${model.tableName}] DROP COLUMN [${c.columnName}]`,
-      });
-    }
-  }
-}
-
-async function generateDiff(schemaModels: SchemaModel[], dbTables: string[]): Promise<MigrationOp[]> {
-  const ops: MigrationOp[] = [];
-  const schemaTableNames = new Set(schemaModels.map(m => m.tableName));
-
-  // New tables
-  for (const model of schemaModels) {
-    if (!dbTables.includes(model.tableName)) {
-      const colDefs = model.fields.map(f => {
-        let def = `[${f.name}] ${f.sqlType}`;
-        if (f.isId) def += ' PRIMARY KEY';
-        if (f.defaultValue) def += ` ${mapDefault(f.defaultValue)}`;
-        if (!f.isOptional && !f.defaultValue && !f.isId) def += ' NOT NULL';
-        if (f.isUnique && !f.isId) def += ' UNIQUE';
-        return def;
-      });
-
-      const sql = `CREATE TABLE [${model.tableName}] (\n  ${colDefs.join(',\n  ')}\n)`;
-      ops.push({ type: 'CREATE_TABLE', table: model.tableName, sql });
-    }
-  }
-
-  // Existing tables: column-level drift
-  for (const model of schemaModels) {
-    if (dbTables.includes(model.tableName)) {
-      const dbColumns = await introspectTable(model.tableName);
-      generateColumnDiff(model, dbColumns, ops);
-    }
-  }
-
-  // Dropped tables (non-destructive: commented out)
-  for (const tableName of dbTables) {
-    if (!schemaTableNames.has(tableName)) {
-      ops.push({
-        type: 'DROP_TABLE',
-        table: tableName,
-        details: `Table not in schema`,
-        sql: `-- DROP TABLE [${tableName}]`,
-      });
-    }
-  }
-
-  return ops;
-}
-
-function mapDefault(val: string): string {
-  if (val === 'uuid()') return 'DEFAULT NEWID()';
-  if (val === 'cuid()') return 'DEFAULT NEWID()';
-  if (val === 'now()') return 'DEFAULT CURRENT_TIMESTAMP';
-  if (val === 'autoincrement()') return 'IDENTITY(1,1)';
-  if (val === 'true') return 'DEFAULT 1';
-  if (val === 'false') return 'DEFAULT 0';
-  if (/^".*"$/.test(val)) return `DEFAULT '${val.slice(1, -1).replace(/'/g, "''")}'`;
-  return `DEFAULT ${val}`;
-}
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 async function cmdDiff() {
+  requireDatabaseUrl();
   console.log('\n🔍 Comparing schema with database...\n');
 
   const schemaModels = parseSchema();
@@ -328,7 +206,7 @@ async function cmdDiff() {
   console.log(`Schema: ${schemaModels.length} models`);
   console.log(`Database: ${dbTables.length} tables\n`);
 
-  const ops = await generateDiff(schemaModels, dbTables);
+  const ops = await generateDiff(schemaModels, dbTables, introspectTable, introspectTableArtifacts);
 
   if (ops.length === 0) {
     console.log('✅ Schema is in sync with database.');
@@ -344,11 +222,12 @@ async function cmdDiff() {
 }
 
 async function cmdGenerate() {
+  requireDatabaseUrl();
   console.log('\n📝 Generating migration file...\n');
 
   const schemaModels = parseSchema();
   const dbTables = await getExistingTables();
-  const ops = await generateDiff(schemaModels, dbTables);
+  const ops = await generateDiff(schemaModels, dbTables, introspectTable, introspectTableArtifacts);
 
   if (ops.length === 0) {
     console.log('No migrations needed.');
@@ -363,19 +242,128 @@ async function cmdGenerate() {
   const filename = `${timestamp}_migration.sql`;
   const filepath = path.join(migrationsDir, filename);
 
-  const lines = [`-- Migration: ${timestamp}`, `-- Generated by an5Orm migrate`, ''];
-
-  for (const op of ops) {
-    lines.push(`-- ${op.type}: ${op.table}`);
-    if (op.sql) lines.push(op.sql);
-    lines.push('');
-  }
-
-  fs.writeFileSync(filepath, lines.join('\n'));
+  fs.writeFileSync(filepath, buildMigrationFile(timestamp, ops));
   console.log(`✅ Migration written to: ${filepath}`);
 }
 
+async function cmdApply(args: string[] = []) {
+  requireDatabaseUrl();
+  const options = parseMigrationCommandOptions(args);
+  console.log(options.dryRun ? '\n👀 Previewing pending migrations...\n' : '\n🚀 Applying migrations...\n');
+
+  const db = await getDb();
+  const applied = new Map((await getAppliedMigrations({ ensure: true })).map(row => [row.id, row.checksum]));
+  const files = listMigrationFiles();
+  const pending = files.filter(file => !applied.has(file));
+
+  if (pending.length === 0) {
+    console.log('✅ No pending migrations.');
+    return;
+  }
+
+  for (const file of pending) {
+    const filepath = path.join(migrationsDir, file);
+    const content = fs.readFileSync(filepath, 'utf8');
+    const sections = parseMigrationSections(content);
+    const digest = checksum(content);
+
+    if (splitSqlBatches(sections.up).length === 0) {
+      throw new Error(`Migration ${file} has no up SQL to apply.`);
+    }
+
+    if (options.dryRun) {
+      if (splitSqlBatches(sections.preflight).length > 0) {
+        printBatches(`-- ${file} preflight`, sections.preflight);
+      }
+      printBatches(`-- ${file} up`, sections.up);
+      continue;
+    }
+
+    await db.$transaction(async (tx) => {
+      if (splitSqlBatches(sections.preflight).length > 0) {
+        await executeBatches(tx, sections.preflight);
+      }
+      await executeBatches(tx, sections.up);
+      await tx._executeRaw(
+        `INSERT INTO ${migrationTableName} ([id], [checksum]) VALUES (@id, @checksum)`,
+        { id: file, checksum: digest }
+      );
+    });
+    console.log(`✅ Applied ${file}`);
+  }
+}
+
+async function rollbackOne(db: An5Adapter, migration: { id: string; checksum: string }): Promise<void> {
+  const filepath = path.join(migrationsDir, migration.id);
+  if (!fs.existsSync(filepath)) {
+    throw new Error(`Applied migration file is missing: ${migration.id}`);
+  }
+
+  const content = fs.readFileSync(filepath, 'utf8');
+  if (checksum(content) !== migration.checksum) {
+    throw new Error(`Applied migration checksum changed: ${migration.id}`);
+  }
+
+  const sections = parseMigrationSections(content);
+  if (!sections.hasDown || splitSqlBatches(sections.down).length === 0) {
+    throw new Error(`Migration ${migration.id} does not contain rollback SQL after -- migrate:down.`);
+  }
+
+  await db.$transaction(async (tx) => {
+    await executeBatches(tx, sections.down);
+    await tx._executeRaw(`DELETE FROM ${migrationTableName} WHERE [id] = @id`, { id: migration.id });
+  });
+  console.log(`✅ Rolled back ${migration.id}`);
+}
+
+function readRollbackSql(migration: { id: string; checksum: string }): string {
+  const filepath = path.join(migrationsDir, migration.id);
+  if (!fs.existsSync(filepath)) {
+    throw new Error(`Applied migration file is missing: ${migration.id}`);
+  }
+
+  const content = fs.readFileSync(filepath, 'utf8');
+  if (checksum(content) !== migration.checksum) {
+    throw new Error(`Applied migration checksum changed: ${migration.id}`);
+  }
+
+  const sections = parseMigrationSections(content);
+  if (!sections.hasDown || splitSqlBatches(sections.down).length === 0) {
+    throw new Error(`Migration ${migration.id} does not contain rollback SQL after -- migrate:down.`);
+  }
+  return sections.down;
+}
+
+async function cmdRollback(args: string[] = []) {
+  requireDatabaseUrl();
+  const options = parseMigrationCommandOptions(args);
+
+  const db = await getDb();
+  const applied = await getAppliedMigrations({ ensure: true });
+  if (applied.length === 0) {
+    console.log('✅ No applied migrations to roll back.');
+    return;
+  }
+
+  const selection = parseRollbackSelection(options.rest, applied);
+  const targets = applied.slice(Math.max(0, applied.length - selection.count)).reverse();
+  console.log(options.dryRun ? `\n👀 Previewing rollback ${selection.label}...\n` : `\n↩️ Rolling back ${selection.label}...\n`);
+
+  if (targets.length < selection.count) {
+    console.log(`Only ${targets.length} applied migration${targets.length === 1 ? '' : 's'} available.`);
+  }
+
+  for (const migration of targets) {
+    if (options.dryRun) {
+      printBatches(`-- ${migration.id} down`, readRollbackSql(migration));
+    } else {
+      await rollbackOne(db, migration);
+    }
+  }
+}
+
 async function cmdStatus() {
+  requireDatabaseUrl();
   console.log('\n📊 Migration Status\n');
 
   const schemaModels = parseSchema();
@@ -398,28 +386,37 @@ async function cmdStatus() {
   if (!fs.existsSync(migrationsDir)) {
     fs.mkdirSync(migrationsDir, { recursive: true });
   }
-  const migrations = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql'));
+  const migrations = listMigrationFiles();
+  const applied = await getAppliedMigrations();
+  const appliedIds = new Set(applied.map(row => row.id));
   console.log(`\nMigration files: ${migrations.length}`);
+  console.log(`Applied migrations: ${applied.length}`);
+  console.log(`Pending migrations: ${migrations.filter(file => !appliedIds.has(file)).length}`);
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
   const command = process.argv[2] || 'diff';
+  const args = process.argv.slice(3);
 
   switch (command) {
     case 'diff': await cmdDiff(); break;
     case 'generate': await cmdGenerate(); break;
+    case 'apply': await cmdApply(args); break;
+    case 'rollback': await cmdRollback(args); break;
     case 'status': await cmdStatus(); break;
     default:
-      console.log('Usage: npx tsx migrate.ts [diff|generate|status]');
+      console.log('Usage: npx tsx migrate.ts [diff|generate|apply [--dry-run]|rollback [--dry-run] [steps|--to file]|status]');
       process.exit(1);
   }
 
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error('❌ Migration failed:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(`❌ Migration failed: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  });
+}
