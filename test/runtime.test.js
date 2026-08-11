@@ -74,7 +74,7 @@ async function main() {
   const nestedFilterDb = new An5ORM(async (sql, params) => {
     nestedFilterQueries.push({ sql, params });
     if (nestedFilterQueries.length === 1) return [{ id: 'u1', name: 'Son' }];
-    return [{ id: 'o2', userId: 'u1', status: 'paid' }];
+    return [{ id: 'o2', userId: 'u1', status: 'paid', __an5_rn: 2 }];
   }, {
     modelToTable: {
       user: 'dbo.users',
@@ -101,14 +101,24 @@ async function main() {
       orders: {
         where: { status: 'paid' },
         orderBy: { id: 'desc' },
+        skip: 1,
+        take: 2,
       },
     },
   });
 
   assert.deepStrictEqual(filteredIncludes[0].orders, [{ id: 'o2', userId: 'u1', status: 'paid' }]);
   assert.ok(
-    nestedFilterQueries[1].sql.includes('WHERE [userId] IN (@k_0) AND [status] = @rel_orders_status ORDER BY [id] DESC'),
-    `Expected nested include where/orderBy SQL, got: ${nestedFilterQueries[1].sql}`
+    nestedFilterQueries[1].sql.includes('ROW_NUMBER() OVER (PARTITION BY [userId] ORDER BY [id] DESC) AS [__an5_rn]'),
+    `Expected nested include per-parent pagination SQL, got: ${nestedFilterQueries[1].sql}`
+  );
+  assert.ok(
+    nestedFilterQueries[1].sql.includes('WHERE [userId] IN (@k_0) AND [status] = @rel_orders_status'),
+    `Expected nested include where SQL, got: ${nestedFilterQueries[1].sql}`
+  );
+  assert.ok(
+    nestedFilterQueries[1].sql.includes('WHERE [__an5_rn] > 1 AND [__an5_rn] <= 3'),
+    `Expected nested include skip/take filter, got: ${nestedFilterQueries[1].sql}`
   );
   assert.strictEqual(nestedFilterQueries[1].params.rel_orders_status, 'paid');
 

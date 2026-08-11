@@ -178,6 +178,10 @@ function mergeIncludes(primary, secondary) {
         return primary;
     return { ...secondary, ...primary };
 }
+function relationOrderClause(orderBy, fallbackKey) {
+    const sql = (0, sql_utils_1.buildOrderBy)(orderBy);
+    return sql ? sql.replace(/^\s*ORDER\s+BY\s+/i, "") : `${(0, sql_utils_1.quoteIdentifier)(fallbackKey)} ASC`;
+}
 function requiredRelationKeys(modelName, include, metadata) {
     if (!include || typeof include !== "object")
         return [];
@@ -269,23 +273,46 @@ async function resolveIncludes(modelName, rows, include, executor, metadata) {
                 relCols = selectedSubCols.join(", ");
             }
         }
-        let sqlText = `SELECT ${relCols} FROM ${relTable} WITH (NOLOCK) WHERE ${(0, sql_utils_1.quoteIdentifier)(searchKey)} IN (${uniqueKeys.map((_, i) => `@k_${i}`).join(", ")})`;
+        const filters = [`${(0, sql_utils_1.quoteIdentifier)(searchKey)} IN (${uniqueKeys.map((_, i) => `@k_${i}`).join(", ")})`];
+        let sqlText = "";
         const subParams = {};
         uniqueKeys.forEach((k, i) => { subParams[`k_${i}`] = k; });
+        let subArgs = undefined;
         if (value && typeof value === "object") {
-            const subArgs = value;
+            subArgs = value;
             const subWhereSql = (0, sql_utils_1.parseWhere)(relation.modelName, subArgs.where, subParams, `rel_${key}_`, {
                 relationMap: metadata.relationMap,
                 modelToTable: metadata.modelToTable,
             });
             if (subWhereSql) {
-                sqlText += ` AND ${subWhereSql}`;
+                filters.push(subWhereSql);
             }
-            if (subArgs.orderBy) {
+        }
+        const hasRelationPagination = isMany && subArgs && (subArgs.take !== undefined || subArgs.skip !== undefined);
+        if (hasRelationPagination) {
+            const rn = (0, sql_utils_1.quoteIdentifier)("__an5_rn");
+            const skip = (0, sql_utils_1.toNonNegativeInt)(subArgs.skip);
+            const take = subArgs.take !== undefined ? (0, sql_utils_1.toNonNegativeInt)(subArgs.take, 1) : undefined;
+            const whereSql = filters.join(" AND ");
+            sqlText = `SELECT * FROM (
+        SELECT ${relCols}, ROW_NUMBER() OVER (PARTITION BY ${(0, sql_utils_1.quoteIdentifier)(searchKey)} ORDER BY ${relationOrderClause(subArgs.orderBy, searchKey)}) AS ${rn}
+        FROM ${relTable} WITH (NOLOCK)
+        WHERE ${whereSql}
+      ) AS [an5_rel]
+      WHERE ${rn} > ${skip}`;
+            if (take !== undefined) {
+                sqlText += ` AND ${rn} <= ${skip + take}`;
+            }
+            sqlText += ` ORDER BY ${(0, sql_utils_1.quoteIdentifier)(searchKey)}, ${rn}`;
+        }
+        else {
+            sqlText = `SELECT ${relCols} FROM ${relTable} WITH (NOLOCK) WHERE ${filters.join(" AND ")}`;
+            if (subArgs?.orderBy) {
                 sqlText += (0, sql_utils_1.buildOrderBy)(subArgs.orderBy);
             }
         }
         const relatedRows = await executor(sqlText, subParams);
+        relatedRows.forEach((r) => { delete r.__an5_rn; });
         if (value && typeof value === "object" && value.include) {
             await resolveIncludes(relation.modelName, relatedRows, value.include, executor, metadata);
         }
