@@ -36,6 +36,7 @@ const {
   parseSchemaText,
   quoteTableName,
   splitSqlBatches,
+  tableIdentityName,
 } = require('../dist/migration-core.js');
 
 // ─── Test harness ────────────────────────────────────────────────────────────
@@ -777,6 +778,13 @@ test('mapDefault keeps generated SQL literal-safe', () => {
 test('quoteTableName handles schema-qualified table names', () => {
   assertEq(quoteTableName('dbo.users'), '[dbo].[users]');
   assertEq(quoteTableName('[sales].[orders]'), '[sales].[orders]');
+});
+
+test('tableIdentityName normalizes default dbo schema only', () => {
+  assertEq(tableIdentityName('users'), 'users');
+  assertEq(tableIdentityName('dbo.users'), 'users');
+  assertEq(tableIdentityName('[dbo].[users]'), 'users');
+  assertEq(tableIdentityName('sales.orders'), 'sales.orders');
 });
 
 test('buildDownMigrationSql reverses additive migration operations', () => {

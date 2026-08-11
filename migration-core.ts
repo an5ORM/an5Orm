@@ -129,7 +129,7 @@ export function quoteTableName(raw: string): string {
     .join('.');
 }
 
-function tableIdentityName(raw: string): string {
+export function tableIdentityName(raw: string): string {
   const cleaned = raw
     .replace(/"/g, '')
     .split('.')

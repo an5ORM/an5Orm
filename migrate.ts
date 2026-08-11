@@ -25,6 +25,7 @@ import {
   parseRollbackSelection,
   parseSchemaText,
   splitSqlBatches,
+  tableIdentityName,
 } from './migration-core';
 
 const rootDir = process.cwd();
@@ -103,7 +104,14 @@ async function introspectTable(tableName: string): Promise<DbColumn[]> {
 
 async function getExistingTables(): Promise<string[]> {
   const rows = await (await getDb()).$queryRawUnsafe<{ name: string }>(`
-    SELECT name FROM sys.tables WHERE is_ms_shipped = 0 ORDER BY name
+    SELECT
+      CASE
+        WHEN SCHEMA_NAME(schema_id) = 'dbo' THEN name
+        ELSE SCHEMA_NAME(schema_id) + '.' + name
+      END AS name
+    FROM sys.tables
+    WHERE is_ms_shipped = 0
+    ORDER BY SCHEMA_NAME(schema_id), name
   `);
   return rows.map(r => r.name);
 }
@@ -370,15 +378,17 @@ async function cmdStatus() {
   const dbTables = await getExistingTables();
 
   console.log('Schema Models:');
+  const dbTableIdentities = new Set(dbTables.map(tableIdentityName));
   for (const model of schemaModels) {
-    const exists = dbTables.includes(model.tableName);
+    const exists = dbTableIdentities.has(tableIdentityName(model.tableName));
     const icon = exists ? '✅' : '⚠️';
     console.log(`  ${icon} ${model.name} → ${model.tableName} (${model.fields.length} fields)`);
   }
 
   console.log('\nDatabase Tables:');
+  const schemaTableIdentities = new Set(schemaModels.map(model => tableIdentityName(model.tableName)));
   for (const table of dbTables) {
-    const inSchema = schemaModels.some(m => m.tableName === table);
+    const inSchema = schemaTableIdentities.has(tableIdentityName(table));
     const icon = inSchema ? '✅' : '⚠️';
     console.log(`  ${icon} ${table}`);
   }
