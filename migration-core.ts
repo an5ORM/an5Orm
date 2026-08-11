@@ -107,6 +107,14 @@ export function safeIdentifierName(raw: string): string {
   return raw.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
 }
 
+function fieldUniqueConstraintName(model: SchemaModel, field: SchemaField): string {
+  return `UQ_${safeIdentifierName(model.tableName)}_${safeIdentifierName(field.name)}`;
+}
+
+function compoundUniqueConstraintName(model: SchemaModel, idx: number): string {
+  return `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
+}
+
 export function quoteTableName(raw: string): string {
   return raw
     .replace(/"/g, '')
@@ -364,7 +372,7 @@ export function buildCreateTableSql(model: SchemaModel): string {
 
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
     const fields = model.compoundUniques[idx];
-    const constraintName = `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
+    const constraintName = compoundUniqueConstraintName(model, idx);
     const fieldsStr = fields.map(f => `[${f}]`).join(', ');
     colDefs.push(`CONSTRAINT [${constraintName}] UNIQUE (${fieldsStr})`);
   }
@@ -378,7 +386,7 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
 
   for (const field of model.fields) {
     if (!field.isUnique || field.isId) continue;
-    const constraintName = `UQ_${safeIdentifierName(model.tableName)}_${safeIdentifierName(field.name)}`;
+    const constraintName = fieldUniqueConstraintName(model, field);
     if (!existingUniques.has(constraintName.toLowerCase())) {
       ops.push({
         type: 'ADD_UNIQUE',
@@ -393,7 +401,7 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
 
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
     const fields = model.compoundUniques[idx];
-    const constraintName = `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`;
+    const constraintName = compoundUniqueConstraintName(model, idx);
     if (!existingUniques.has(constraintName.toLowerCase())) {
       const fieldsStr = fields.map(f => `[${f}]`).join(', ');
       ops.push({
@@ -501,7 +509,13 @@ export async function generateDiff(
   for (const model of schemaModels) {
     if (!dbTables.includes(model.tableName)) {
       ops.push({ type: 'CREATE_TABLE', table: model.tableName, sql: buildCreateTableSql(model) });
-      buildIndexDiff(model, { indexes: [], uniqueConstraints: model.compoundUniques.map((_, idx) => `UQ_${safeIdentifierName(model.tableName)}_compound_${idx}`) }, ops);
+      buildIndexDiff(model, {
+        indexes: [],
+        uniqueConstraints: [
+          ...model.fields.filter(field => field.isUnique && !field.isId).map(field => fieldUniqueConstraintName(model, field)),
+          ...model.compoundUniques.map((_, idx) => compoundUniqueConstraintName(model, idx)),
+        ],
+      }, ops);
     }
   }
 

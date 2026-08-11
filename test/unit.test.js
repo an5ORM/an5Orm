@@ -28,6 +28,7 @@ const {
   buildCreateTableSql,
   formatDbColumnSqlType,
   generateColumnDiff,
+  generateDiff,
   mapDefault,
   parseMigrationCommandOptions,
   parseMigrationSections,
@@ -41,10 +42,22 @@ const {
 
 let passed = 0;
 let failed = 0;
+const pendingTests = [];
 
 function test(name, fn) {
   try {
-    fn();
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      pendingTests.push(result.then(() => {
+        passed++;
+        console.log(`  ✓ ${name}`);
+      }).catch((err) => {
+        failed++;
+        console.log(`  ✗ ${name}`);
+        console.log(`    ${err.message}`);
+      }));
+      return;
+    }
     passed++;
     console.log(`  ✓ ${name}`);
   } catch (err) {
@@ -696,6 +709,24 @@ test('buildIndexDiff skips existing named artifacts', () => {
   assertEq(ops.length, 0);
 });
 
+test('generateDiff does not duplicate inline unique constraints for new tables', async () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id    NVARCHAR(64) @id
+      email NVARCHAR(255) @unique
+      age   INT?
+      @@unique([email, age])
+      @@index([age])
+    }
+  `);
+
+  const ops = await generateDiff([model], [], async () => []);
+
+  assert.deepStrictEqual(ops.map((op) => op.type), ['CREATE_TABLE', 'ADD_INDEX']);
+  assertIncludes(ops[0].sql, '[email] NVARCHAR(255) NOT NULL UNIQUE');
+  assertEq(ops[1].sql, 'CREATE INDEX [IX_users_age] ON [users] ([age])');
+});
+
 test('mapDefault keeps generated SQL literal-safe', () => {
   assertEq(mapDefault('"owner\'s"'), "DEFAULT 'owner''s'");
 });
@@ -834,5 +865,7 @@ test('parseMigrationCommandOptions extracts dry-run flag', () => {
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
-console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
-process.exit(failed > 0 ? 1 : 0);
+Promise.all(pendingTests).then(() => {
+  console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
+  process.exit(failed > 0 ? 1 : 0);
+});
