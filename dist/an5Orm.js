@@ -143,6 +143,78 @@ function selectedAggregateFields(fields) {
         return [];
     return Object.keys(fields).filter((key) => fields[key]);
 }
+function aggregateExpression(kind, field) {
+    const upper = kind.toUpperCase();
+    if (upper === "COUNT" && field === "_all")
+        return "COUNT(*)";
+    return `${upper}(${(0, sql_utils_1.quoteIdentifier)(field)})`;
+}
+function addHavingPredicate(conditions, params, expr, paramBase, filter) {
+    if (filter && typeof filter === "object" && !(filter instanceof Date)) {
+        for (const [op, value] of Object.entries(filter)) {
+            const p = (0, sql_utils_1.sanitizeParamName)(`having_${paramBase}_${op}`);
+            if (op === "equals") {
+                conditions.push(`${expr} = @${p}`);
+                params[p] = value;
+            }
+            else if (op === "gt" || op === "gte" || op === "lt" || op === "lte") {
+                const symbol = op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
+                conditions.push(`${expr} ${symbol} @${p}`);
+                params[p] = value;
+            }
+            else if (op === "not") {
+                if (value && typeof value === "object" && !(value instanceof Date)) {
+                    const nested = [];
+                    addHavingPredicate(nested, params, expr, `${paramBase}_not`, value);
+                    if (nested.length > 0)
+                        conditions.push(`NOT (${nested.join(" AND ")})`);
+                }
+                else {
+                    conditions.push(`${expr} <> @${p}`);
+                    params[p] = value;
+                }
+            }
+            else if ((op === "in" || op === "notIn") && Array.isArray(value)) {
+                if (value.length === 0) {
+                    conditions.push(op === "in" ? "1 = 0" : "1 = 1");
+                }
+                else {
+                    const placeholders = value.map((item, idx) => {
+                        const itemParam = (0, sql_utils_1.sanitizeParamName)(`${p}_${idx}`);
+                        params[itemParam] = item;
+                        return `@${itemParam}`;
+                    });
+                    conditions.push(`${expr} ${op === "in" ? "IN" : "NOT IN"} (${placeholders.join(", ")})`);
+                }
+            }
+        }
+        return;
+    }
+    const p = (0, sql_utils_1.sanitizeParamName)(`having_${paramBase}`);
+    conditions.push(`${expr} = @${p}`);
+    params[p] = filter;
+}
+function buildHavingSql(having, params) {
+    if (!having || typeof having !== "object")
+        return "";
+    const conditions = [];
+    const aggregateKeys = {
+        _count: "COUNT",
+        _sum: "SUM",
+        _avg: "AVG",
+        _min: "MIN",
+        _max: "MAX",
+    };
+    for (const [key, sqlFn] of Object.entries(aggregateKeys)) {
+        const fields = having[key];
+        if (!fields || typeof fields !== "object")
+            continue;
+        for (const [field, filter] of Object.entries(fields)) {
+            addHavingPredicate(conditions, params, aggregateExpression(sqlFn, field), `${key}_${field}`, filter);
+        }
+    }
+    return conditions.length > 0 ? conditions.join(" AND ") : "";
+}
 function projectFields(row, select) {
     if (!row || !select)
         return row;
@@ -996,6 +1068,10 @@ class TableClient {
                 sqlText += ` WHERE ${whereSql}`;
             }
             sqlText += ` GROUP BY ${byFields.map((f) => (0, sql_utils_1.quoteIdentifier)(f)).join(", ")}`;
+            const havingSql = buildHavingSql(finalArgs?.having, p);
+            if (havingSql) {
+                sqlText += ` HAVING ${havingSql}`;
+            }
             const hasSkip = finalArgs?.skip !== undefined && finalArgs?.skip !== null;
             const hasTake = finalArgs?.take !== undefined && finalArgs?.take !== null;
             if (finalArgs?.orderBy) {

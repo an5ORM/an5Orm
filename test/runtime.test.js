@@ -225,6 +225,10 @@ async function main() {
   const grouped = await groupDb.order.groupBy({
     by: 'userId',
     where: { total: { gte: 10 } },
+    having: {
+      _count: { _all: { gt: 1 } },
+      _sum: { total: { gte: 20 } },
+    },
     _count: true,
     _sum: { total: true },
     take: 2,
@@ -233,8 +237,11 @@ async function main() {
 
   assert.deepStrictEqual(grouped[0], { userId: 'u1', _count: { _all: 2 }, _sum: { total: 30 } });
   assert.ok(groupCalls[0].sql.includes('GROUP BY [userId]'), `Expected group by field, got: ${groupCalls[0].sql}`);
+  assert.ok(groupCalls[0].sql.includes('HAVING COUNT(*) > @having__count__all_gt AND SUM([total]) >= @having__sum_total_gte'), `Expected having SQL, got: ${groupCalls[0].sql}`);
   assert.ok(groupCalls[0].sql.includes('ORDER BY [userId] OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY'), `Expected pagination SQL, got: ${groupCalls[0].sql}`);
   assert.strictEqual(groupCalls[0].params.total_gte, 10);
+  assert.strictEqual(groupCalls[0].params.having__count__all_gt, 1);
+  assert.strictEqual(groupCalls[0].params.having__sum_total_gte, 20);
 
   const aggregateCalls = [];
   const aggregateDb = new An5ORM(async (sql, params) => {
