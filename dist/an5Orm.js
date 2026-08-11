@@ -837,7 +837,7 @@ class TableClient {
                 return rows;
             }
             catch (err) {
-                const msg = String(err.message || "").toLowerCase();
+                const msg = (String(err?.message || "") + " " + String(err?.originalError?.message || "")).toLowerCase();
                 // Handle specific float16 to float32 conversion error by retrying with float16
                 if (msg.includes("float16") && msg.includes("float32") && msg.includes("conversion") && !finalArgs.vectorElementType) {
                     logger_1.logger.info(`Detected float16 vector storage. Retrying vectorSearch with float16 element type.`);
@@ -847,10 +847,15 @@ class TableClient {
                     msg.includes("type vector") ||
                     msg.includes("type \"vector\"") ||
                     msg.includes("data type vector") ||
+                    msg.includes("incorrect syntax") ||
+                    msg.includes("syntax near") ||
                     msg.includes("not a recognized built-in function") ||
                     msg.includes("not a defined system type") ||
                     msg.includes("limit of 1998") ||
-                    err?.number === 195;
+                    err?.number === 195 ||
+                    err?.number === 102 ||
+                    err?.number === 319 ||
+                    err?.originalError?.number === 319;
                 if (!isUnsupported) {
                     throw err;
                 }
