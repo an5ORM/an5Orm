@@ -825,6 +825,30 @@ test('generateDiff does not duplicate inline unique constraints for new tables',
   assertEq(ops[1].sql, 'CREATE INDEX [IX_users_age] ON [users] ([age])');
 });
 
+test('generateDiff emits mapped advanced index metadata for existing tables', async () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id        NVARCHAR(64) @id
+      email     NVARCHAR(255)
+      tenantId  NVARCHAR(64)
+      age       INT?
+      deletedAt DATETIME2?
+      @@index([age], map: "IX_app_users_age_active", include: [email, tenantId], filter: "deletedAt IS NULL", options: "FILLFACTOR = 90")
+    }
+  `);
+
+  const ops = await generateDiff([model], ['users'], async () => [
+    { columnName: 'id', dataType: 'nvarchar', maxLength: 128, isNullable: false, isPrimaryKey: true, isIdentity: false },
+    { columnName: 'email', dataType: 'nvarchar', maxLength: 510, isNullable: false, isPrimaryKey: false, isIdentity: false },
+    { columnName: 'tenantId', dataType: 'nvarchar', maxLength: 128, isNullable: false, isPrimaryKey: false, isIdentity: false },
+    { columnName: 'age', dataType: 'int', isNullable: true, isPrimaryKey: false, isIdentity: false },
+    { columnName: 'deletedAt', dataType: 'datetime2', isNullable: true, isPrimaryKey: false, isIdentity: false },
+  ], async () => ({ indexes: [], uniqueConstraints: [] }));
+
+  assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_INDEX']);
+  assertEq(ops[0].sql, 'CREATE INDEX [IX_app_users_age_active] ON [users] ([age]) INCLUDE ([email], [tenantId]) WHERE deletedAt IS NULL WITH (FILLFACTOR = 90)');
+});
+
 test('generateDiff matches dbo-qualified schema tables with unqualified introspection names', async () => {
   const [model] = parseSchemaText(`
     model User {
