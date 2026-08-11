@@ -182,7 +182,9 @@ test('an5Client/typescript groupBy args are model-aware', () => {
   assertExists(orderPath);
   const content = fs.readFileSync(orderPath, 'utf8');
   assertIncludes(content, "export type OrderScalarFieldEnum = 'id' | 'userId' | 'total' | 'createdAt'");
+  assertIncludes(content, 'export type OrderAggregateHavingInput = { _count?: { _all?: An5.NumberFilter | number');
   assertIncludes(content, 'export type OrderGroupByArgs = { by: OrderScalarFieldEnum | OrderScalarFieldEnum[]');
+  assertIncludes(content, 'having?: OrderAggregateHavingInput');
   assertIncludes(content, '_sum?: { total?: true }');
   assertIncludes(content, 'OrderGroupByArgs');
 });
