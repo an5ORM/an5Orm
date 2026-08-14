@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.an5Orm = exports.An5ORM = void 0;
+exports.an5Orm = exports.An5ORM = exports.ViewClient = exports.TableClient = void 0;
 const adapters_1 = require("@an5/adapters");
 const crypto_1 = require("crypto");
 const logger_1 = require("./logger");
@@ -1237,6 +1237,7 @@ class TableClient {
         });
     }
 }
+exports.TableClient = TableClient;
 function addNoLockToQuery(sql, metadata) {
     // If it's not a SELECT query, don't modify it
     if (!/^\s*SELECT/i.test(sql)) {
@@ -1274,6 +1275,86 @@ function addNoLockToQuery(sql, metadata) {
 // Lazy-load generated schema metadata from the ORM's own generated copy so
 // `new An5ORM()` resolves schema models out of the box without the core ever
 // importing from the generated client package (client is generated FROM the ORM).
+class ViewClient {
+    constructor(viewName, rawTableName, executor, orm) {
+        this.viewName = viewName;
+        this.rawTableName = rawTableName;
+        this.executor = executor;
+        this.orm = orm;
+        this.tableClient = new TableClient(viewName, rawTableName, executor, orm);
+    }
+    async findMany(args) { return this.tableClient.findMany(args); }
+    async findFirst(args) { return this.tableClient.findFirst(args); }
+    async findUnique(args) { return this.tableClient.findUnique(args); }
+    async count(args) { return this.tableClient.count(args); }
+    async aggregate(args) { return this.tableClient.aggregate(args); }
+    async groupBy(args) { return this.tableClient.groupBy(args); }
+    async vectorSearch(args) { return this.tableClient.vectorSearch(args); }
+    async create() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support create operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+    async createMany() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support createMany operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+    async update() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support update operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+    async updateMany() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support updateMany operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+    async delete() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support delete operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+    async deleteMany() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support deleteMany operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+    async upsert() {
+        throw new errors_1.An5ClientKnownRequestError("Views are read-only and do not support upsert operations.", { code: "P2000", clientVersion: "1.0.8" });
+    }
+}
+exports.ViewClient = ViewClient;
+function buildProcCallSql(procName, params) {
+    const p = {};
+    const targetProc = (0, sql_utils_1.quoteTableIdentifier)(procName);
+    if (!params) {
+        return { sqlText: `EXEC ${targetProc};`, p };
+    }
+    if (Array.isArray(params)) {
+        const argList = params.map((val, idx) => {
+            const key = `p_${idx}`;
+            p[key] = val;
+            return `@${key}`;
+        }).join(", ");
+        return { sqlText: `EXEC ${targetProc} ${argList};`, p };
+    }
+    const argList = Object.entries(params).map(([key, val], idx) => {
+        const paramKey = (0, sql_utils_1.sanitizeParamName)(`p_${key}_${idx}`);
+        p[paramKey] = val;
+        return `@${(0, sql_utils_1.sanitizeParamName)(key)} = @${paramKey}`;
+    }).join(", ");
+    return { sqlText: `EXEC ${targetProc} ${argList};`, p };
+}
+function buildFunctionCallSql(fnName, params) {
+    const p = {};
+    const targetFn = (0, sql_utils_1.quoteTableIdentifier)(fnName);
+    if (!params) {
+        return { sqlText: `SELECT * FROM ${targetFn}();`, p };
+    }
+    if (Array.isArray(params)) {
+        const argList = params.map((val, idx) => {
+            const key = `p_${idx}`;
+            p[key] = val;
+            return `@${key}`;
+        }).join(", ");
+        return { sqlText: `SELECT * FROM ${targetFn}(${argList});`, p };
+    }
+    const argList = Object.entries(params).map(([key, val], idx) => {
+        const paramKey = (0, sql_utils_1.sanitizeParamName)(`p_${key}_${idx}`);
+        p[paramKey] = val;
+        return `@${paramKey}`;
+    }).join(", ");
+    return { sqlText: `SELECT * FROM ${targetFn}(${argList});`, p };
+}
 let autoMetadata = null;
 function loadAutoMetadata() {
     if (autoMetadata)
@@ -1318,50 +1399,66 @@ class An5ORM {
         });
         return new Proxy(this, {
             get(target, prop, receiver) {
-                if (prop === "$use") {
-                    return target.$use.bind(target);
-                }
-                if (prop === "$transaction") {
-                    return target.$transaction.bind(target);
-                }
-                if (prop === "$begin") {
-                    return target.$begin.bind(target);
-                }
-                if (prop === "$commit") {
-                    return target.$commit.bind(target);
-                }
-                if (prop === "$rollback") {
-                    return target.$rollback.bind(target);
-                }
-                if (prop === "$connect") {
-                    return target.$connect.bind(target);
-                }
-                if (prop === "$disconnect") {
-                    return target.$disconnect.bind(target);
-                }
-                if (prop === "$queryRaw") {
-                    return target.$queryRaw.bind(target);
-                }
-                if (prop === "$queryRawUnsafe") {
-                    return target.$queryRawUnsafe.bind(target);
-                }
-                if (prop === "$executeRaw") {
-                    return target.$executeRaw.bind(target);
-                }
-                if (prop === "$executeRawUnsafe") {
-                    return target.$executeRawUnsafe.bind(target);
+                if (typeof prop === "string" && prop in target && typeof target[prop] === "function") {
+                    return target[prop].bind(target);
                 }
                 if (!(prop in target) && typeof prop === "string" && !prop.startsWith("_")) {
-                    // Resolve modelName in camelCase and map to table name
-                    const tableName = target.metadata.modelToTable[prop];
-                    if (tableName) {
-                        target[prop] = new TableClient(prop, tableName, target.customExecutor || execQuery, receiver // Pass the proxied ORM so nested writes can resolve model clients.
-                        );
+                    let modelName = prop;
+                    let tableName = target.metadata.modelToTable[prop];
+                    if (!tableName) {
+                        const lowerProp = prop.toLowerCase();
+                        for (const [mName, tName] of Object.entries(target.metadata.modelToTable)) {
+                            const lowerModel = mName.toLowerCase();
+                            const lowerTable = tName.toLowerCase();
+                            if (lowerModel === lowerProp ||
+                                lowerTable === lowerProp ||
+                                lowerModel + "s" === lowerProp ||
+                                lowerModel + "es" === lowerProp ||
+                                lowerTable + "s" === lowerProp ||
+                                lowerTable + "es" === lowerProp) {
+                                modelName = mName;
+                                tableName = tName;
+                                break;
+                            }
+                        }
                     }
+                    if (!tableName) {
+                        tableName = prop;
+                    }
+                    target[prop] = new TableClient(modelName, tableName, target.customExecutor || execQuery, receiver);
                 }
                 return target[prop];
             }
         });
+    }
+    table(name) {
+        const rawTable = this.metadata.modelToTable[name] || name;
+        return new TableClient(name, rawTable, this.customExecutor || execQuery, this);
+    }
+    view(name) {
+        const rawTable = this.metadata.modelToTable[name] || name;
+        return new ViewClient(name, rawTable, this.customExecutor || execQuery, this);
+    }
+    $view(name) {
+        return this.view(name);
+    }
+    async $queryProc(procName, params) {
+        const executor = this.customExecutor || execQuery;
+        const { sqlText, p } = buildProcCallSql(procName, params);
+        return executor(sqlText, p);
+    }
+    async $executeProc(procName, params) {
+        const executor = this.customExecutor || execQuery;
+        const { sqlText, p } = buildProcCallSql(procName, params);
+        if (executor.executeRaw) {
+            return executor.executeRaw(sqlText, p);
+        }
+        return normalizeAffectedCount(await executor(sqlText, p));
+    }
+    async $queryFunction(fnName, params) {
+        const executor = this.customExecutor || execQuery;
+        const { sqlText, p } = buildFunctionCallSql(fnName, params);
+        return executor(sqlText, p);
     }
     $use(middleware) {
         this.middlewares.push(middleware);

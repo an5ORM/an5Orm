@@ -11,6 +11,50 @@ type InteractiveTransactionExecutor = {
     commit: () => Promise<void>;
     rollback: () => Promise<void>;
 };
+export declare class TableClient<T = any> {
+    private modelName;
+    private executor;
+    private orm;
+    constructor(modelName: string, tableName: string, executor: ExecutorFn, orm: An5ORM);
+    private tableName;
+    private executeRaw;
+    findMany(args?: any): Promise<T[]>;
+    findFirst(args?: any): Promise<T | null>;
+    findUnique(args?: any): Promise<T | null>;
+    count(args?: any): Promise<number>;
+    private scopedRelationWhere;
+    private handleNestedWrites;
+    create(args: any): Promise<T>;
+    update(args: any): Promise<T>;
+    updateMany(args: any): Promise<{
+        count: number;
+    }>;
+    delete(args: any): Promise<T>;
+    deleteMany(args?: any): Promise<{
+        count: number;
+    }>;
+    vectorSearch(args: {
+        vector: number[];
+        take?: number;
+        where?: any;
+        include?: any;
+        vectorField?: string;
+        distanceMetric?: 'cosine' | 'euclidean' | 'dot';
+        vectorElementType?: 'float32' | 'float16' | 'uint8';
+    }): Promise<(T & {
+        distance: number;
+    })[]>;
+    createMany(args: {
+        data: any[];
+        skipDuplicates?: boolean;
+    }): Promise<{
+        count: number;
+    }>;
+    aggregate(args: any): Promise<any>;
+    groupBy(args: any): Promise<any[]>;
+    private sequentialUpsert;
+    upsert(args: any): Promise<T>;
+}
 export interface MiddlewareParams {
     model?: string;
     action: string;
@@ -19,6 +63,28 @@ export interface MiddlewareParams {
 }
 export type MiddlewareNext = (params: MiddlewareParams) => Promise<any>;
 export type Middleware = (params: MiddlewareParams, next: MiddlewareNext) => Promise<any>;
+export declare class ViewClient<T = any> {
+    viewName: string;
+    rawTableName: string;
+    executor: ExecutorFn;
+    orm?: An5ORM | undefined;
+    private tableClient;
+    constructor(viewName: string, rawTableName: string, executor: ExecutorFn, orm?: An5ORM | undefined);
+    findMany(args?: any): Promise<T[]>;
+    findFirst(args?: any): Promise<T | null>;
+    findUnique(args?: any): Promise<T | null>;
+    count(args?: any): Promise<number>;
+    aggregate(args?: any): Promise<any>;
+    groupBy(args?: any): Promise<any[]>;
+    vectorSearch(args: any): Promise<T[]>;
+    create(): Promise<never>;
+    createMany(): Promise<never>;
+    update(): Promise<never>;
+    updateMany(): Promise<never>;
+    delete(): Promise<never>;
+    deleteMany(): Promise<never>;
+    upsert(): Promise<never>;
+}
 export declare class An5ORM {
     private customExecutor?;
     private readonly inTransaction;
@@ -27,6 +93,12 @@ export declare class An5ORM {
     private middlewares;
     readonly metadata: An5Metadata;
     constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata, inTransaction?: boolean, transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback"> | undefined);
+    table(name: string): TableClient;
+    view(name: string): ViewClient;
+    $view(name: string): ViewClient;
+    $queryProc<T = any>(procName: string, params?: Record<string, any> | any[]): Promise<T[]>;
+    $executeProc(procName: string, params?: Record<string, any> | any[]): Promise<number>;
+    $queryFunction<T = any>(fnName: string, params?: Record<string, any> | any[]): Promise<T[]>;
     $use(middleware: Middleware): void;
     parseWhere(modelName: string, where: any, params: Record<string, any>, prefix?: string): string;
     _executeMiddleware(params: MiddlewareParams, finalAction: (params: MiddlewareParams) => Promise<any>): Promise<any>;
