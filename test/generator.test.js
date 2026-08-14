@@ -288,14 +288,13 @@ test('golang generator emits safe SortOrder reflection', () => {
 
 console.log('\nORM Core:');
 
-test('an5Orm.ts exists with An5ORM class', () => {
-  const ormPath = path.join(__dirname, '..', 'an5Orm.ts');
-  assertExists(ormPath);
-  const content = fs.readFileSync(ormPath, 'utf8');
-  assertIncludes(content, 'class An5ORM');
-  assertIncludes(content, 'class TableClient');
-  assertIncludes(content, 'parseWhere');
-  assertIncludes(content, 'buildOrderBy');
+test('index.ts exists with metadata and adapter exports', () => {
+  const indexPath = path.join(__dirname, '..', 'index.ts');
+  assertExists(indexPath);
+  const content = fs.readFileSync(indexPath, 'utf8');
+  assertIncludes(content, 'An5ClientKnownRequestError');
+  assertIncludes(content, 'DEFAULT_METADATA');
+  assertIncludes(content, 'An5Adapter');
 });
 
 test('push.ts exists with push function', () => {

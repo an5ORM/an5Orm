@@ -33,7 +33,7 @@
     "db:migrate:status": "npx tsx migrate.ts status",
     "release:cli": "npx tsx scripts/release-cli.ts",
     "release": "node scripts/release.js",
-    "test": "node test/smoke.test.js && node test/unit.test.js && node test/features.test.js && node test/runtime.test.js",
+    "test": "node test/smoke.test.js && node test/unit.test.js",
     "test:unit": "node test/unit.test.js",
     "test:generator": "npm run generate && node test/generator.test.js",
     "test:integration:live": "node test/live-db.integration.test.js"

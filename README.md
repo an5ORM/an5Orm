@@ -1,90 +1,48 @@
 # @an5/orm
 
-SQL Server ORM. Proxy client. CRUD. Vector search. Middleware. Raw queries. Transactions.
+The Schema, Code Generator, and Migration Toolkit for the AN5 ecosystem.
+
+## Overview
+
+`@an5/orm` provides core schema parsing, multi-language code generation (TypeScript, Python, .NET C#, Golang), database introspection (`pull`), schema deployment (`push`), and automated database migrations.
+
+Runtime database connections, query building, transactions, and multi-database drivers (MSSQL, PostgreSQL, MySQL, SQLite, Google Sheets) are powered by **[@an5/adapters](https://github.com/an5ORM/an5/tree/main/an5Adapters)**.
 
 ## Features
 
--   **Proxy Client.** Flexible model access (`db.User`, `db.user`, `db.Users`, `db.users`).
--   **CRUD.** `findMany`, `findFirst`, `findUnique`, `count`, `create`, `createMany`, `update`, `updateMany`, `delete`, `deleteMany`, `upsert`.
--   **Advanced Queries.** OR/AND, nested relations, aggregates, `groupBy`.
--   **Vector Search.** Native SQL Server `VECTOR_DISTANCE`. In-memory fallback.
--   **Middleware.** Hook ORM operations: logging, auth, validation.
--   **Raw Queries.** `$queryRaw`, `$executeRaw`. Auto `NOLOCK`.
--   **Transactions.** `$transaction`. Rollback support.
--   **Schema Generator.** Parse `.an5` files. Generate TypeScript, Python, .NET (C#), and Golang code.
+- **Schema Definition:** Define models and relationships using concise `.an5` syntax with native database types.
+- **Multi-Language Generator:** Generate typed clients and entity models for TypeScript, Python, .NET (C#), and Golang.
+- **Database Introspection (`db:pull`):** Inspect an existing database schema and generate matching `.an5` models.
+- **Direct Schema Push (`db:push`):** Synchronize `.an5` schema definitions directly to the database.
+- **Automated Migrations (`db:migrate`):** Diff schema against database, generate up/down migration SQL scripts, apply, rollback, and check migration status.
+- **Seeding & Cleanup:** Generic runner for project seed scripts (`seed.ts`/`seed.js`) and database cleanup.
+- **Seamless Adapter Integration:** Built-in connection support via `@an5/adapters`.
 
 ## Quick Start
 
 ### Installation
 
-#### TypeScript / Node.js
 ```bash
-npm install @an5/orm
-```
-
-#### Python
-```bash
-pip install an5-orm
+npm install @an5/orm @an5/adapters
 ```
 
 ### Configuration
 
-```bash
-cp .env.example .env
-# Edit .env. Set DATABASE_URL.
-```
-
-Runtime (connection, LLM, embedding) configuration comes from environment variables.
-Schema/generator configuration comes from `an5Orm.config.js` (see [an5Orm.config.js](#an5ormconfigjs)).
-
-### Development Commands
-
-Run from the `an5Orm/` repository directory (no separate CLI binary is shipped):
-
-```bash
-# Generate client code from schema
-npm run generate
-
-# Push schema to database
-npm run db:push
-
-# Pull schema from database
-npm run db:pull
-
-# Seed database
-npm run db:seed
-
-# Compare schema with database
-npm run db:migrate diff
-
-# Generate migration SQL / show status
-npm run db:migrate:generate
-npm run db:migrate:status
-
-# Run tests
-npm test
-```
-
-### an5Orm.config.js
-
-Place `an5Orm.config.js` in the project root (next to `package.json`) to configure
-schema generation and push/pull operations. The generator, `db:push`, `db:pull`, and
-migrations read it automatically:
+Create `an5Orm.config.js` in your project root:
 
 ```javascript
 module.exports = {
   // Schema directory (default: 'an5Schema')
   schemaDir: 'an5Schema',
 
-  // Generated client output
+  // Generated client outputs
   outputs: {
     typescript: {
       outputDir: 'an5Client/typescript',
       metadataFile: 'an5Client/typescript/an5Metadata.ts',
-      // ORM-local metadata (owned by @an5/orm, so the core never imports from the generated client)
-      ormMetadataFile: 'an5Orm/an5Metadata.ts',
     },
     python: {
+      outputDir: 'an5Client/python',
       metadataFile: 'an5Client/python/an5_metadata.py',
     },
     dotnet: {
@@ -97,85 +55,91 @@ module.exports = {
 
   // Database pull options
   pull: {
-    exclude: ['^__', '^sys\\.', '^igrations'],
+    exclude: ['^__', '^sys\\.', '^migrations'],
     preserveRelations: true,
   },
 };
 ```
 
-`generation.*` keys are reserved in `an5Orm.config.js` but are not read by the
-generator; output is driven by `schemaDir` and `outputs.*`. Schema metadata is
-auto-loaded at runtime from the ORM's generated `an5Metadata.ts` (configured via
-`outputs.typescript.ormMetadataFile`).
+Configure your environment variables in `.env`:
 
-## Usage
-
-```typescript
-import { An5ORM } from '@an5/orm';
-
-const db = new An5ORM();
+```env
+DATABASE_URL=sqlserver://localhost:1433;database=mydb;user=sa;password=Secret123!;encrypt=false
 ```
 
-The default executor reads the `DATABASE_URL` environment variable. Schema metadata
-(model→table mapping, relations, field types) is auto-loaded from the ORM's own generated
-metadata file `an5Metadata.ts` (created by `npm run generate`, configured via
-`outputs.typescript.ormMetadataFile`). The ORM owns this metadata locally — it never
-imports from the generated client package (the client is generated *from* the ORM).
+### CLI Commands
 
-To provide metadata explicitly instead:
+```bash
+# Generate client code from .an5 schemas
+npm run generate
 
-```typescript
-import { An5ORM } from '@an5/orm';
-import { modelToTable, relationMap, modelFields } from './an5Metadata';
+# Push schema directly to database
+npm run db:push
 
-const db = new An5ORM(undefined, { modelToTable, relationMap, modelFields });
+# Pull database schema into .an5 files
+npm run db:pull
+
+# Check schema diff
+npm run db:migrate diff
+
+# Generate new migration script
+npm run db:migrate:generate
+
+# Apply pending migrations
+npm run db:migrate:apply
+
+# Rollback last migration
+npm run db:migrate:rollback
+
+# View migration status
+npm run db:migrate:status
+
+# Run database seed script
+npm run db:seed
+
+# Clean up database tables
+npm run db:cleanup
 ```
 
-// CRUD Operations
-const users = await db.user.findMany({
+## Runtime Database Usage (via `@an5/adapters`)
+
+To connect to your database and perform queries, use `@an5/adapters`:
+
+```typescript
+import { createAn5Adapter } from '@an5/adapters';
+
+const db = createAn5Adapter({
+  connectionString: process.env.DATABASE_URL!,
+});
+
+// Connect to database
+await db.$connect();
+
+// Table operations
+const users = await db.table('User').findMany({
   where: { email: { contains: '@example.com' } },
   orderBy: { createdAt: 'desc' },
   take: 10,
 });
 
-const user = await db.user.create({
-  data: { email: 'john@example.com', name: 'John' },
-});
-
-// Relations
-const orders = await db.user.findMany({
-  include: { orders: true },
-});
-
-// Vector Search
-const similar = await db.document.vectorSearch({
-  vector: [0.1, 0.2, 0.3],
-  take: 5,
-  distanceMetric: 'cosine',
+// Create record
+const newUser = await db.table('User').create({
+  data: {
+    email: 'alex@example.com',
+    name: 'Alex',
+  },
 });
 
 // Transactions
 await db.$transaction(async (tx) => {
-  const user = await tx.user.create({ data: { email: 'jane@example.com' } });
-  await tx.order.create({ data: { userId: user.id, total: 100 } });
+  await tx.exec('UPDATE Users SET active = 1 WHERE id = @p_0', { p_0: 'u1' });
 });
 
-const tx = await db.$begin();
-try {
-  await tx.user.update({ where: { id }, data: { active: true } });
-  await tx.$commit();
-} catch (error) {
-  await tx.$rollback();
-  throw error;
-}
-
-// Raw Queries
-const results = await db.$queryRaw`SELECT * FROM users WHERE id = ${id}`;
+// Disconnect
+await db.$disconnect();
 ```
 
-## Schema Definition
-
-Schema files: `.an5`. Path: `an5Schema/`. SQL Server types.
+## Schema Definition (`.an5`)
 
 ```an5
 model User {
@@ -196,33 +160,6 @@ model Order {
 
   @@map("orders")
 }
-```
-
-## Supported SQL Server Types
-
-Type mapping: `.an5` to TypeScript.
-
-| Schema Type | TypeScript |
-|-------------|------------|
-| `NVARCHAR(n)`, `VARCHAR(n)`, `CHAR(n)`, `TEXT` | `string` |
-| `INT`, `SMALLINT`, `TINYINT`, `FLOAT`, `REAL`, `DECIMAL`, `NUMERIC` | `number` |
-| `BIGINT` | `number \| bigint` |
-| `BIT` | `boolean` |
-| `DATETIME`, `DATETIME2`, `DATE`, `TIME` | `Date` |
-| `UNIQUEIDENTIFIER` | `string` |
-| `VARBINARY`, `BINARY`, `IMAGE` | `Buffer` |
-
-## Testing
-
-```bash
-# Unit tests
-node test/unit.test.js
-
-# Generator tests
-node test/generator.test.js
-
-# Smoke test
-npm test
 ```
 
 ## License

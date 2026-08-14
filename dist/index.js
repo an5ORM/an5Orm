@@ -1,17 +1,26 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_METADATA = exports.An5ClientKnownRequestError = exports.default = exports.an5Orm = exports.ViewClient = exports.TableClient = exports.An5ORM = void 0;
-var orm_1 = require("./orm");
-Object.defineProperty(exports, "An5ORM", { enumerable: true, get: function () { return orm_1.An5ORM; } });
-Object.defineProperty(exports, "TableClient", { enumerable: true, get: function () { return orm_1.TableClient; } });
-Object.defineProperty(exports, "ViewClient", { enumerable: true, get: function () { return orm_1.ViewClient; } });
-Object.defineProperty(exports, "an5Orm", { enumerable: true, get: function () { return orm_1.an5Orm; } });
-Object.defineProperty(exports, "default", { enumerable: true, get: function () { return __importDefault(orm_1).default; } });
+exports.AdapterTableClient = exports.createAn5Adapter = exports.An5Adapter = exports.parseSchemaText = exports.generateColumnDiff = exports.buildCreateTableSql = exports.buildMigrationFile = exports.generateDiff = exports.parseWhere = exports.buildOrderBy = exports.toNonNegativeInt = exports.normalizeSortDirection = exports.sanitizeParamName = exports.quoteTableIdentifier = exports.quoteIdentifier = exports.DEFAULT_METADATA = exports.An5ClientKnownRequestError = void 0;
 var errors_1 = require("./errors");
 Object.defineProperty(exports, "An5ClientKnownRequestError", { enumerable: true, get: function () { return errors_1.An5ClientKnownRequestError; } });
 var metadata_1 = require("./metadata");
 Object.defineProperty(exports, "DEFAULT_METADATA", { enumerable: true, get: function () { return metadata_1.DEFAULT_METADATA; } });
+var sql_utils_1 = require("./sql-utils");
+Object.defineProperty(exports, "quoteIdentifier", { enumerable: true, get: function () { return sql_utils_1.quoteIdentifier; } });
+Object.defineProperty(exports, "quoteTableIdentifier", { enumerable: true, get: function () { return sql_utils_1.quoteTableIdentifier; } });
+Object.defineProperty(exports, "sanitizeParamName", { enumerable: true, get: function () { return sql_utils_1.sanitizeParamName; } });
+Object.defineProperty(exports, "normalizeSortDirection", { enumerable: true, get: function () { return sql_utils_1.normalizeSortDirection; } });
+Object.defineProperty(exports, "toNonNegativeInt", { enumerable: true, get: function () { return sql_utils_1.toNonNegativeInt; } });
+Object.defineProperty(exports, "buildOrderBy", { enumerable: true, get: function () { return sql_utils_1.buildOrderBy; } });
+Object.defineProperty(exports, "parseWhere", { enumerable: true, get: function () { return sql_utils_1.parseWhere; } });
+var migration_core_1 = require("./migration-core");
+Object.defineProperty(exports, "generateDiff", { enumerable: true, get: function () { return migration_core_1.generateDiff; } });
+Object.defineProperty(exports, "buildMigrationFile", { enumerable: true, get: function () { return migration_core_1.buildMigrationFile; } });
+Object.defineProperty(exports, "buildCreateTableSql", { enumerable: true, get: function () { return migration_core_1.buildCreateTableSql; } });
+Object.defineProperty(exports, "generateColumnDiff", { enumerable: true, get: function () { return migration_core_1.generateColumnDiff; } });
+Object.defineProperty(exports, "parseSchemaText", { enumerable: true, get: function () { return migration_core_1.parseSchemaText; } });
+var adapters_1 = require("@an5/adapters");
+Object.defineProperty(exports, "An5Adapter", { enumerable: true, get: function () { return adapters_1.An5Adapter; } });
+Object.defineProperty(exports, "createAn5Adapter", { enumerable: true, get: function () { return adapters_1.createAn5Adapter; } });
+Object.defineProperty(exports, "AdapterTableClient", { enumerable: true, get: function () { return adapters_1.AdapterTableClient; } });
 //# sourceMappingURL=index.js.map

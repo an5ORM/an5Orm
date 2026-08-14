@@ -52,7 +52,6 @@ async function main() {
   const schemaDir = path.resolve(rootDir, config.schemaDir || 'an5Schema');
   const outputTypesDir = path.resolve(rootDir, config.outputs?.typescript?.outputDir || 'an5Client/typescript');
   const outputMetadataPath = path.resolve(rootDir, config.outputs?.typescript?.metadataFile || 'an5Client/typescript/an5Metadata.ts');
-  const outputOrmMetadataPath = path.resolve(rootDir, config.outputs?.typescript?.ormMetadataFile || 'an5Orm/an5Metadata.ts');
   const outputPythonMetadataPath = path.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
   const outputDotnetDir = path.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
   const outputGolangDir = path.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
@@ -85,17 +84,6 @@ async function main() {
     const metadataGen = new MetadataGenerator(outputMetadataPath);
     metadataGen.generate(models);
     console.log(`✨ Generated metadata in ${outputMetadataPath}`);
-
-    const ormMetadataDir = path.dirname(outputOrmMetadataPath);
-    if (!fs.existsSync(ormMetadataDir)) {
-      fs.mkdirSync(ormMetadataDir, { recursive: true });
-    }
-    const ormMetadataGen = new MetadataGenerator(
-      outputOrmMetadataPath,
-      'import type { RelationDef } from "./metadata";'
-    );
-    ormMetadataGen.generate(models);
-    console.log(`✨ Generated ORM-local metadata in ${outputOrmMetadataPath}`);
 
     const pythonDir = path.dirname(outputPythonMetadataPath);
     if (!fs.existsSync(pythonDir)) {
