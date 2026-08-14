@@ -1532,12 +1532,19 @@ export class An5ORM {
   private middlewares: Middleware[] = [];
   public readonly metadata: An5Metadata;
 
+  private customExecutor?: ExecutorFn;
+
   constructor(
-    private customExecutor?: ExecutorFn,
+    customExecutor?: ExecutorFn | An5Adapter | any,
     metadata?: An5Metadata,
     private readonly inTransaction = false,
     private transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback">
   ) {
+    if (customExecutor && typeof customExecutor === "object" && typeof customExecutor.exec === "function") {
+      this.customExecutor = executorFromAdapterLike(customExecutor);
+    } else if (typeof customExecutor === "function") {
+      this.customExecutor = customExecutor;
+    }
     this.metadata = metadata ?? loadAutoMetadata();
     // Add default logging middleware
     this.$use(async (params, next) => {

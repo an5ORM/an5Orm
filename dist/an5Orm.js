@@ -1368,10 +1368,15 @@ function loadAutoMetadata() {
 // Proxied AN5 ORM client class
 class An5ORM {
     constructor(customExecutor, metadata, inTransaction = false, transactionControl) {
-        this.customExecutor = customExecutor;
         this.inTransaction = inTransaction;
         this.transactionControl = transactionControl;
         this.middlewares = [];
+        if (customExecutor && typeof customExecutor === "object" && typeof customExecutor.exec === "function") {
+            this.customExecutor = executorFromAdapterLike(customExecutor);
+        }
+        else if (typeof customExecutor === "function") {
+            this.customExecutor = customExecutor;
+        }
         this.metadata = metadata ?? loadAutoMetadata();
         // Add default logging middleware
         this.$use(async (params, next) => {

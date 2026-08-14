@@ -1,3 +1,4 @@
+import { An5Adapter } from "@an5/adapters";
 import { An5Metadata } from "./metadata";
 type ExecutorFn = ((queryText: string, params?: Record<string, any>) => Promise<any[]>) & {
     executeRaw?: (queryText: string, params?: Record<string, any>) => Promise<number>;
@@ -86,13 +87,13 @@ export declare class ViewClient<T = any> {
     upsert(): Promise<never>;
 }
 export declare class An5ORM {
-    private customExecutor?;
     private readonly inTransaction;
     private transactionControl?;
     [key: string]: any;
     private middlewares;
     readonly metadata: An5Metadata;
-    constructor(customExecutor?: ExecutorFn | undefined, metadata?: An5Metadata, inTransaction?: boolean, transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback"> | undefined);
+    private customExecutor?;
+    constructor(customExecutor?: ExecutorFn | An5Adapter | any, metadata?: An5Metadata, inTransaction?: boolean, transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback"> | undefined);
     table(name: string): TableClient;
     view(name: string): ViewClient;
     $view(name: string): ViewClient;

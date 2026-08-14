@@ -35,6 +35,18 @@ async function runTests() {
 
   const db = new An5ORM(mockExecutor, metadata);
 
+  // 0. An5Adapter instance acceptance
+  const mockAdapterObj = {
+    exec: async (sql, p) => {
+      lastExecutedSql = sql;
+      return [{ id: 'a1', name: 'Adapter User' }];
+    }
+  };
+  const adapterDb = new An5ORM(mockAdapterObj, metadata);
+  const adapterRows = await adapterDb.user.findMany();
+  assert.strictEqual(adapterRows[0].name, 'Adapter User');
+  console.log('  ✓ An5ORM constructor accepts An5Adapter instances directly');
+
   // 1. Explicit db.table()
   const userTable = db.table('User');
   assert.ok(userTable instanceof TableClient, 'db.table() should return TableClient');
