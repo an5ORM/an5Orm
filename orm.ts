@@ -1,4 +1,4 @@
-import { An5Adapter, createAn5Adapter } from "@an5/adapters";
+import { An5Adapter, createAn5Adapter, executorFromAdapter } from "@an5/adapters";
 import { randomUUID } from "crypto";
 import { logger } from "./logger";
 import { An5ClientKnownRequestError } from "./errors";
@@ -57,7 +57,7 @@ const execQuery: ExecutorFn = Object.assign(
     },
     transaction: async <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: { timeout?: number }): Promise<R> => {
       const a = await getAdapter();
-      return a.$transaction(async (tx: any) => fn(executorFromAdapterLike(tx)), options);
+      return a.$transaction(async (tx: any) => fn(executorFromAdapter(tx)), options);
     },
     beginTransaction: async (): Promise<InteractiveTransactionExecutor> => {
       const a: any = await getAdapter();
@@ -66,7 +66,7 @@ const execQuery: ExecutorFn = Object.assign(
       }
       const tx = await a.$begin();
       return {
-        executor: executorFromAdapterLike(tx),
+        executor: executorFromAdapter(tx),
         commit: () => tx.$commit(),
         rollback: () => tx.$rollback(),
       };
@@ -85,25 +85,6 @@ function normalizeAffectedCount(result: any): number {
 }
 
 const FILTER_OPERATOR_KEYS = new Set(["in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt"]);
-
-function executorFromAdapterLike(adapterLike: any): ExecutorFn {
-  return Object.assign(
-    async (queryText: string, params?: Record<string, any>) => {
-      return adapterLike.exec(queryText, params);
-    },
-    {
-      executeRaw: async (queryText: string, params?: Record<string, any>) => {
-        if (typeof adapterLike._executeRaw === "function") {
-          return adapterLike._executeRaw(queryText, params);
-        }
-        if (typeof adapterLike.executeRaw === "function") {
-          return adapterLike.executeRaw(queryText, params);
-        }
-        return normalizeAffectedCount(await adapterLike.exec(queryText, params));
-      },
-    }
-  );
-}
 
 function flattenSimpleEqualityWhere(where: any): Record<string, any> | null {
   if (!where || typeof where !== "object" || where instanceof Date || Array.isArray(where)) {
@@ -1577,7 +1558,7 @@ export class An5ORM {
     private transactionControl?: Pick<InteractiveTransactionExecutor, "commit" | "rollback">
   ) {
     if (customExecutor && typeof customExecutor === "object" && typeof customExecutor.exec === "function") {
-      this.customExecutor = executorFromAdapterLike(customExecutor);
+      this.customExecutor = executorFromAdapter(customExecutor);
     } else if (typeof customExecutor === "function") {
       this.customExecutor = customExecutor;
     }
