@@ -18,6 +18,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
+    "prepack": "npm run build",
     "generate": "npx tsx generator/src/index.ts",
     "db:push": "npx tsx push.ts",
     "db:pull": "npx tsx pull.ts",

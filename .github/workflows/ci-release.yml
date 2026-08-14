@@ -25,6 +25,8 @@ jobs:
       - name: Install Node dependencies
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
+      - name: Build TypeScript
+        run: npm run build
       - name: Run unit tests
         run: node test/unit.test.js
       - name: Run generator tests
