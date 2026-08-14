@@ -1,4 +1,4 @@
-import { An5Adapter, createAn5Adapter, executorFromAdapter } from "@an5/adapters";
+import { An5Adapter, AdapterTableClient, createAn5Adapter, executorFromAdapter, setAdapterMetadata } from "@an5/adapters";
 import { randomUUID } from "crypto";
 import { logger } from "./logger";
 import { An5ClientKnownRequestError } from "./errors";
@@ -416,18 +416,32 @@ async function resolveIncludes(modelName: string, rows: any[], include: any, exe
   }
 }
 
+function adapterFromExecutor(executor: ExecutorFn): An5Adapter {
+  return new An5Adapter({
+    engine: {
+      dialect: "mssql",
+      connect: async () => {},
+      disconnect: async () => {},
+      exec: async (q: string, p: any) => executor(q, p),
+      executeRaw: async (q: string, p: any): Promise<number> => (executor.executeRaw ? executor.executeRaw(q, p) : normalizeAffectedCount(await executor(q, p))),
+      beginTransaction: async () => { throw new Error("Transaction not supported"); },
+    },
+  });
+}
+
 // Table query executor client class
-export class TableClient<T = any> {
+export class TableClient<T = any> extends AdapterTableClient<T> {
+  public readonly rawTableName: string;
+
   constructor(
-    private modelName: string,
-    tableName: string,
+    modelName: string,
+    rawTableName: string,
     private executor: ExecutorFn,
     private orm: An5ORM
   ) {
-    this.tableName = quoteTableIdentifier(tableName);
+    super(adapterFromExecutor(executor), modelName);
+    this.rawTableName = quoteTableIdentifier(rawTableName);
   }
-
-  private tableName: string;
 
   private async executeRaw(queryText: string, params?: Record<string, any>): Promise<number> {
     if (this.executor.executeRaw) {
@@ -463,7 +477,7 @@ export class TableClient<T = any> {
       if (finalArgs?.take && !hasSkip) {
         sqlText += ` TOP (${toNonNegativeInt(finalArgs.take, 1)})`;
       }
-      sqlText += ` ${cols} FROM ${this.tableName} WITH (NOLOCK)`;
+      sqlText += ` ${cols} FROM ${this.rawTableName} WITH (NOLOCK)`;
 
       const p: Record<string, any> = {};
       const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
@@ -513,15 +527,7 @@ export class TableClient<T = any> {
 
   async count(args?: any): Promise<number> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'count', args }, async (params) => {
-      const { args: finalArgs } = params;
-      let sqlText = `SELECT COUNT(*) as count FROM ${this.tableName} WITH (NOLOCK)`;
-      const p: Record<string, any> = {};
-      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
-      if (whereSql) {
-        sqlText += ` WHERE ${whereSql}`;
-      }
-      const result = await this.executor(sqlText, p);
-      return result[0]?.count || 0;
+      return super.count(params.args);
     });
   }
 
@@ -660,7 +666,7 @@ export class TableClient<T = any> {
         const safeData: Record<string, any> = {};
         keys.forEach((k, i) => { safeData[safeKeys[i]] = data[k]; });
 
-        const sqlText = `INSERT INTO ${this.tableName} (${columns}) OUTPUT inserted.* VALUES (${placeholders})`;
+        const sqlText = `INSERT INTO ${this.rawTableName} (${columns}) OUTPUT inserted.* VALUES (${placeholders})`;
         const rows = await this.executor(sqlText, safeData);
         const createdRow = rows[0];
 
@@ -810,7 +816,7 @@ export class TableClient<T = any> {
       const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, whereParams, "w_");
       Object.assign(p, whereParams);
 
-      const sqlText = `UPDATE ${this.tableName} SET ${sets.join(", ")} ${whereSql ? `WHERE ${whereSql}` : ""}`;
+      const sqlText = `UPDATE ${this.rawTableName} SET ${sets.join(", ")}${whereSql ? ` WHERE ${whereSql}` : ""}`;
       const count = await this.executeRaw(sqlText, p);
       return { count };
     });
@@ -819,27 +825,14 @@ export class TableClient<T = any> {
   async delete(args: any): Promise<T> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'delete', args }, async (params) => {
       const { args: finalArgs } = params;
-      const existing = await this.findUnique({ where: finalArgs.where });
-      if (!existing) throw new Error("Record not found to delete");
-
-      const p: Record<string, any> = {};
-      const whereSql = this.orm.parseWhere(this.modelName, finalArgs.where, p);
-      const sqlText = `DELETE FROM ${this.tableName} WHERE ${whereSql}`;
-      await this.executor(sqlText, p);
-
-      return existing;
+      return super.delete({ where: finalArgs?.where || finalArgs });
     });
   }
 
   async deleteMany(args?: any): Promise<{ count: number }> {
     return this.orm._executeMiddleware({ model: this.modelName, action: 'deleteMany', args }, async (params) => {
       const { args: finalArgs } = params;
-      const p: Record<string, any> = {};
-      const whereSql = this.orm.parseWhere(this.modelName, finalArgs?.where, p);
-      const sqlText = `DELETE FROM ${this.tableName} ${whereSql ? `WHERE ${whereSql}` : ""}`;
-
-      const count = await this.executeRaw(sqlText, p);
-      return { count };
+      return super.deleteMany({ where: finalArgs?.where || finalArgs });
     });
   }
 
@@ -1532,6 +1525,9 @@ export class An5ORM {
       this.customExecutor = customExecutor;
     }
     this.metadata = metadata ?? loadAutoMetadata();
+    if (this.metadata) {
+      setAdapterMetadata({ modelToTable: this.metadata.modelToTable, modelFields: this.metadata.modelFields });
+    }
 
     // Add default logging and telemetry event middleware
     this.$use(async (params, next) => {
