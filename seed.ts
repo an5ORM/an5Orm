@@ -3,13 +3,6 @@ import fs from "fs";
 import path from "path";
 import { config } from "./config";
 import { An5ORM } from "./orm";
-import { DEFAULT_METADATA } from "./metadata";
-
-let clientMeta: any = DEFAULT_METADATA;
-try {
-  clientMeta = require("../an5Client/typescript/an5Metadata");
-} catch {}
-const { modelToTable, relationMap, modelFields } = clientMeta;
 
 let bcrypt: any;
 try {
@@ -25,7 +18,7 @@ let db: An5ORM | null = null;
 let dbLoadError: any = null;
 try {
   if (connectionString) {
-    db = new An5ORM(undefined, { modelToTable, relationMap, modelFields });
+    db = new An5ORM();
   }
 } catch (e: any) {
   dbLoadError = e;
