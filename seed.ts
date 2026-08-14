@@ -2,8 +2,14 @@ import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
-import { An5ORM } from "../an5Orm";
-import { modelToTable, relationMap, modelFields } from "./an5Metadata";
+import { An5ORM } from "./orm";
+import { DEFAULT_METADATA } from "./metadata";
+
+let clientMeta: any = DEFAULT_METADATA;
+try {
+  clientMeta = require("../an5Client/typescript/an5Metadata");
+} catch {}
+const { modelToTable, relationMap, modelFields } = clientMeta;
 
 let bcrypt: any;
 try {

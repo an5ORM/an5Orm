@@ -1515,8 +1515,7 @@ function loadAutoMetadata(): An5Metadata {
   if (autoMetadata) return autoMetadata;
   const candidates = [
     "an5-client/typescript/an5Metadata",
-    "../an5Client/typescript/an5Metadata",
-    "./an5Metadata"
+    "../an5Client/typescript/an5Metadata"
   ];
   for (const cand of candidates) {
     try {
