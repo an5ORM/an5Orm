@@ -9,6 +9,7 @@ const path = require('path');
 
 let passed = 0;
 let failed = 0;
+let skipped = 0;
 
 function test(name, fn) {
   try {
@@ -19,6 +20,15 @@ function test(name, fn) {
     failed++;
     console.log(`  ✗ ${name}`);
     console.log(`    ${err.message}`);
+  }
+}
+
+function testIf(condition, name, fn) {
+  if (condition) {
+    test(name, fn);
+  } else {
+    skipped++;
+    console.log(`  - ${name} (skipped: sibling path not present)`);
   }
 }
 
@@ -40,13 +50,16 @@ function assertExists(filePath, msg) {
   }
 }
 
+const hasAn5Schema = fs.existsSync(path.join(__dirname, '..', '..', 'an5Schema'));
+const hasAn5Client = fs.existsSync(path.join(__dirname, '..', '..', 'an5Client'));
+
 console.log('\n=== Generator Unit Tests ===\n');
 
 // ─── Schema file tests ───────────────────────────────────────────────────────
 
 console.log('Schema Files:');
 
-test('test1.an5 exists and is valid', () => {
+testIf(hasAn5Schema, 'test1.an5 exists and is valid', () => {
   const schemaPath = path.join(__dirname, '..', '..', 'an5Schema', 'test1.an5');
   assertExists(schemaPath);
   const content = fs.readFileSync(schemaPath, 'utf8');
@@ -57,7 +70,7 @@ test('test1.an5 exists and is valid', () => {
   assertIncludes(content, 'DATETIME2');
 });
 
-test('test2.an5 exists and has Order model', () => {
+testIf(hasAn5Schema, 'test2.an5 exists and has Order model', () => {
   const schemaPath = path.join(__dirname, '..', '..', 'an5Schema', 'test2.an5');
   assertExists(schemaPath);
   const content = fs.readFileSync(schemaPath, 'utf8');
@@ -65,19 +78,18 @@ test('test2.an5 exists and has Order model', () => {
   assertIncludes(content, 'INT');
 });
 
-test('schema files parse model headers correctly', () => {
+testIf(hasAn5Schema, 'schema files parse model headers correctly', () => {
   const schemaPath = path.join(__dirname, '..', '..', 'an5Schema', 'test1.an5');
   const content = fs.readFileSync(schemaPath, 'utf8');
   const modelMatch = content.match(/model\s+(\w+)\s*\{/);
   assertEq(modelMatch[1], 'User');
 });
 
-test('schema files use SQL Server types directly', () => {
+testIf(hasAn5Schema, 'schema files use SQL Server types directly', () => {
   const schemaPath = path.join(__dirname, '..', '..', 'an5Schema', 'test1.an5');
   const content = fs.readFileSync(schemaPath, 'utf8');
   assertIncludes(content, 'NVARCHAR(');
   assertIncludes(content, 'DATETIME2');
-  // Should NOT use generic TypeScript types
   assert(!content.includes('String '), 'Should not use generic String type');
   assert(!content.includes('DateTime '), 'Should not use generic DateTime type');
 });
@@ -138,12 +150,12 @@ test('generator index.ts has main function', () => {
 
 console.log('\nGenerated Output:');
 
-test('an5Client/typescript/index.ts exists', () => {
+testIf(hasAn5Client, 'an5Client/typescript/index.ts exists', () => {
   const indexPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'index.ts');
   assertExists(indexPath);
 });
 
-test('an5Client/typescript/base.ts exists with An5 namespace', () => {
+testIf(hasAn5Client, 'an5Client/typescript/base.ts exists with An5 namespace', () => {
   const basePath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'base.ts');
   assertExists(basePath);
   const content = fs.readFileSync(basePath, 'utf8');
@@ -159,7 +171,7 @@ test('an5Client/typescript/base.ts exists with An5 namespace', () => {
   assertIncludes(content, 'groupBy(args: GroupByArgs)');
 });
 
-test('an5Client/typescript model where inputs expose logical filters', () => {
+testIf(hasAn5Client, 'an5Client/typescript model where inputs expose logical filters', () => {
   const userPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'User.ts');
   assertExists(userPath);
   const content = fs.readFileSync(userPath, 'utf8');
@@ -177,7 +189,7 @@ test('code generator emits relation selects as part of the public contract', () 
   assertIncludes(content, "_count?: boolean | { select?:");
 });
 
-test('an5Client/typescript groupBy args are model-aware', () => {
+testIf(hasAn5Client, 'an5Client/typescript groupBy args are model-aware', () => {
   const orderPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'Order.ts');
   assertExists(orderPath);
   const content = fs.readFileSync(orderPath, 'utf8');
@@ -189,7 +201,7 @@ test('an5Client/typescript groupBy args are model-aware', () => {
   assertIncludes(content, 'OrderGroupByArgs');
 });
 
-test('an5Client/typescript aggregate args are model-aware', () => {
+testIf(hasAn5Client, 'an5Client/typescript aggregate args are model-aware', () => {
   const orderPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'Order.ts');
   assertExists(orderPath);
   const content = fs.readFileSync(orderPath, 'utf8');
@@ -199,7 +211,7 @@ test('an5Client/typescript aggregate args are model-aware', () => {
   assertIncludes(content, 'OrderAggregateArgs');
 });
 
-test('an5Client/typescript/an5Metadata.ts exists', () => {
+testIf(hasAn5Client, 'an5Client/typescript/an5Metadata.ts exists', () => {
   const metaPath = path.join(__dirname, '..', '..', 'an5Client', 'typescript', 'an5Metadata.ts');
   assertExists(metaPath);
   const content = fs.readFileSync(metaPath, 'utf8');
@@ -210,7 +222,7 @@ test('an5Client/typescript/an5Metadata.ts exists', () => {
   assertIncludes(content, 'description:');
 });
 
-test('an5Client/python files exist and have An5Client & models', () => {
+testIf(hasAn5Client, 'an5Client/python files exist and have An5Client & models', () => {
   const pyDir = path.join(__dirname, '..', '..', 'an5Client', 'python');
   assertExists(path.join(pyDir, 'an5_metadata.py'));
   assertExists(path.join(pyDir, 'an5_models.py'));
@@ -231,7 +243,7 @@ test('an5Client/python files exist and have An5Client & models', () => {
   assertIncludes(clientContent, 'self.users: AdapterTableClient');
 });
 
-test('an5Client/dotnet files exist with complete CRUD methods', () => {
+testIf(hasAn5Client, 'an5Client/dotnet files exist with complete CRUD methods', () => {
   const dotnetDir = path.join(__dirname, '..', '..', 'an5Client', 'dotnet');
   assertExists(path.join(dotnetDir, 'User.cs'));
   assertExists(path.join(dotnetDir, 'Order.cs'));
@@ -245,7 +257,7 @@ test('an5Client/dotnet files exist with complete CRUD methods', () => {
   assertIncludes(dbCtxContent, 'public T Upsert(');
 });
 
-test('an5Client/golang files exist with models and generic client', () => {
+testIf(hasAn5Client, 'an5Client/golang files exist with models and generic client', () => {
   const goDir = path.join(__dirname, '..', '..', 'an5Client', 'golang');
   assertExists(path.join(goDir, 'models.go'));
   assertExists(path.join(goDir, 'client.go'));
@@ -314,5 +326,5 @@ test('cleanup.ts exists', () => {
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
-console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
+console.log(`\n=== Results: ${passed} passed, ${failed} failed, ${skipped} skipped ===\n`);
 process.exit(failed > 0 ? 1 : 0);

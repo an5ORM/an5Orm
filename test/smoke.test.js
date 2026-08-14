@@ -12,6 +12,9 @@ assert.ok(packageJson.scripts && packageJson.scripts['db:migrate:apply'], 'Expec
 assert.ok(packageJson.scripts && packageJson.scripts['db:migrate:rollback'], 'Expected db:migrate:rollback script');
 assert.strictEqual(packageJson.scripts && packageJson.scripts['test:integration:live'], 'node test/live-db.integration.test.js');
 assert.ok(fs.existsSync(path.join(root, 'generator', 'src', 'index.ts')), 'Expected generator entrypoint');
-assert.ok(fs.existsSync(schemaPath), 'Expected sample schema file');
+
+if (fs.existsSync(path.join(root, '..', 'an5Schema'))) {
+  assert.ok(fs.existsSync(schemaPath), 'Expected sample schema file');
+}
 
 console.log('an5Orm smoke test passed');
