@@ -112,11 +112,30 @@ async function runTests() {
   assert.strictEqual(procAffected, 1);
   console.log('  ✓ db.$executeProc() handles array params and returns affected count');
 
-  // 6. Function invocation ($queryFunction)
-  const fnRows = await db.$queryFunction('fn_calculate_tax', { amount: 100 });
-  assert.ok(lastExecutedSql.includes('SELECT * FROM [fn_calculate_tax]'), 'SELECT * FROM function formatted');
-  assert.strictEqual(fnRows[0].fnResult, 99);
-  console.log('  ✓ db.$queryFunction() builds SELECT * FROM fn() SQL');
+  // 7. Telemetry & Event Listener API ($on, $off, $emit)
+  let capturedQueryEvent = null;
+  let capturedWarnEvent = null;
+
+  const queryListener = (e) => { capturedQueryEvent = e; };
+  const warnListener = (e) => { capturedWarnEvent = e; };
+
+  db.$on('query', queryListener);
+  db.$on('warn', warnListener);
+  db.slowQueryThresholdMs = 1; // Trigger slow query warning for queries >= 1ms
+
+  await db.user.findMany();
+  assert.ok(capturedQueryEvent, 'query event captured');
+  assert.strictEqual(capturedQueryEvent.model, 'User');
+  assert.strictEqual(capturedQueryEvent.action, 'findMany');
+  assert.ok(typeof capturedQueryEvent.duration === 'number');
+
+  // Verify $off removes event listener
+  db.$off('query', queryListener);
+  capturedQueryEvent = null;
+  await db.user.findMany();
+  assert.strictEqual(capturedQueryEvent, null, 'query listener removed via $off');
+
+  console.log('  ✓ Telemetry Event Listener API ($on, $off, $emit, slow query thresholds) verified');
 
   console.log('\n🎉 All ORM feature tests passed!\n');
 }

@@ -1,4 +1,4 @@
-import { An5Adapter } from "@an5/adapters";
+import { An5Adapter, createAn5Adapter } from "@an5/adapters";
 import { randomUUID } from "crypto";
 import { logger } from "./logger";
 import { An5ClientKnownRequestError } from "./errors";
@@ -33,12 +33,14 @@ function aggAlias(fn: string, key: string): string {
   return sanitizeParamName(`${fn}_${key}`);
 }
 
-let adapter: An5Adapter | null = null;
+let adapter: any = null;
 
-async function getAdapter(): Promise<An5Adapter> {
+async function getAdapter(): Promise<any> {
   if (!adapter) {
-    adapter = new An5Adapter({ connectionString: process.env.DATABASE_URL! });
-    await adapter.$connect();
+    adapter = createAn5Adapter({ connectionString: process.env.DATABASE_URL! });
+    if (typeof adapter.$connect === "function") {
+      await adapter.$connect();
+    }
   }
   return adapter;
 }
@@ -1420,6 +1422,30 @@ export interface MiddlewareParams {
 export type MiddlewareNext = (params: MiddlewareParams) => Promise<any>;
 export type Middleware = (params: MiddlewareParams, next: MiddlewareNext) => Promise<any>;
 
+export type LogLevel = "query" | "info" | "warn" | "error";
+
+export interface QueryEvent {
+  timestamp: Date;
+  query: string;
+  params?: Record<string, any>;
+  duration: number;
+  model?: string;
+  action?: string;
+  error?: Error;
+}
+
+export interface LogEvent {
+  timestamp: Date;
+  message: string;
+  level: LogLevel;
+  duration?: number;
+  query?: string;
+  params?: Record<string, any>;
+  error?: Error;
+}
+
+export type EventListener<T = any> = (event: T) => void;
+
 // Lazy-load generated schema metadata from the ORM's own generated copy so
 // `new An5ORM()` resolves schema models out of the box without the core ever
 // importing from the generated client package (client is generated FROM the ORM).
@@ -1538,6 +1564,8 @@ function loadAutoMetadata(): An5Metadata {
 export class An5ORM {
   [key: string]: any;
   private middlewares: Middleware[] = [];
+  private eventListeners: Map<string, Set<EventListener>> = new Map();
+  public slowQueryThresholdMs: number = Number(process.env.SLOW_QUERY_THRESHOLD_MS ?? 500);
   public readonly metadata: An5Metadata;
 
   private customExecutor?: ExecutorFn;
@@ -1554,19 +1582,51 @@ export class An5ORM {
       this.customExecutor = customExecutor;
     }
     this.metadata = metadata ?? loadAutoMetadata();
-    // Add default logging middleware
+
+    // Add default logging and telemetry event middleware
     this.$use(async (params, next) => {
       const start = Date.now();
       try {
         const result = await next(params);
         const duration = Date.now() - start;
+
+        // Emit 'query' telemetry event
+        const queryEvt: QueryEvent = {
+          timestamp: new Date(),
+          query: params.args?.queryText || `${params.model || "raw"}.${params.action}`,
+          params: params.args,
+          duration,
+          model: params.model,
+          action: params.action,
+        };
+        this.$emit("query", queryEvt);
+
+        // Check slow query threshold
+        if (this.slowQueryThresholdMs > 0 && duration >= this.slowQueryThresholdMs) {
+          this.$emit("warn", {
+            timestamp: new Date(),
+            message: `Slow query detected: [${params.model || "raw"}.${params.action}] took ${duration}ms (threshold: ${this.slowQueryThresholdMs}ms)`,
+            level: "warn",
+            duration,
+            query: queryEvt.query,
+            params: params.args,
+          });
+        }
+
         if (process.env.DEBUG_ORM === "true") {
-          logger.info(`ORM [${params.model || 'raw'}.${params.action}] executed in ${duration}ms`);
+          logger.info(`ORM [${params.model || "raw"}.${params.action}] executed in ${duration}ms`);
         }
         return result;
       } catch (err: any) {
         const duration = Date.now() - start;
-        logger.error(`ORM [${params.model || 'raw'}.${params.action}] failed after ${duration}ms`, err);
+        this.$emit("error", {
+          timestamp: new Date(),
+          message: `ORM query failed: [${params.model || "raw"}.${params.action}] after ${duration}ms`,
+          level: "error",
+          duration,
+          error: err,
+        });
+        logger.error(`ORM [${params.model || "raw"}.${params.action}] failed after ${duration}ms`, err);
         throw err;
       }
     });
@@ -1611,6 +1671,35 @@ export class An5ORM {
         return target[prop];
       }
     });
+  }
+
+  $on(event: "query", listener: EventListener<QueryEvent>): void;
+  $on(event: "info" | "warn" | "error", listener: EventListener<LogEvent>): void;
+  $on(event: string, listener: EventListener): void {
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, new Set());
+    }
+    this.eventListeners.get(event)!.add(listener);
+  }
+
+  $off(event: string, listener: EventListener): void {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      listeners.delete(listener);
+    }
+  }
+
+  $emit(event: string, payload: any): void {
+    const listeners = this.eventListeners.get(event);
+    if (listeners) {
+      listeners.forEach((fn) => {
+        try {
+          fn(payload);
+        } catch (err) {
+          logger.error(`Error in ORM event listener for '${event}':`, err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    }
   }
 
   table(name: string): TableClient {
