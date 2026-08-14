@@ -110,12 +110,11 @@ function flattenSimpleEqualityWhere(where: any): Record<string, any> | null {
 
   const flat: Record<string, any> = {};
   for (const [key, value] of Object.entries(where)) {
-    if (value === null || value === undefined) return null;
+    if (value === null || value === undefined || Array.isArray(value)) return null;
     if (value instanceof Date || typeof value !== "object") {
       flat[key] = value;
       continue;
     }
-    if (Array.isArray(value)) return null;
     if (!key.includes("_")) return null;
 
     for (const [innerKey, innerValue] of Object.entries(value as Record<string, any>)) {
@@ -142,30 +141,28 @@ function hasOwn(obj: any, key: string): boolean {
 function appendUpdateSet(sets: string[], params: Record<string, any>, key: string, val: any): void {
   const col = quoteIdentifier(key);
   const safeKey = sanitizeParamName(key);
+
   if (val && typeof val === "object" && !(val instanceof Date)) {
-    if (val.increment !== undefined) {
-      sets.push(`${col} = ${col} + @${safeKey}_inc`);
-      params[`${safeKey}_inc`] = val.increment;
-      return;
+    const ops: Array<[string, string]> = [
+      ['increment', '+'],
+      ['decrement', '-'],
+      ['multiply', '*'],
+      ['divide', '/'],
+    ];
+
+    for (const [opKey, symbol] of ops) {
+      if (val[opKey] !== undefined) {
+        const paramName = `${safeKey}_${opKey.slice(0, 3)}`;
+        sets.push(`${col} = ${col} ${symbol} @${paramName}`);
+        params[paramName] = val[opKey];
+        return;
+      }
     }
-    if (val.decrement !== undefined) {
-      sets.push(`${col} = ${col} - @${safeKey}_dec`);
-      params[`${safeKey}_dec`] = val.decrement;
-      return;
-    }
-    if (val.multiply !== undefined) {
-      sets.push(`${col} = ${col} * @${safeKey}_mul`);
-      params[`${safeKey}_mul`] = val.multiply;
-      return;
-    }
-    if (val.divide !== undefined) {
-      sets.push(`${col} = ${col} / @${safeKey}_div`);
-      params[`${safeKey}_div`] = val.divide;
-      return;
-    }
+
     if (val.set !== undefined) {
-      sets.push(`${col} = @${safeKey}_set`);
-      params[`${safeKey}_set`] = val.set;
+      const paramName = `${safeKey}_set`;
+      sets.push(`${col} = @${paramName}`);
+      params[paramName] = val.set;
       return;
     }
   }
