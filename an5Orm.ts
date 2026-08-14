@@ -1513,16 +1513,25 @@ function buildFunctionCallSql(fnName: string, params?: Record<string, any> | any
 let autoMetadata: An5Metadata | null = null;
 function loadAutoMetadata(): An5Metadata {
   if (autoMetadata) return autoMetadata;
-  try {
-    const m = require("./an5Metadata") as An5Metadata;
-    autoMetadata = {
-      modelToTable: m.modelToTable || {},
-      relationMap: m.relationMap || {},
-      modelFields: m.modelFields || {},
-    };
-  } catch {
-    autoMetadata = DEFAULT_METADATA;
+  const candidates = [
+    "an5-client/typescript/an5Metadata",
+    "../an5Client/typescript/an5Metadata",
+    "./an5Metadata"
+  ];
+  for (const cand of candidates) {
+    try {
+      const m = require(cand) as An5Metadata;
+      if (m && m.modelToTable && Object.keys(m.modelToTable).length > 0) {
+        autoMetadata = {
+          modelToTable: m.modelToTable || {},
+          relationMap: m.relationMap || {},
+          modelFields: m.modelFields || {},
+        };
+        return autoMetadata;
+      }
+    } catch {}
   }
+  autoMetadata = DEFAULT_METADATA;
   return autoMetadata;
 }
 

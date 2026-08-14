@@ -1352,17 +1352,26 @@ let autoMetadata = null;
 function loadAutoMetadata() {
     if (autoMetadata)
         return autoMetadata;
-    try {
-        const m = require("./an5Metadata");
-        autoMetadata = {
-            modelToTable: m.modelToTable || {},
-            relationMap: m.relationMap || {},
-            modelFields: m.modelFields || {},
-        };
+    const candidates = [
+        "an5-client/typescript/an5Metadata",
+        "../an5Client/typescript/an5Metadata",
+        "./an5Metadata"
+    ];
+    for (const cand of candidates) {
+        try {
+            const m = require(cand);
+            if (m && m.modelToTable && Object.keys(m.modelToTable).length > 0) {
+                autoMetadata = {
+                    modelToTable: m.modelToTable || {},
+                    relationMap: m.relationMap || {},
+                    modelFields: m.modelFields || {},
+                };
+                return autoMetadata;
+            }
+        }
+        catch { }
     }
-    catch {
-        autoMetadata = metadata_1.DEFAULT_METADATA;
-    }
+    autoMetadata = metadata_1.DEFAULT_METADATA;
     return autoMetadata;
 }
 // Proxied AN5 ORM client class
