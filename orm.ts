@@ -33,46 +33,15 @@ function aggAlias(fn: string, key: string): string {
   return sanitizeParamName(`${fn}_${key}`);
 }
 
-let adapter: any = null;
+let defaultExecutor: ExecutorFn | null = null;
 
-async function getAdapter(): Promise<any> {
-  if (!adapter) {
-    adapter = createAn5Adapter({ connectionString: process.env.DATABASE_URL! });
-    if (typeof adapter.$connect === "function") {
-      await adapter.$connect();
-    }
+function getDefaultExecutor(): ExecutorFn {
+  if (!defaultExecutor) {
+    const adapter = createAn5Adapter({ connectionString: process.env.DATABASE_URL! });
+    defaultExecutor = executorFromAdapter(adapter);
   }
-  return adapter;
+  return defaultExecutor!;
 }
-
-const execQuery: ExecutorFn = Object.assign(
-  async (queryText: string, params?: Record<string, any>): Promise<any[]> => {
-    const a = await getAdapter();
-    return a.exec(queryText, params);
-  },
-  {
-    executeRaw: async (queryText: string, params?: Record<string, any>): Promise<number> => {
-      const a = await getAdapter();
-      return a._executeRaw(queryText, params);
-    },
-    transaction: async <R>(fn: (txExecutor: ExecutorFn) => Promise<R>, options?: { timeout?: number }): Promise<R> => {
-      const a = await getAdapter();
-      return a.$transaction(async (tx: any) => fn(executorFromAdapter(tx)), options);
-    },
-    beginTransaction: async (): Promise<InteractiveTransactionExecutor> => {
-      const a: any = await getAdapter();
-      if (typeof a.$begin !== "function") {
-        throw new Error("Interactive transactions require an adapter with $begin support");
-      }
-      const tx = await a.$begin();
-      return {
-        executor: executorFromAdapter(tx),
-        commit: () => tx.$commit(),
-        rollback: () => tx.$rollback(),
-      };
-    },
-  }
-);
 
 function normalizeAffectedCount(result: any): number {
   if (typeof result === "number") return result;
@@ -1645,7 +1614,7 @@ export class An5ORM {
           target[prop] = new TableClient(
             modelName,
             tableName,
-            target.customExecutor || execQuery,
+            target.getExecutor(),
             receiver
           );
         }
@@ -1683,14 +1652,18 @@ export class An5ORM {
     }
   }
 
+  private getExecutor(): ExecutorFn {
+    return this.customExecutor || getDefaultExecutor();
+  }
+
   table(name: string): TableClient {
     const rawTable = this.metadata.modelToTable[name] || name;
-    return new TableClient(name, rawTable, this.customExecutor || execQuery, this);
+    return new TableClient(name, rawTable, this.getExecutor(), this);
   }
 
   view(name: string): ViewClient {
     const rawTable = this.metadata.modelToTable[name] || name;
-    return new ViewClient(name, rawTable, this.customExecutor || execQuery, this);
+    return new ViewClient(name, rawTable, this.getExecutor(), this);
   }
 
   $view(name: string): ViewClient {
@@ -1698,13 +1671,13 @@ export class An5ORM {
   }
 
   async $queryProc<T = any>(procName: string, params?: Record<string, any> | any[]): Promise<T[]> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     const { sqlText, p } = buildProcCallSql(procName, params);
     return executor(sqlText, p) as Promise<T[]>;
   }
 
   async $executeProc(procName: string, params?: Record<string, any> | any[]): Promise<number> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     const { sqlText, p } = buildProcCallSql(procName, params);
     if (executor.executeRaw) {
       return executor.executeRaw(sqlText, p);
@@ -1713,7 +1686,7 @@ export class An5ORM {
   }
 
   async $queryFunction<T = any>(fnName: string, params?: Record<string, any> | any[]): Promise<T[]> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     const { sqlText, p } = buildFunctionCallSql(fnName, params);
     return executor(sqlText, p) as Promise<T[]>;
   }
@@ -1746,14 +1719,11 @@ export class An5ORM {
 
   async $connect(): Promise<void> { }
   async $disconnect(): Promise<void> {
-    if (adapter) {
-      await adapter.$disconnect();
-      adapter = null;
-    }
+    defaultExecutor = null;
   }
 
   async $queryRaw(queryParts: any, ...values: any[]): Promise<any[]> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     let queryText = "";
     const params: Record<string, any> = {};
 
@@ -1784,7 +1754,7 @@ export class An5ORM {
   }
 
   async $queryRawUnsafe<R = any>(queryText: string, ...values: any[]): Promise<R> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     const params: Record<string, any> = {};
     if (values && values.length > 0) {
       values.forEach((val, idx) => {
@@ -1799,7 +1769,7 @@ export class An5ORM {
   }
 
   async $executeRaw(queryParts: any, ...values: any[]): Promise<number> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     let queryText = "";
     const params: Record<string, any> = {};
 
@@ -1833,7 +1803,7 @@ export class An5ORM {
   }
 
   async $executeRawUnsafe(queryText: string, ...values: any[]): Promise<number> {
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     const params: Record<string, any> = {};
     if (values && values.length > 0) {
       values.forEach((val, idx) => {
@@ -1857,7 +1827,7 @@ export class An5ORM {
       return Promise.all(fn);
     }
 
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     if (!executor.transaction) {
       if (this.inTransaction) {
         const txClient = new An5ORM(executor, this.metadata, true);
@@ -1865,7 +1835,7 @@ export class An5ORM {
       }
       throw new Error("Transactions require an executor with transaction support");
     }
-    return executor.transaction(async (txExecutor) => {
+    return executor.transaction(async (txExecutor: ExecutorFn) => {
       const txClient = new An5ORM(txExecutor, this.metadata, true);
       return fn(txClient);
     }, options);
@@ -1875,7 +1845,7 @@ export class An5ORM {
     if (this.inTransaction) {
       throw new Error("Interactive transactions cannot be nested");
     }
-    const executor = this.customExecutor || execQuery;
+    const executor = this.getExecutor();
     if (!executor.beginTransaction) {
       throw new Error("Interactive transactions require an executor with beginTransaction support");
     }
