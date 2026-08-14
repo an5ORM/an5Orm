@@ -258,13 +258,17 @@ type Dialect string
 const (
 \tDialectMssql    Dialect = "mssql"
 \tDialectPostgres Dialect = "postgres"
+\tDialectSqlite   Dialect = "sqlite"
 )
 
 // detectDialect infers dialect from a connection string.
 func detectDialect(connStr string) Dialect {
-\tl := strings.ToLower(connStr)
+\tl := strings.ToLower(strings.TrimSpace(connStr))
 \tif strings.HasPrefix(l, "postgres://") || strings.HasPrefix(l, "postgresql://") || strings.Contains(l, "port=5432") {
 \t\treturn DialectPostgres
+\t}
+\tif strings.HasPrefix(l, "sqlite://") || strings.HasPrefix(l, "sqlite:") || strings.HasPrefix(l, "file:") || strings.HasSuffix(l, ".db") || strings.HasSuffix(l, ".sqlite") || strings.HasSuffix(l, ".sqlite3") || l == ":memory:" {
+\t\treturn DialectSqlite
 \t}
 \treturn DialectMssql
 }
@@ -335,7 +339,7 @@ func NewTableClient[T any](db *sql.DB, tableName string, dialect Dialect) *Table
 
 // quoteName quotes a column/identifier for the dialect.
 func (c *TableClient[T]) quoteName(name string) string {
-\tif c.Dialect == DialectPostgres {
+\tif c.Dialect == DialectPostgres || c.Dialect == DialectSqlite {
 \t\treturn \`"\` + strings.ReplaceAll(name, \`"\`, \`""\`) + \`"\`
 \t}
 \treturn "[" + strings.ReplaceAll(name, "]", "]]") + "]"
@@ -529,59 +533,59 @@ func buildDateTimeFilter(col string, f *DateTimeFilter, args []interface{}, ph f
     return `// FindMany returns multiple records. Use model-specific FindManyArgs for type-safe filtering.
 // Example: db.User.FindMany(ctx, &UserFindManyArgs{ Where: &UserWhereInput{ Name: &StringFilter{Contains: "Jo"} } })
 func (c *TableClient[T]) FindMany(ctx context.Context, args interface{}) ([]T, error) {
-\tclause, orderBy, take, skip, selectCols, queryArgs := c.parseArgs(args)
-\ttable := c.quoteTable()
-\tvar query string
-\tif len(selectCols) > 0 {
-\t\tquoted := make([]string, len(selectCols))
-\t\tfor i, col := range selectCols {
-\t\t\tquoted[i] = c.quoteName(col)
-\t\t}
-\t\tquery = "SELECT " + strings.Join(quoted, ", ") + " FROM " + table
-\t} else {
-\t\tquery = "SELECT * FROM " + table
-\t}
-\tif clause != "" {
-\t\tquery += " WHERE " + clause
-\t}
-\tif orderBy != "" {
-\t\tquery += " " + orderBy
-\t}
-\tif c.Dialect == DialectPostgres {
-\t\tif take > 0 {
-\t\t\tquery += fmt.Sprintf(" LIMIT %d", take)
-\t\t}
-\t\tif skip > 0 {
-\t\t\tquery += fmt.Sprintf(" OFFSET %d", skip)
-\t\t}
-\t} else {
-\t\tif skip > 0 {
-\t\t\tquery += fmt.Sprintf(" OFFSET %d ROWS", skip)
-\t\t\tif take > 0 {
-\t\t\t\tquery += fmt.Sprintf(" FETCH NEXT %d ROWS ONLY", take)
-\t\t\t}
-\t\t} else if take > 0 {
-\t\t\t// rewrite SELECT to SELECT TOP
-\t\t\tquery = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT TOP (%d) *", take), 1)
-\t\t\tquery = strings.Replace(query, "SELECT "+strings.Join(func() []string {
-\t\t\t\tif len(selectCols) == 0 { return []string{"*"} }
-\t\t\t\treturn selectCols
-\t\t\t}(), ", "), fmt.Sprintf("SELECT TOP (%d) *", take), 1)
-\t\t}
-\t}
-\treturn c.queryAndScan(ctx, query, queryArgs...)
+	clause, orderBy, take, skip, selectCols, queryArgs := c.parseArgs(args)
+	table := c.quoteTable()
+	var query string
+	if len(selectCols) > 0 {
+		quoted := make([]string, len(selectCols))
+		for i, col := range selectCols {
+			quoted[i] = c.quoteName(col)
+		}
+		query = "SELECT " + strings.Join(quoted, ", ") + " FROM " + table
+	} else {
+		query = "SELECT * FROM " + table
+	}
+	if clause != "" {
+		query += " WHERE " + clause
+	}
+	if orderBy != "" {
+		query += " " + orderBy
+	}
+	if c.Dialect == DialectPostgres || c.Dialect == DialectSqlite {
+		if take > 0 {
+			query += fmt.Sprintf(" LIMIT %d", take)
+		}
+		if skip > 0 {
+			query += fmt.Sprintf(" OFFSET %d", skip)
+		}
+	} else {
+		if skip > 0 {
+			query += fmt.Sprintf(" OFFSET %d ROWS", skip)
+			if take > 0 {
+				query += fmt.Sprintf(" FETCH NEXT %d ROWS ONLY", take)
+			}
+		} else if take > 0 {
+			// rewrite SELECT to SELECT TOP
+			query = strings.Replace(query, "SELECT *", fmt.Sprintf("SELECT TOP (%d) *", take), 1)
+			query = strings.Replace(query, "SELECT "+strings.Join(func() []string {
+				if len(selectCols) == 0 { return []string{"*"} }
+				return selectCols
+			}(), ", "), fmt.Sprintf("SELECT TOP (%d) *", take), 1)
+		}
+	}
+	return c.queryAndScan(ctx, query, queryArgs...)
 }
 
 // FindFirst returns first record matching criteria.
 func (c *TableClient[T]) FindFirst(ctx context.Context, args interface{}) (*T, error) {
-\trows, err := c.FindMany(ctx, args)
-\tif err != nil {
-\t\treturn nil, err
-\t}
-\tif len(rows) == 0 {
-\t\treturn nil, nil
-\t}
-\treturn &rows[0], nil
+	rows, err := c.FindMany(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
 }
 
 // FindUnique fetches a single record by primary key.

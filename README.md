@@ -34,6 +34,9 @@ cp .env.example .env
 # Edit .env. Set DATABASE_URL.
 ```
 
+Runtime (connection, LLM, embedding) configuration comes from environment variables.
+Schema/generator configuration comes from `an5Orm.config.js` (see [an5Orm.config.js](#an5ormconfigjs)).
+
 ### Development Commands
 
 Run from the `an5Orm/` repository directory (no separate CLI binary is shipped):
@@ -61,6 +64,49 @@ npm run db:migrate:status
 # Run tests
 npm test
 ```
+
+### an5Orm.config.js
+
+Place `an5Orm.config.js` in the project root (next to `package.json`) to configure
+schema generation and push/pull operations. The generator, `db:push`, `db:pull`, and
+migrations read it automatically:
+
+```javascript
+module.exports = {
+  // Schema directory (default: 'an5Schema')
+  schemaDir: 'an5Schema',
+
+  // Generated client output
+  outputs: {
+    typescript: {
+      outputDir: 'an5Client/typescript',
+      metadataFile: 'an5Client/typescript/an5Metadata.ts',
+      // ORM-local metadata (owned by @an5/orm, so the core never imports from the generated client)
+      ormMetadataFile: 'an5Orm/an5Metadata.ts',
+    },
+    python: {
+      metadataFile: 'an5Client/python/an5_metadata.py',
+    },
+    dotnet: {
+      outputDir: 'an5Client/dotnet',
+    },
+    golang: {
+      outputDir: 'an5Client/golang',
+    },
+  },
+
+  // Database pull options
+  pull: {
+    exclude: ['^__', '^sys\\.', '^igrations'],
+    preserveRelations: true,
+  },
+};
+```
+
+`generation.*` keys are reserved in `an5Orm.config.js` but are not read by the
+generator; output is driven by `schemaDir` and `outputs.*`. Schema metadata is
+auto-loaded at runtime from the ORM's generated `an5Metadata.ts` (configured via
+`outputs.typescript.ormMetadataFile`).
 
 ## Usage
 

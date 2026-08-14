@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.9] - 2026-08-14
+
+- chore: update docs, misc
+
 ## [1.0.8] - 2026-07-31
 
 - chore: update build
