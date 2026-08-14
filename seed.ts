@@ -27,15 +27,18 @@ try {
 }
 
 async function main() {
+  if (!db) {
+    console.log("⚠️ Database client is not initialized.");
+    return;
+  }
+  const client = db;
   console.log("🌱 Seeding LLM providers from llm-config.json...");
 
   try {
-    // Only check table existence if db client initialized successfully
-    if (db) {
-      await db.lLMProvider.findMany({ take: 1 });
+    await client.lLMProvider.findMany({ take: 1 });
 
-      // Ensure mcp_servers table exists
-      await db.$executeRawUnsafe(`
+    // Ensure mcp_servers table exists
+    await client.$executeRawUnsafe(`
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'mcp_servers')
         BEGIN
             CREATE TABLE [mcp_servers] (
@@ -53,7 +56,7 @@ async function main() {
       console.log("✅ Verified mcp_servers table exists or created.");
 
       // Ensure pipeline_packages table exists
-      await db.$executeRawUnsafe(`
+      await client.$executeRawUnsafe(`
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'pipeline_packages')
         BEGIN
             CREATE TABLE [pipeline_packages] (
@@ -72,7 +75,7 @@ async function main() {
       console.log("✅ Verified pipeline_packages table exists or created.");
 
       // Ensure pipeline_execution_logs table exists
-      await db.$executeRawUnsafe(`
+      await client.$executeRawUnsafe(`
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'pipeline_execution_logs')
         BEGIN
             CREATE TABLE [pipeline_execution_logs] (
@@ -93,9 +96,6 @@ async function main() {
         END
       `);
       console.log("✅ Verified pipeline_execution_logs table exists or created.");
-    } else {
-      console.log('⚠️  Database client not available yet; will attempt fallback after reading config.');
-    }
   } catch (error) {
     console.error("❌ Error checking LLM Provider table:", error);
     console.log("⚠️  LLM Provider table not found. Run migrations first:");
@@ -145,7 +145,7 @@ async function main() {
         description: provider.description,
       };
 
-      await db.lLMProvider.upsert({
+      await client.lLMProvider.upsert({
         where: { name: provider.name },
         update: providerData,
         create: {
@@ -167,7 +167,7 @@ async function main() {
   try {
     // Create or update admin user
     const hashedPassword = await bcrypt.hash("admin2025", 10);
-    const adminUser = await db.user.upsert({
+    const adminUser = await client.user.upsert({
       where: { email: "admin@local.com" },
       update: {
         password: hashedPassword,
@@ -186,7 +186,7 @@ async function main() {
     console.log("✅ Admin user ready:", adminUser.email);
 
     // Update existing files and jobs to admin user
-    const filesUpdated = await db.file.updateMany({
+    const filesUpdated = await client.file.updateMany({
       where: { userId: "00000000-0000-0000-0000-000000000000" },
       data: { userId: adminUser.id },
     });
@@ -214,7 +214,7 @@ async function main() {
           isActive: true,
         };
 
-        await db.databaseConnection.upsert({
+        await client.databaseConnection.upsert({
           where: { name: conn.name },
           update: connData,
           create: {
