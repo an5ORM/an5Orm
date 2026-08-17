@@ -3,9 +3,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { An5ORM } = require('../dist/index.js');
 const { buildMigrationFile } = require('../dist/migration-core.js');
-const { An5Adapter } = require('@an5/adapters');
+const { An5Adapter, createAn5Adapter, setAdapterMetadata } = require('@an5/adapters');
 
 const MSSQL_URL = process.env.MSSQL_DATABASE_URL || process.env.DATABASE_URL;
 const REQUIRE_LIVE_DB = process.env.REQUIRE_LIVE_DB === '1' || process.env.REQUIRE_ORM_LIVE_DB === '1';
@@ -132,7 +131,8 @@ async function main() {
       )
     `);
 
-    db = new An5ORM(undefined, metadata);
+    setAdapterMetadata(metadata);
+    db = createAn5Adapter({ connectionString: MSSQL_URL, connectionTimeout: 30000, requestTimeout: 60000 });
 
     const created = await db.liveUser.create({
       data: {
@@ -227,7 +227,7 @@ async function main() {
       _sum: { total: true },
       orderBy: { status: 'asc' },
     });
-    const byStatus = Object.fromEntries(grouped.map((row) => [row.status, { count: Number(row._count._all), sum: Number(row._sum.total) }]));
+    const byStatus = Object.fromEntries(grouped.map((row) => [row.status, { count: Number(row._count), sum: Number(row._sum_total) }]));
     assert.deepStrictEqual(byStatus.open, { count: 2, sum: 25 });
     assert.deepStrictEqual(byStatus.paid, { count: 2, sum: 55 });
 
