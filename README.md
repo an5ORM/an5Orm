@@ -115,15 +115,15 @@ const db = createAn5Adapter({
 // Connect to database
 await db.$connect();
 
-// Table operations
-const users = await db.table('User').findMany({
+// Model operations
+const users = await db.user.findMany({
   where: { email: { contains: '@example.com' } },
   orderBy: { createdAt: 'desc' },
   take: 10,
 });
 
 // Create record
-const newUser = await db.table('User').create({
+const newUser = await db.user.create({
   data: {
     email: 'alex@example.com',
     name: 'Alex',
