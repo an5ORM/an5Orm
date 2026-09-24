@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "commonjs",
-    "moduleResolution": "node10",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "esModuleInterop": true,
     "strict": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "outDir": "../dist/generator",
+    "rootDir": ".",
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "declaration": true,

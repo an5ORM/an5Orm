@@ -33,8 +33,8 @@ export namespace An5 {
   export type NumberNullableFilter = { equals?: number | null; in?: (number | null)[]; notIn?: (number | null)[]; lt?: number; lte?: number; gt?: number; gte?: number; not?: number | NumberNullableFilter | null; };
   export type BooleanFilter = { equals?: boolean; not?: boolean | BooleanFilter; };
   export type BooleanNullableFilter = { equals?: boolean | null; not?: boolean | BooleanNullableFilter | null; };
-  export type DateTimeFilter = { equals?: Date; in?: Date[]; notIn?: Date[]; lt?: Date; lte?: Date; gt?: Date; gte?: Date; not?: Date | DateTimeFilter; };
-  export type DateTimeNullableFilter = { equals?: Date | null; in?: (Date | null)[]; notIn?: (Date | null)[]; lt?: Date; lte?: Date; gt?: Date; gte?: Date; not?: Date | DateTimeNullableFilter | null; };
+  export type DateTimeFilter = { equals?: Date | string; in?: (Date | string)[]; notIn?: (Date | string)[]; lt?: Date | string; lte?: Date | string; gt?: Date | string; gte?: Date | string; not?: Date | string | DateTimeFilter; };
+  export type DateTimeNullableFilter = { equals?: Date | string | null; in?: ((Date | string) | null)[]; notIn?: ((Date | string) | null)[]; lt?: Date | string; lte?: Date | string; gt?: Date | string; gte?: Date | string; not?: Date | string | DateTimeNullableFilter | null; };
 }
 
 export interface TableClient<T, WhereInput = any, Select = any, Include = any, CreateInput = any, UpdateInput = any, FindManyArgs = any, FindFirstArgs = any, FindUniqueArgs = any, CreateArgs = any, UpdateArgs = any, UpsertArgs = any, DeleteArgs = any, AggregateArgs = any, GroupByArgs = any> {
@@ -84,7 +84,7 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
     content += `  NOT?: ${model.name}WhereInput | ${model.name}WhereInput[];\n`;
     for (const field of model.fields) {
       const filter = this.getFieldFilterType(field);
-      content += `  ${field.name}?: ${field.type} | ${filter}${field.isOptional ? ' | null' : ''};\n`;
+      content += `  ${field.name}?: ${this.inputType(field.type)} | ${filter}${field.isOptional ? ' | null' : ''};\n`;
     }
     for (const rel of model.relations) {
       if (rel.isArray) {
@@ -114,11 +114,12 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
     }
     content += `export type ${model.name}Include = { ${includeRels.join('; ')}${includeRels.length > 0 ? ';' : ''} };\n`;
 
-    content += `export type ${model.name}CreateInput = { ${model.fields.map(f => `${f.name}${f.isOptional || f.hasDefault ? '?' : ''}: ${f.type}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; }`).join('; ')} };\n`;
-    content += `export type ${model.name}UpdateInput = { ${model.fields.filter(f => !f.isId).map(f => `${f.name}?: ${f.type === 'number' ? 'number | An5.IntFieldUpdateOperationsInput' : f.type}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; set?: ${r.type}WhereInput | ${r.type}WhereInput[]; disconnect?: ${r.type}WhereInput | ${r.type}WhereInput[]; delete?: ${r.type}WhereInput | ${r.type}WhereInput[]; update?: { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; }[]; upsert?: { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; }[]; }`).join('; ')} };\n`;
+    content += `export type ${model.name}CreateInput = { ${model.fields.map(f => `${f.name}${f.isOptional || f.hasDefault ? '?' : ''}: ${this.inputType(f.type)}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; }`).join('; ')} };\n`;
+    content += `export type ${model.name}UpdateInput = { ${model.fields.filter(f => !f.isId).map(f => `${f.name}?: ${f.type === 'number' ? 'number | An5.IntFieldUpdateOperationsInput' : this.inputType(f.type)}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; set?: ${r.type}WhereInput | ${r.type}WhereInput[]; disconnect?: ${r.type}WhereInput | ${r.type}WhereInput[]; delete?: ${r.type}WhereInput | ${r.type}WhereInput[]; update?: { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; }[]; upsert?: { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; }[]; }`).join('; ')} };\n`;
 
-    content += `export type ${model.name}FindManyArgs = { where?: ${model.name}WhereInput; orderBy?: any; take?: number; skip?: number; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
-    content += `export type ${model.name}FindFirstArgs = { where?: ${model.name}WhereInput; orderBy?: any; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+    content += `export type ${model.name}OrderByInput = { ${model.fields.map(f => `${f.name}?: An5.SortOrder`).join('; ')} };\n`;
+    content += `export type ${model.name}FindManyArgs = { where?: ${model.name}WhereInput; orderBy?: ${model.name}OrderByInput | ${model.name}OrderByInput[]; take?: number; skip?: number; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+    content += `export type ${model.name}FindFirstArgs = { where?: ${model.name}WhereInput; orderBy?: ${model.name}OrderByInput | ${model.name}OrderByInput[]; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}FindUniqueArgs = { where?: ${model.name}WhereInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}CreateArgs = { data: ${model.name}CreateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}UpdateArgs = { where: ${model.name}WhereInput; data: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
@@ -129,7 +130,7 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
     const numericHavingFields = model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: An5.NumberFilter | number`).join('; ');
     const scalarHavingFields = model.fields.map(f => `${f.name}?: any`).join('; ');
     content += `export type ${model.name}AggregateHavingInput = { _count?: { _all?: An5.NumberFilter | number; ${model.fields.map(f => `${f.name}?: An5.NumberFilter | number`).join('; ')} }; _sum?: { ${numericHavingFields} }; _avg?: { ${numericHavingFields} }; _min?: { ${scalarHavingFields} }; _max?: { ${scalarHavingFields} }; };\n`;
-    content += `export type ${model.name}GroupByArgs = { by: ${model.name}ScalarFieldEnum | ${model.name}ScalarFieldEnum[]; where?: ${model.name}WhereInput; having?: ${model.name}AggregateHavingInput; orderBy?: any; skip?: number; take?: number; _count?: true | { _all?: true; ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _sum?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _avg?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _min?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _max?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; };\n`;
+    content += `export type ${model.name}GroupByArgs = { by: ${model.name}ScalarFieldEnum | ${model.name}ScalarFieldEnum[]; where?: ${model.name}WhereInput; having?: ${model.name}AggregateHavingInput; orderBy?: ${model.name}OrderByInput | ${model.name}OrderByInput[]; skip?: number; take?: number; _count?: true | { _all?: true; ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _sum?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _avg?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _min?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _max?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; };\n`;
 
     content += `export type ${model.name}TableClient = TableClient<\n  ${model.name},\n  ${model.name}WhereInput,\n  ${model.name}Select,\n  ${model.name}Include,\n  ${model.name}CreateInput,\n  ${model.name}UpdateInput,\n  ${model.name}FindManyArgs,\n  ${model.name}FindFirstArgs,\n  ${model.name}FindUniqueArgs,\n  ${model.name}CreateArgs,\n  ${model.name}UpdateArgs,\n  ${model.name}UpsertArgs,\n  ${model.name}DeleteArgs,\n  ${model.name}AggregateArgs,\n  ${model.name}GroupByArgs\n>;\n`;
 
@@ -167,6 +168,15 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
       content += `  export type ${model.name}Include = ${model.name}Types.${model.name}Include;\n`;
       content += `  export type ${model.name}CreateInput = ${model.name}Types.${model.name}CreateInput;\n`;
       content += `  export type ${model.name}UpdateInput = ${model.name}Types.${model.name}UpdateInput;\n`;
+      content += `  export type ${model.name}OrderByInput = ${model.name}Types.${model.name}OrderByInput;\n`;
+      content += `  export type ${model.name}FindManyArgs = ${model.name}Types.${model.name}FindManyArgs;\n`;
+      content += `  export type ${model.name}FindFirstArgs = ${model.name}Types.${model.name}FindFirstArgs;\n`;
+      content += `  export type ${model.name}FindUniqueArgs = ${model.name}Types.${model.name}FindUniqueArgs;\n`;
+      content += `  export type ${model.name}CreateArgs = ${model.name}Types.${model.name}CreateArgs;\n`;
+      content += `  export type ${model.name}UpdateArgs = ${model.name}Types.${model.name}UpdateArgs;\n`;
+      content += `  export type ${model.name}UpsertArgs = ${model.name}Types.${model.name}UpsertArgs;\n`;
+      content += `  export type ${model.name}DeleteArgs = ${model.name}Types.${model.name}DeleteArgs;\n`;
+      content += `  export type ${model.name}TableClient = ${model.name}Types.${model.name}TableClient;\n`;
       content += `  export type ${model.name}ScalarFieldEnum = ${model.name}Types.${model.name}ScalarFieldEnum;\n`;
       content += `  export type ${model.name}AggregateArgs = ${model.name}Types.${model.name}AggregateArgs;\n`;
       content += `  export type ${model.name}GroupByArgs = ${model.name}Types.${model.name}GroupByArgs;\n`;
@@ -214,6 +224,12 @@ export interface TableClient<T, WhereInput = any, Select = any, Include = any, C
     if (normalizedType === 'boolean') return field.isOptional ? 'An5.BooleanNullableFilter' : 'An5.BooleanFilter';
     if (normalizedType === 'Date') return field.isOptional ? 'An5.DateTimeNullableFilter' : 'An5.DateTimeFilter';
     return 'any';
+  }
+
+  // Input positions (create/update/where scalars) accept ISO strings as well
+  // as Date objects — Prisma parity for DateTime fields.
+  private inputType(tsType: string): string {
+    return tsType === 'Date' ? 'Date | string' : tsType;
   }
 
   private normalizeType(type: string): string {
