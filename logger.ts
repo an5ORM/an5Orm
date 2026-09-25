@@ -119,7 +119,7 @@ export class Logger {
   }
 
   error(message: string, error?: Error, options?: { context?: string; data?: any }) {
-    this.log('error', message, { ...options, error });
+    this.log('error', message, { ...options, ...(error !== undefined ? { error } : {}) });
   }
 
   child(context: string): Logger {

@@ -8,7 +8,7 @@ export class An5ClientKnownRequestError extends Error {
   code!: string;
   meta?: any;
 
-  constructor(message: string, { code, clientVersion }: { code: string; clientVersion: string }) {
+  constructor(message: string, { code }: { code: string; clientVersion: string }) {
     super(message);
     this.code = code;
   }

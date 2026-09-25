@@ -4,8 +4,8 @@ export interface SchemaField {
   isOptional: boolean;
   isId: boolean;
   isUnique: boolean;
-  uniqueName?: string;
-  defaultValue?: string;
+  uniqueName?: string | undefined;
+  defaultValue?: string | undefined;
 }
 
 export interface SchemaIndexDefinition {
@@ -81,7 +81,7 @@ const AN5_TYPES = new Set([
 
 export function parseSqlType(raw: string): string {
   const match = raw.match(/^(\w+)/);
-  return match ? match[1].toUpperCase() : raw.toUpperCase();
+  return match?.[1]?.toUpperCase() ?? raw.toUpperCase();
 }
 
 export function formatDbColumnSqlType(column: DbColumn): string {
@@ -143,16 +143,16 @@ function schemaIndexName(
 function parseMappedIndex(line: string, directive: '@@unique' | '@@index'): SchemaIndexDefinition | null {
   const match = line.match(new RegExp(`${directive}\\(\\[([\\w,\\s]+)\\]([^)]*)\\)`));
   if (!match) return null;
-  const fields = match[1].split(',').map(field => field.trim()).filter(Boolean);
+  const fields = (match[1] ?? '').split(',').map(field => field.trim()).filter(Boolean);
   const nameMatch = match[2]?.match(/\bmap\s*:\s*"([^"]+)"/);
   const includeMatch = match[2]?.match(/\binclude\s*:\s*\[([\w,\s]+)\]/);
   const filterMatch = match[2]?.match(/\bfilter\s*:\s*"([^"]+)"/);
   const optionsMatch = match[2]?.match(/\boptions\s*:\s*"([^"]+)"/);
   const definition: SchemaIndexDefinition = { fields };
-  if (nameMatch) definition.name = nameMatch[1];
-  if (includeMatch) definition.includeFields = includeMatch[1].split(',').map(field => field.trim()).filter(Boolean);
-  if (filterMatch) definition.filter = filterMatch[1];
-  if (optionsMatch) definition.options = optionsMatch[1];
+  if (nameMatch?.[1]) definition.name = nameMatch[1];
+  if (includeMatch?.[1]) definition.includeFields = includeMatch[1].split(',').map(field => field.trim()).filter(Boolean);
+  if (filterMatch?.[1]) definition.filter = filterMatch[1];
+  if (optionsMatch?.[1]) definition.options = optionsMatch[1];
   return definition;
 }
 
@@ -181,14 +181,15 @@ export function tableIdentityName(raw: string): string {
 function matchFirst(sql: string | undefined, pattern: RegExp): string | null {
   if (!sql) return null;
   const match = sql.match(pattern);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 function parseTypeArgs(sqlType: string): { base: string; args: string[] } {
   const match = sqlType.match(/^(\w+)(?:\(([^)]+)\))?/);
+  const typeArgs = match?.[2];
   return {
-    base: match ? match[1].toUpperCase() : parseSqlType(sqlType),
-    args: match && match[2] ? match[2].split(',').map(arg => arg.trim().toUpperCase()) : [],
+    base: match?.[1]?.toUpperCase() ?? parseSqlType(sqlType),
+    args: typeArgs ? typeArgs.split(',').map(arg => arg.trim().toUpperCase()) : [],
   };
 }
 
@@ -357,9 +358,10 @@ export function parseSchemaText(text: string): SchemaModel[] {
 
     const modelMatch = line.match(/^model\s+(\w+)\s*\{/);
     if (modelMatch) {
+      const modelName = modelMatch[1] ?? 'Model';
       current = {
-        name: modelMatch[1],
-        tableName: modelMatch[1].toLowerCase() + 's',
+        name: modelName,
+        tableName: modelName.toLowerCase() + 's',
         fields: [],
         compoundUniques: [],
         indexes: [],
@@ -376,7 +378,7 @@ export function parseSchemaText(text: string): SchemaModel[] {
 
     if (line.startsWith('@@map')) {
       const m = line.match(/@@map\("(.+)"\)/);
-      if (m) current.tableName = m[1];
+      if (m?.[1]) current.tableName = m[1];
       continue;
     }
     if (line.startsWith('@@unique')) {
@@ -426,6 +428,7 @@ export function buildCreateTableSql(model: SchemaModel): string {
 
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
     const definition = model.compoundUniques[idx];
+    if (definition === undefined) continue;
     const fields = schemaIndexFields(definition);
     const constraintName = schemaIndexName(definition, () => compoundUniqueConstraintName(model, idx));
     const fieldsStr = fields.map(f => `[${f}]`).join(', ');
@@ -459,6 +462,7 @@ export function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, op
 
   for (let idx = 0; idx < model.compoundUniques.length; idx++) {
     const definition = model.compoundUniques[idx];
+    if (definition === undefined) continue;
     const fields = schemaIndexFields(definition);
     const constraintName = schemaIndexName(definition, () => compoundUniqueConstraintName(model, idx));
     expectedUniques.add(constraintName.toLowerCase());
@@ -555,8 +559,6 @@ export function generateColumnDiff(
 
     const schemaType = f.sqlType.toUpperCase();
     const dbType = formatDbColumnSqlType(existing);
-    const schemaBase = parseSqlType(schemaType);
-    const dbBase = parseSqlType(dbType);
     const schemaNullable = f.isOptional;
     const dbNullable = Boolean(existing.isNullable);
     const typeChanged = schemaType !== dbType;
@@ -725,7 +727,7 @@ export function parseMigrationSections(sql: string): MigrationSections {
   const markers: { name: 'preflight' | 'up' | 'down'; index: number; end: number }[] = [];
   let match: RegExpExecArray | null;
   while ((match = markerPattern.exec(sql))) {
-    markers.push({ name: match[1].toLowerCase() as 'preflight' | 'up' | 'down', index: match.index, end: match.index + match[0].length });
+    markers.push({ name: (match[1] ?? 'up').toLowerCase() as 'preflight' | 'up' | 'down', index: match.index, end: match.index + match[0].length });
   }
 
   if (markers.length === 0) {
@@ -735,7 +737,9 @@ export function parseMigrationSections(sql: string): MigrationSections {
   const section = (name: 'preflight' | 'up' | 'down'): string => {
     const markerIndex = markers.findIndex(marker => marker.name === name);
     if (markerIndex < 0) return '';
-    const start = markers[markerIndex].end;
+    const marker = markers[markerIndex];
+    if (!marker) return '';
+    const start = marker.end;
     const end = markers[markerIndex + 1]?.index ?? sql.length;
     return sql.slice(start, end).trim();
   };
@@ -773,7 +777,7 @@ export function parseRollbackSelection(args: string[], applied: AppliedMigration
     return { count: applied.length - index, label: `through ${target}` };
   }
 
-  const count = Number.parseInt(args[0], 10);
+  const count = Number.parseInt(args[0] ?? '', 10);
   if (!Number.isFinite(count) || count < 1) {
     throw new Error('Rollback steps must be a positive integer, or use --to <migration-file>.');
   }
