@@ -7,7 +7,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.An5ClientKnownRequestError = void 0;
 class An5ClientKnownRequestError extends Error {
-    constructor(message, { code, clientVersion }) {
+    constructor(message, { code }) {
         super(message);
         this.code = code;
     }

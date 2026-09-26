@@ -8,6 +8,7 @@ export declare class CodeGenerator {
     private generateIndexTs;
     private getAllPropertyVariations;
     private getFieldFilterType;
+    private inputType;
     private normalizeType;
     private toCamelCase;
 }

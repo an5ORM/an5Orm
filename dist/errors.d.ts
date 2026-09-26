@@ -6,7 +6,7 @@
 export declare class An5ClientKnownRequestError extends Error {
     code: string;
     meta?: any;
-    constructor(message: string, { code, clientVersion }: {
+    constructor(message: string, { code }: {
         code: string;
         clientVersion: string;
     });

@@ -84,7 +84,7 @@ class Logger {
         this.log('warn', message, options);
     }
     error(message, error, options) {
-        this.log('error', message, { ...options, error });
+        this.log('error', message, { ...options, ...(error !== undefined ? { error } : {}) });
     }
     child(context) {
         return new Logger({

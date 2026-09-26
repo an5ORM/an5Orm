@@ -6,11 +6,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MetadataGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 class MetadataGenerator {
-    constructor(outputPath) {
+    constructor(outputPath, relationImport = 'import type { RelationDef } from "@an5/orm";') {
         this.outputPath = outputPath;
+        this.relationImport = relationImport;
     }
     generate(models) {
         let metaContent = '// This file is auto-generated. Do not edit directly.\n\n';
+        metaContent += `${this.relationImport}\n\n`;
         metaContent += 'export const modelToTable: Record<string, string> = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
@@ -37,7 +39,6 @@ class MetadataGenerator {
             }
         }
         metaContent += '};\n\n';
-        metaContent += 'export interface RelationDef {\n  modelName: string;\n  relationType: "many" | "one";\n  foreignKey: string;\n  localKey: string;\n}\n\n';
         metaContent += 'export const relationMap: Record<string, Record<string, RelationDef>> = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
@@ -55,21 +56,34 @@ class MetadataGenerator {
     }
     getAllPropertyVariations(modelName) {
         const variations = new Set();
-        // 1. Standard camelCase (e.g. User -> user, McpServer -> mcpServer)
+        // 1. PascalCase (User)
+        variations.add(modelName);
+        // 2. camelCase (user)
         variations.add(this.toCamelCase(modelName));
-        // 2. Handle known acronyms at start (e.g. LLMProvider -> lLMProvider)
-        // This is already handled by toCamelCase if it only lowercases the first letter.
-        // But we might want 'llmProvider' as well.
+        // 3. Plural PascalCase (Users)
+        variations.add(modelName + 's');
+        // 4. Plural camelCase (users)
+        variations.add(this.toCamelCase(modelName) + 's');
+        // 5. snake_case (user, mc_server)
+        variations.add(this.toSnakeCase(modelName));
+        variations.add(this.toSnakeCase(modelName) + 's');
         const acronyms = ['LLM', 'AI', 'MCP', 'IT', 'QC', 'HR', 'MR', 'WH', 'SSIS', 'API', 'URL', 'ID', 'JSON'];
         for (const acronym of acronyms) {
             if (modelName.startsWith(acronym)) {
-                // e.g. LLMProvider -> llmProvider
                 variations.add(acronym.toLowerCase() + modelName.slice(acronym.length));
-                // e.g. LLMProvider -> lLMProvider (Prisma style)
                 variations.add(acronym[0].toLowerCase() + acronym.slice(1) + modelName.slice(acronym.length));
+                variations.add(acronym.toLowerCase() + modelName.slice(acronym.length) + 's');
             }
         }
         return Array.from(variations);
+    }
+    toSnakeCase(str) {
+        if (!str)
+            return '';
+        return str
+            .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+            .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+            .toLowerCase();
     }
     formatFieldMetadata(field) {
         const entries = [

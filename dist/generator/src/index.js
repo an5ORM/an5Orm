@@ -9,6 +9,7 @@ const code_generator_1 = require("./code-generator");
 const metadata_generator_1 = require("./metadata-generator");
 const python_generator_1 = require("./python-generator");
 const dotnet_generator_1 = require("./dotnet-generator");
+const golang_generator_1 = require("./golang-generator");
 const fs_1 = __importDefault(require("fs"));
 function clearGeneratedFiles(outputDir, extension) {
     if (!fs_1.default.existsSync(outputDir)) {
@@ -26,15 +27,25 @@ function clearGeneratedFiles(outputDir, extension) {
     }
 }
 async function main() {
-    const rootDir = process.cwd();
+    let rootDir = process.cwd();
     let config = {};
     try {
         let configPath = path_1.default.join(rootDir, 'an5Orm.config.js');
         if (!fs_1.default.existsSync(configPath)) {
             configPath = path_1.default.join(rootDir, 'an5Orm.config.cjs');
         }
+        if (!fs_1.default.existsSync(configPath)) {
+            configPath = path_1.default.join(rootDir, '..', 'an5Orm.config.js');
+        }
+        if (!fs_1.default.existsSync(configPath)) {
+            configPath = path_1.default.join(rootDir, '..', 'an5Orm.config.cjs');
+        }
         if (fs_1.default.existsSync(configPath)) {
             config = require(configPath);
+            rootDir = path_1.default.dirname(configPath);
+        }
+        else if (fs_1.default.existsSync(path_1.default.join(rootDir, '..', 'an5Schema'))) {
+            rootDir = path_1.default.resolve(rootDir, '..');
         }
     }
     catch (err) {
@@ -45,10 +56,12 @@ async function main() {
     const outputMetadataPath = path_1.default.resolve(rootDir, config.outputs?.typescript?.metadataFile || 'an5Client/typescript/an5Metadata.ts');
     const outputPythonMetadataPath = path_1.default.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
     const outputDotnetDir = path_1.default.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
+    const outputGolangDir = path_1.default.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
     console.log('🚀 Starting ORM generation...');
     try {
         clearGeneratedFiles(outputTypesDir, '.ts');
         clearGeneratedFiles(outputDotnetDir, '.cs');
+        clearGeneratedFiles(outputGolangDir, '.go');
         if (fs_1.default.existsSync(outputMetadataPath)) {
             fs_1.default.unlinkSync(outputMetadataPath);
         }
@@ -74,10 +87,13 @@ async function main() {
         }
         const pythonGen = new python_generator_1.PythonGenerator(outputPythonMetadataPath);
         pythonGen.generate(models);
-        console.log(`✨ Generated Python metadata in ${outputPythonMetadataPath}`);
+        console.log(`✨ Generated Python metadata and client models in ${pythonDir}`);
         const dotnetGen = new dotnet_generator_1.DotnetGenerator(outputDotnetDir);
         dotnetGen.generate(models);
         console.log(`✨ Generated .NET models in ${outputDotnetDir}`);
+        const golangGen = new golang_generator_1.GolangGenerator(outputGolangDir);
+        golangGen.generate(models);
+        console.log(`✨ Generated Golang models in ${outputGolangDir}`);
         console.log('✅ ORM generation completed successfully.');
     }
     catch (error) {
