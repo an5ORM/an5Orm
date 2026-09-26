@@ -128,6 +128,11 @@ test('golang-generator.ts exists', () => {
   assertExists(goPath);
 });
 
+test('rust-generator.ts exists', () => {
+  const rustPath = path.join(__dirname, '..', 'generator', 'src', 'rust-generator.ts');
+  assertExists(rustPath);
+});
+
 test('types.ts exists with Model and Field interfaces', () => {
   const typesPath = path.join(__dirname, '..', 'generator', 'src', 'types.ts');
   assertExists(typesPath);
@@ -144,6 +149,7 @@ test('generator index.ts has main function', () => {
   assertIncludes(content, 'CodeGenerator');
   assertIncludes(content, 'MetadataGenerator');
   assertIncludes(content, 'GolangGenerator');
+  assertIncludes(content, 'RustGenerator');
 });
 
 // ─── Generated output tests ──────────────────────────────────────────────────
@@ -234,13 +240,24 @@ testIf(hasAn5Client, 'an5Client/python files exist and have An5Client & models',
   assertIncludes(metaContent, 'MODEL_DESCRIPTIONS');
   assertIncludes(metaContent, 'MODEL_FIELDS');
 
+  // Per-model entity files like dotnet (<Model>.cs)
+  assertExists(path.join(pyDir, 'User.py'));
+  assertExists(path.join(pyDir, 'Order.py'));
+  const userContent = fs.readFileSync(path.join(pyDir, 'User.py'), 'utf8');
+  assertIncludes(userContent, '@dataclass');
+  assertIncludes(userContent, 'class User:');
+  assertIncludes(userContent, 'class UserRow(');
+
+  // an5_models.py stays as backward-compat aggregator
   const modelsContent = fs.readFileSync(path.join(pyDir, 'an5_models.py'), 'utf8');
-  assertIncludes(modelsContent, '@dataclass');
-  assertIncludes(modelsContent, 'class User:');
+  assertIncludes(modelsContent, 'from .User import');
+  assertIncludes(modelsContent, 'UserRow');
 
   const clientContent = fs.readFileSync(path.join(pyDir, 'an5_client.py'), 'utf8');
   assertIncludes(clientContent, 'class An5Client:');
   assertIncludes(clientContent, 'self.users: AdapterTableClient');
+  assertIncludes(clientContent, 'from an5_adapter import An5Adapter');
+  assert.ok(!clientContent.includes('.an5_adapter'), 'Generated client must not reference missing .an5_adapter module (Pylance reportMissingImports)');
 });
 
 testIf(hasAn5Client, 'an5Client/dotnet files exist with complete CRUD methods', () => {
@@ -259,13 +276,20 @@ testIf(hasAn5Client, 'an5Client/dotnet files exist with complete CRUD methods', 
 
 testIf(hasAn5Client, 'an5Client/golang files exist with models and generic client', () => {
   const goDir = path.join(__dirname, '..', '..', 'an5Client', 'golang');
-  assertExists(path.join(goDir, 'models.go'));
   assertExists(path.join(goDir, 'client.go'));
   assertExists(path.join(goDir, 'config.go'));
 
-  const modelsContent = fs.readFileSync(path.join(goDir, 'models.go'), 'utf8');
-  assertIncludes(modelsContent, 'type User struct {');
-  assertIncludes(modelsContent, 'type Order struct {');
+  // Per-model files like dotnet (<Model>.cs): struct + ORM types each
+  assertExists(path.join(goDir, 'User.go'));
+  assertExists(path.join(goDir, 'Order.go'));
+
+  const userContent = fs.readFileSync(path.join(goDir, 'User.go'), 'utf8');
+  assertIncludes(userContent, 'type User struct {');
+  assertIncludes(userContent, 'type UserWhereInput struct');
+  assertIncludes(userContent, 'type UserFindManyArgs struct');
+
+  const orderContent = fs.readFileSync(path.join(goDir, 'Order.go'), 'utf8');
+  assertIncludes(orderContent, 'type Order struct {');
 
   const clientContent = fs.readFileSync(path.join(goDir, 'client.go'), 'utf8');
   assertIncludes(clientContent, 'type An5DbContext struct');
@@ -275,6 +299,7 @@ testIf(hasAn5Client, 'an5Client/golang files exist with models and generic clien
   assertIncludes(clientContent, 'func (c *TableClient[T]) VectorSearch(');
   assertIncludes(clientContent, 'direction := strings.ToUpper(fv.Elem().String())');
   assert.ok(!clientContent.includes('fv.Pointer()'), 'Go client must not convert reflect pointer to SortOrder');
+  assert.ok(!clientContent.includes('type UserWhereInput'), 'Per-model types must live in <Model>.go, not client.go');
 });
 
 test('golang generator emits safe SortOrder reflection', () => {
@@ -282,6 +307,61 @@ test('golang generator emits safe SortOrder reflection', () => {
   const content = fs.readFileSync(generatorPath, 'utf8');
   assertIncludes(content, 'direction := strings.ToUpper(fv.Elem().String())');
   assert.ok(!content.includes('fv.Pointer()'), 'Go generator must not emit invalid reflect pointer conversion');
+});
+
+test('golang generator emits per-model files like dotnet', () => {
+  const generatorPath = path.join(__dirname, '..', 'generator', 'src', 'golang-generator.ts');
+  const content = fs.readFileSync(generatorPath, 'utf8');
+  assertIncludes(content, 'generateModelFile');
+  assertIncludes(content, '`${model.name}.go`');
+});
+
+testIf(hasAn5Client, 'an5Client/rust crate exists with models and client builders', () => {
+  const rustDir = path.join(__dirname, '..', '..', 'an5Client', 'rust');
+  assertExists(path.join(rustDir, 'Cargo.toml'));
+  assertExists(path.join(rustDir, 'src', 'lib.rs'));
+  assertExists(path.join(rustDir, 'src', 'models.rs'));
+  assertExists(path.join(rustDir, 'src', 'filters.rs'));
+  assertExists(path.join(rustDir, 'src', 'client.rs'));
+  assertExists(path.join(rustDir, 'src', 'metadata.rs'));
+  assertExists(path.join(rustDir, 'src', 'config.rs'));
+
+  const modelsContent = fs.readFileSync(path.join(rustDir, 'src', 'models.rs'), 'utf8');
+  assertIncludes(modelsContent, 'pub struct User');
+  assertIncludes(modelsContent, 'UserWhereInput');
+  assertIncludes(modelsContent, 'UserFindManyArgs');
+
+  const clientContent = fs.readFileSync(path.join(rustDir, 'src', 'client.rs'), 'utf8');
+  assertIncludes(clientContent, 'pub struct An5Client');
+  assertIncludes(clientContent, 'find_many_');
+  assertIncludes(clientContent, 'cosine_similarity');
+
+  const cargoContent = fs.readFileSync(path.join(rustDir, 'Cargo.toml'), 'utf8');
+  assertIncludes(cargoContent, 'name = "an5-client"');
+  assertIncludes(cargoContent, 'serde');
+});
+
+test('rust generator emits postgres placeholder and serde derives', () => {
+  const generatorPath = path.join(__dirname, '..', 'generator', 'src', 'rust-generator.ts');
+  const content = fs.readFileSync(generatorPath, 'utf8');
+  assertIncludes(content, 'class RustGenerator');
+  assertIncludes(content, 'generateCargoToml');
+  assertIncludes(content, 'SortOrder');
+});
+
+test('python generator emits per-model files like dotnet', () => {
+  const generatorPath = path.join(__dirname, '..', 'generator', 'src', 'python-generator.ts');
+  const content = fs.readFileSync(generatorPath, 'utf8');
+  assertIncludes(content, 'generateModelFile');
+  assertIncludes(content, 'generateModelsIndex');
+  assertIncludes(content, '`${model.name}.py`');
+});
+
+test('python generator imports adapter from installed package only', () => {
+  const generatorPath = path.join(__dirname, '..', 'generator', 'src', 'python-generator.ts');
+  const content = fs.readFileSync(generatorPath, 'utf8');
+  assertIncludes(content, 'from an5_adapter import An5Adapter');
+  assert.ok(!content.includes('.an5_adapter'), 'Template must not emit unresolvable .an5_adapter fallback (Pylance reportMissingImports)');
 });
 
 // ─── ORM core file tests ─────────────────────────────────────────────────────

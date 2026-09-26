@@ -13,12 +13,9 @@ if os.path.exists(_local_adapters_dir) and _local_adapters_dir not in sys.path:
 
 try:
     from an5_adapter import An5Adapter, create_an5_adapter, AdapterTableClient
-except ImportError:  # pragma: no cover
-    try:
-        from .an5_adapter import An5Adapter, create_an5_adapter, AdapterTableClient
-    except ImportError:
-        An5Adapter = None  # type: ignore
-        create_an5_adapter = None  # type: ignore
-        AdapterTableClient = None  # type: ignore
+except ImportError:  # pragma: no cover - runtime dep `an5-adapters` not installed
+    An5Adapter = None  # type: ignore
+    create_an5_adapter = None  # type: ignore
+    AdapterTableClient = None  # type: ignore
 
 __all__ = ["An5Adapter", "create_an5_adapter", "AdapterTableClient"]

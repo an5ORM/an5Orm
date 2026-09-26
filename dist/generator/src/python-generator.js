@@ -17,13 +17,17 @@ class PythonGenerator {
         }
         // 1. Generate an5_metadata.py
         this.generateMetadata(models);
-        // 2. Generate an5_models.py
-        this.generateModels(models, outputDir);
-        // 3. Generate an5_orm_types.py - type-safe ORM filter/args dataclasses
+        // 2. Generate per-model entity files like dotnet (<Model>.py)
+        for (const model of models) {
+            this.generateModelFile(model, outputDir);
+        }
+        // 3. Generate an5_models.py as backward-compat aggregator
+        this.generateModelsIndex(models, outputDir);
+        // 4. Generate an5_orm_types.py - type-safe ORM filter/args dataclasses
         this.generateOrmTypes(models, outputDir);
-        // 4. Generate an5_client.py
+        // 5. Generate an5_client.py
         this.generateClient(models, outputDir);
-        // 5. Generate __init__.py
+        // 6. Generate __init__.py
         this.generateInit(models, outputDir);
     }
     getPyFilterType(fieldType) {
@@ -180,20 +184,21 @@ class PythonGenerator {
         }
         return 'str';
     }
-    generateModels(models, outputDir) {
+    generateModelFile(model, outputDir) {
+        // Single-entity file like dotnet `${model.name}.cs` / typescript `${model.name}.ts`.
+        // Contains the @dataclass entity + TypedDict row shapes for that model only.
         let content = '# This file is auto-generated. Do not edit directly.\n';
         content += 'from dataclasses import dataclass, field\n';
-        content += 'from typing import Optional, List, Any\n';
+        content += 'from typing import Optional, List, Any, TypedDict\n';
         content += 'from datetime import datetime\n\n';
-        for (const model of models) {
-            if (model.description) {
-                content += `"""${model.description}"""\n`;
-            }
-            content += `@dataclass\nclass ${model.name}:\n`;
-            if (model.fields.length === 0 && model.relations.length === 0) {
-                content += '    pass\n\n';
-                continue;
-            }
+        if (model.description) {
+            content += `"""${model.description}"""\n`;
+        }
+        content += `@dataclass\nclass ${model.name}:\n`;
+        if (model.fields.length === 0 && model.relations.length === 0) {
+            content += '    pass\n\n';
+        }
+        else {
             // Required fields first
             const required = model.fields.filter(f => !f.isOptional && !f.hasDefault);
             const optionals = model.fields.filter(f => f.isOptional || f.hasDefault);
@@ -218,21 +223,86 @@ class PythonGenerator {
                 }
             }
             content += '\n';
+            // TypedDict row shape: mirrors what the runtime actually returns
+            // (plain dicts), so `AdapterTableClient["<Model>Row"]` delegates
+            // type-check. Required keys stay required via a total=True base;
+            // everything else is optional (total=False), keeping partial
+            // selects valid without extra dependencies.
+            const rowRequired = model.fields.filter(f => !f.isOptional && !f.hasDefault);
+            const rowOptional = model.fields.filter(f => f.isOptional || f.hasDefault);
+            content += `class _${model.name}Required(TypedDict):\n`;
+            content += `    """Required keys of a ${model.name} row."""\n`;
+            if (rowRequired.length === 0) {
+                content += '    pass\n';
+            }
+            for (const f of rowRequired) {
+                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+            }
+            content += `\nclass ${model.name}Row(_${model.name}Required, total=False):\n`;
+            content += `    """Row shape returned for ${model.name} queries."""\n`;
+            if (rowOptional.length === 0 && model.relations.length === 0) {
+                content += '    pass\n';
+            }
+            for (const f of rowOptional) {
+                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+            }
+            for (const rel of model.relations) {
+                const relName = this.toSnakeCase(rel.name);
+                content += rel.isArray ? `    ${relName}: List[Any]\n` : `    ${relName}: Any\n`;
+            }
+            content += '\n';
+        }
+        fs_1.default.writeFileSync(path_1.default.join(outputDir, `${model.name}.py`), content);
+    }
+    generateModelsIndex(models, outputDir) {
+        // Backward-compat aggregator: `from an5_models import User` keeps working.
+        // New code can also import directly: `from .User import User, UserRow`.
+        // Supports both package-relative (`python -m`) and top-level (`sys.path`
+        // pointing at the output dir) imports via try/except fallback.
+        let content = '# This file is auto-generated. Do not edit directly.\n';
+        content += '"""Backward-compat aggregator re-exporting per-model entity files."""\n';
+        for (const model of models) {
+            content += `try:\n`;
+            content += `    from .${model.name} import ${model.name}, ${model.name}Row, _${model.name}Required\n`;
+            content += `except ImportError:\n`;
+            content += `    from ${model.name} import ${model.name}, ${model.name}Row, _${model.name}Required\n`;
+        }
+        if (models.length > 0) {
+            content += '\n__all__ = [\n';
+            for (const model of models) {
+                content += `    "${model.name}", "${model.name}Row", "_${model.name}Required",\n`;
+            }
+            content += ']\n';
+        }
+        else {
+            content += '\n__all__ = []\n';
         }
         fs_1.default.writeFileSync(path_1.default.join(outputDir, 'an5_models.py'), content);
     }
     generateClient(models, outputDir) {
         let content = '# This file is auto-generated. Do not edit directly.\n';
         content += 'import os\n';
-        content += 'from typing import Dict, List, Optional, Any, Callable\n\n';
-        content += 'try:\n';
-        content += '    from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n';
-        content += 'except ImportError:\n';
-        content += '    from .an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n\n';
+        content += 'from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING\n\n';
+        // Runtime adapter comes from the `an5-adapters` PyPI package
+        // (module `an5_adapter`). There is no local adapter file in the
+        // generated output dir, so no relative-import fallback here — a
+        // relative fallback would be unresolvable and trip Pylance
+        // `reportMissingImports` on every generated client.
+        content += 'from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n\n';
         content += 'try:\n';
         content += '    from .an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n';
         content += 'except ImportError:\n';
         content += '    from an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n\n';
+        if (models.length > 0) {
+            content += 'if TYPE_CHECKING:\n';
+            for (const m of models) {
+                content += '    try:\n';
+                content += `        from .${m.name} import ${m.name}Row\n`;
+                content += '    except ImportError:\n';
+                content += `        from .an5_models import ${m.name}Row  # fallback aggregator\n`;
+            }
+            content += '\n';
+        }
         content += 'class An5Client:\n';
         content += '    """AN5 Python ORM Client - type-safe database access.\n\n';
         content += '    Usage:\n';
@@ -251,13 +321,13 @@ class PythonGenerator {
             const propName = this.toSnakeCase(model.name) + 's';
             const singleName = this.toSnakeCase(model.name);
             content += `        client = AdapterTableClient(self.adapter, "${model.name}")\n`;
-            content += `        self.${model.name}: AdapterTableClient = client\n`;
-            content += `        self.${model.name}s: AdapterTableClient = client\n`;
-            content += `        self.${singleName}: AdapterTableClient = client\n`;
-            content += `        self.${propName}: AdapterTableClient = client\n`;
+            content += `        self.${model.name}: AdapterTableClient["${model.name}Row"] = client\n`;
+            content += `        self.${model.name}s: AdapterTableClient["${model.name}Row"] = client\n`;
+            content += `        self.${singleName}: AdapterTableClient["${model.name}Row"] = client\n`;
+            content += `        self.${propName}: AdapterTableClient["${model.name}Row"] = client\n`;
         }
         content += '\n';
-        content += '    def __getattr__(self, name: str) -> AdapterTableClient:\n';
+        content += '    def __getattr__(self, name: str) -> AdapterTableClient[Any]:\n';
         content += '        return self.adapter.table(name)\n\n';
         content += '    def query_raw(self, sql: str, *params) -> List[Dict]:\n';
         content += '        return self.adapter.query_raw(sql, *params)\n\n';

@@ -7,7 +7,8 @@ export declare class PythonGenerator {
     private generateOrmTypes;
     private generateMetadata;
     private mapPyType;
-    private generateModels;
+    private generateModelFile;
+    private generateModelsIndex;
     private generateClient;
     private generateInit;
     private getAllPropertyVariations;

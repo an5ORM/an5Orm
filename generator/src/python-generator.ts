@@ -14,16 +14,21 @@ export class PythonGenerator {
     // 1. Generate an5_metadata.py
     this.generateMetadata(models);
 
-    // 2. Generate an5_models.py
-    this.generateModels(models, outputDir);
+    // 2. Generate per-model entity files like dotnet (<Model>.py)
+    for (const model of models) {
+      this.generateModelFile(model, outputDir);
+    }
 
-    // 3. Generate an5_orm_types.py - type-safe ORM filter/args dataclasses
+    // 3. Generate an5_models.py as backward-compat aggregator
+    this.generateModelsIndex(models, outputDir);
+
+    // 4. Generate an5_orm_types.py - type-safe ORM filter/args dataclasses
     this.generateOrmTypes(models, outputDir);
 
-    // 4. Generate an5_client.py
+    // 5. Generate an5_client.py
     this.generateClient(models, outputDir);
 
-    // 5. Generate __init__.py
+    // 6. Generate __init__.py
     this.generateInit(models, outputDir);
   }
 
@@ -198,23 +203,22 @@ export class PythonGenerator {
     return 'str';
   }
 
-  private generateModels(models: Model[], outputDir: string) {
+  private generateModelFile(model: Model, outputDir: string) {
+    // Single-entity file like dotnet `${model.name}.cs` / typescript `${model.name}.ts`.
+    // Contains the @dataclass entity + TypedDict row shapes for that model only.
     let content = '# This file is auto-generated. Do not edit directly.\n';
     content += 'from dataclasses import dataclass, field\n';
     content += 'from typing import Optional, List, Any, TypedDict\n';
     content += 'from datetime import datetime\n\n';
 
-    for (const model of models) {
-      if (model.description) {
-        content += `"""${model.description}"""\n`;
-      }
-      content += `@dataclass\nclass ${model.name}:\n`;
+    if (model.description) {
+      content += `"""${model.description}"""\n`;
+    }
+    content += `@dataclass\nclass ${model.name}:\n`;
 
-      if (model.fields.length === 0 && model.relations.length === 0) {
-        content += '    pass\n\n';
-        continue;
-      }
-
+    if (model.fields.length === 0 && model.relations.length === 0) {
+      content += '    pass\n\n';
+    } else {
       // Required fields first
       const required = model.fields.filter(f => !f.isOptional && !f.hasDefault);
       const optionals = model.fields.filter(f => f.isOptional || f.hasDefault);
@@ -273,6 +277,32 @@ export class PythonGenerator {
       content += '\n';
     }
 
+    fs.writeFileSync(path.join(outputDir, `${model.name}.py`), content);
+  }
+
+  private generateModelsIndex(models: Model[], outputDir: string) {
+    // Backward-compat aggregator: `from an5_models import User` keeps working.
+    // New code can also import directly: `from .User import User, UserRow`.
+    // Supports both package-relative (`python -m`) and top-level (`sys.path`
+    // pointing at the output dir) imports via try/except fallback.
+    let content = '# This file is auto-generated. Do not edit directly.\n';
+    content += '"""Backward-compat aggregator re-exporting per-model entity files."""\n';
+    for (const model of models) {
+      content += `try:\n`;
+      content += `    from .${model.name} import ${model.name}, ${model.name}Row, _${model.name}Required\n`;
+      content += `except ImportError:\n`;
+      content += `    from ${model.name} import ${model.name}, ${model.name}Row, _${model.name}Required\n`;
+    }
+    if (models.length > 0) {
+      content += '\n__all__ = [\n';
+      for (const model of models) {
+        content += `    "${model.name}", "${model.name}Row", "_${model.name}Required",\n`;
+      }
+      content += ']\n';
+    } else {
+      content += '\n__all__ = []\n';
+    }
+
     fs.writeFileSync(path.join(outputDir, 'an5_models.py'), content);
   }
 
@@ -281,10 +311,12 @@ export class PythonGenerator {
     content += 'import os\n';
     content += 'from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING\n\n';
 
-    content += 'try:\n';
-    content += '    from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n';
-    content += 'except ImportError:\n';
-    content += '    from .an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n\n';
+    // Runtime adapter comes from the `an5-adapters` PyPI package
+    // (module `an5_adapter`). There is no local adapter file in the
+    // generated output dir, so no relative-import fallback here — a
+    // relative fallback would be unresolvable and trip Pylance
+    // `reportMissingImports` on every generated client.
+    content += 'from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n\n';
 
     content += 'try:\n';
     content += '    from .an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n';
@@ -292,12 +324,14 @@ export class PythonGenerator {
     content += '    from an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n\n';
 
     if (models.length > 0) {
-      const rowTypes = models.map(m => `${m.name}Row`).join(', ');
       content += 'if TYPE_CHECKING:\n';
-      content += '    try:\n';
-      content += `        from an5_models import ${rowTypes}\n`;
-      content += '    except ImportError:\n';
-      content += `        from .an5_models import ${rowTypes}\n\n`;
+      for (const m of models) {
+        content += '    try:\n';
+        content += `        from .${m.name} import ${m.name}Row\n`;
+        content += '    except ImportError:\n';
+        content += `        from .an5_models import ${m.name}Row  # fallback aggregator\n`;
+      }
+      content += '\n';
     }
 
     content += 'class An5Client:\n';
