@@ -201,7 +201,7 @@ export class PythonGenerator {
   private generateModels(models: Model[], outputDir: string) {
     let content = '# This file is auto-generated. Do not edit directly.\n';
     content += 'from dataclasses import dataclass, field\n';
-    content += 'from typing import Optional, List, Any\n';
+    content += 'from typing import Optional, List, Any, TypedDict\n';
     content += 'from datetime import datetime\n\n';
 
     for (const model of models) {
@@ -242,6 +242,23 @@ export class PythonGenerator {
       }
 
       content += '\n';
+
+      // TypedDict row shape: mirrors what the runtime actually returns
+      // (plain dicts), so `AdapterTableClient["<Model>Row"]` delegates
+      // type-check. total=False keeps partial selects valid.
+      content += `class ${model.name}Row(TypedDict, total=False):\n`;
+      content += `    """Row shape returned for ${model.name} queries."""\n`;
+      if (model.fields.length === 0 && model.relations.length === 0) {
+        content += '    pass\n';
+      }
+      for (const f of model.fields) {
+        content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+      }
+      for (const rel of model.relations) {
+        const relName = this.toSnakeCase(rel.name);
+        content += rel.isArray ? `    ${relName}: List[Any]\n` : `    ${relName}: Any\n`;
+      }
+      content += '\n';
     }
 
     fs.writeFileSync(path.join(outputDir, 'an5_models.py'), content);
@@ -250,7 +267,7 @@ export class PythonGenerator {
   private generateClient(models: Model[], outputDir: string) {
     let content = '# This file is auto-generated. Do not edit directly.\n';
     content += 'import os\n';
-    content += 'from typing import Dict, List, Optional, Any, Callable\n\n';
+    content += 'from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING\n\n';
 
     content += 'try:\n';
     content += '    from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n';
@@ -261,6 +278,15 @@ export class PythonGenerator {
     content += '    from .an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n';
     content += 'except ImportError:\n';
     content += '    from an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n\n';
+
+    if (models.length > 0) {
+      const rowTypes = models.map(m => `${m.name}Row`).join(', ');
+      content += 'if TYPE_CHECKING:\n';
+      content += '    try:\n';
+      content += `        from an5_models import ${rowTypes}\n`;
+      content += '    except ImportError:\n';
+      content += `        from .an5_models import ${rowTypes}\n\n`;
+    }
 
     content += 'class An5Client:\n';
     content += '    """AN5 Python ORM Client - type-safe database access.\n\n';
@@ -281,14 +307,14 @@ export class PythonGenerator {
       const propName = this.toSnakeCase(model.name) + 's';
       const singleName = this.toSnakeCase(model.name);
       content += `        client = AdapterTableClient(self.adapter, "${model.name}")\n`;
-      content += `        self.${model.name}: AdapterTableClient = client\n`;
-      content += `        self.${model.name}s: AdapterTableClient = client\n`;
-      content += `        self.${singleName}: AdapterTableClient = client\n`;
-      content += `        self.${propName}: AdapterTableClient = client\n`;
+      content += `        self.${model.name}: AdapterTableClient["${model.name}Row"] = client\n`;
+      content += `        self.${model.name}s: AdapterTableClient["${model.name}Row"] = client\n`;
+      content += `        self.${singleName}: AdapterTableClient["${model.name}Row"] = client\n`;
+      content += `        self.${propName}: AdapterTableClient["${model.name}Row"] = client\n`;
     }
 
     content += '\n';
-    content += '    def __getattr__(self, name: str) -> AdapterTableClient:\n';
+    content += '    def __getattr__(self, name: str) -> AdapterTableClient[Any]:\n';
     content += '        return self.adapter.table(name)\n\n';
     content += '    def query_raw(self, sql: str, *params) -> List[Dict]:\n';
     content += '        return self.adapter.query_raw(sql, *params)\n\n';
