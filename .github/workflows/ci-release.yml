@@ -31,15 +31,29 @@ jobs:
         run: node test/unit.test.js
       - name: Run generator tests
         run: |
-          mkdir -p an5Schema
-          cat > an5Schema/CiSmoke.an5 <<'EOF'
+          mkdir -p ci-smoke-schema
+          cat > ci-smoke-schema/CiSmoke.an5 <<'EOF'
           model CiSmoke {
             id    NVARCHAR(100) @id @default(uuid())
             email NVARCHAR(255) @unique
             name  NVARCHAR(255)?
           }
           EOF
+          cat > an5Orm.config.js <<'EOF'
+          // CI-only: redirect generator outputs to a throwaway dir so the
+          // standalone repo tree stays pristine for the smoke test below.
+          module.exports = {
+            schemaDir: 'ci-smoke-schema',
+            outputs: {
+              typescript: { outputDir: 'ci-smoke/an5Client/typescript', metadataFile: 'ci-smoke/an5Client/typescript/an5Metadata.ts' },
+              python: { metadataFile: 'ci-smoke/an5Client/python/an5_metadata.py' },
+              dotnet: { outputDir: 'ci-smoke/an5Client/dotnet' },
+              golang: { outputDir: 'ci-smoke/an5Client/golang' },
+            },
+          };
+          EOF
           npm run generate && node test/generator.test.js
+          rm -rf ci-smoke-schema an5Orm.config.js ci-smoke
       - name: Run smoke test
         run: npm test
       - name: Build Python package
