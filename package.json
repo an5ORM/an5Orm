@@ -1,6 +1,6 @@
 {
   "name": "@an5/orm",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, .NET (C#), and Go.",
   "license": "MIT",
   "main": "dist/index.js",
@@ -39,7 +39,7 @@
     "test:integration:live": "node test/live-db.integration.test.js"
   },
   "dependencies": {
-    "@an5/adapters": "^0.2.5",
+    "@an5/adapters": "^0.2.6",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "mssql": "^12.5.5"
