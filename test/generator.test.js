@@ -330,15 +330,27 @@ testIf(hasAn5Client, 'an5Client/rust crate exists with models and client builder
   assertIncludes(modelsContent, 'pub struct User');
   assertIncludes(modelsContent, 'UserWhereInput');
   assertIncludes(modelsContent, 'UserFindManyArgs');
+  assertIncludes(modelsContent, 'UserUpdateArgs');
 
+  // Typed, executing handles replace the old SQL-only builders.
   const clientContent = fs.readFileSync(path.join(rustDir, 'src', 'client.rs'), 'utf8');
   assertIncludes(clientContent, 'pub struct An5Client');
-  assertIncludes(clientContent, 'find_many_');
   assertIncludes(clientContent, 'cosine_similarity');
+  assertIncludes(clientContent, 'use an5_adapters::');
+  assertIncludes(clientContent, 'pub fn user(&self) -> UserTable');
+  assertIncludes(clientContent, 'pub struct UserTable');
+  assertIncludes(clientContent, 'pub async fn find_many(&self, args: &UserFindManyArgs)');
+  assertIncludes(clientContent, 'pub async fn create(&self, data: &UserCreateInput)');
+  assertIncludes(clientContent, '.table("User")');
+  assertIncludes(clientContent, 'pub fn table(&self, name: &str) -> TableClient');
+
+  // Schema defaults make the column optional, matching CreateInput.
+  assertIncludes(modelsContent, 'pub created_at: Option<DateTime<Utc>>');
 
   const cargoContent = fs.readFileSync(path.join(rustDir, 'Cargo.toml'), 'utf8');
   assertIncludes(cargoContent, 'name = "an5-client"');
   assertIncludes(cargoContent, 'serde');
+  assertIncludes(cargoContent, 'an5-adapters');
 });
 
 test('rust generator emits postgres placeholder and serde derives', () => {

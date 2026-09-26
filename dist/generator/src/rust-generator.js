@@ -32,13 +32,14 @@ class RustGenerator {
 name = "an5-client"
 version = "0.1.0"
 edition = "2021"
-description = "Generated AN5 ORM client for Rust — type-safe models, filters and query builders."
+description = "Generated AN5 ORM client for Rust — typed models, filters and an adapter-backed ORM client."
 license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
+an5-adapters = "0.1"
 `;
         fs_1.default.writeFileSync(path_1.default.join(this.outputDir, 'Cargo.toml'), content);
     }
@@ -125,6 +126,69 @@ impl Dialect {
             Dialect::Postgres => format!("\${}", n),
             _ => "?".to_string(),
         }
+    }
+}
+
+/// A typed bind parameter produced by the query builders.
+///
+/// Values keep their Rust type so drivers can bind them natively (a Bool
+/// must not become the string "true" when the column is an integer).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BindValue {
+    Text(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    /// RFC 3339 timestamp.
+    DateTime(String),
+}
+
+impl BindValue {
+    /// Textual rendering, useful for logging or drivers that take strings.
+    pub fn as_str(&self) -> String {
+        match self {
+            BindValue::Text(v) => v.clone(),
+            BindValue::Int(v) => v.to_string(),
+            BindValue::Float(v) => v.to_string(),
+            BindValue::Bool(v) => v.to_string(),
+            BindValue::DateTime(v) => v.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for BindValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl From<&str> for BindValue {
+    fn from(v: &str) -> Self {
+        BindValue::Text(v.to_string())
+    }
+}
+
+impl From<String> for BindValue {
+    fn from(v: String) -> Self {
+        BindValue::Text(v)
+    }
+}
+
+impl From<i64> for BindValue {
+    fn from(v: i64) -> Self {
+        BindValue::Int(v)
+    }
+}
+
+impl From<f64> for BindValue {
+    fn from(v: f64) -> Self {
+        BindValue::Float(v)
+    }
+}
+
+impl From<bool> for BindValue {
+    fn from(v: bool) -> Self {
+        BindValue::Bool(v)
     }
 }
 
@@ -227,50 +291,50 @@ pub(crate) fn push_string_filter(
     col: &str,
     f: &StringFilter,
     dialect: Dialect,
-    args: &mut Vec<String>,
+    args: &mut Vec<BindValue>,
     parts: &mut Vec<String>,
 ) {
-    let ph = |args: &Vec<String>| dialect.placeholder(args.len() + 1);
+    let ph = |args: &Vec<BindValue>| dialect.placeholder(args.len() + 1);
     if let Some(v) = &f.equals {
-        args.push(v.clone());
+        args.push(BindValue::Text(v.clone()));
         parts.push(format!("{} = {}", col, ph(args)));
     }
     if let Some(v) = &f.not {
-        args.push(v.clone());
+        args.push(BindValue::Text(v.clone()));
         parts.push(format!("{} <> {}", col, ph(args)));
     }
     if let Some(v) = &f.contains {
-        args.push(format!("%{}%", v));
+        args.push(BindValue::Text(format!("%{}%", v)));
         parts.push(format!("{} LIKE {}", col, ph(args)));
     }
     if let Some(v) = &f.starts_with {
-        args.push(format!("{}%", v));
+        args.push(BindValue::Text(format!("{}%", v)));
         parts.push(format!("{} LIKE {}", col, ph(args)));
     }
     if let Some(v) = &f.ends_with {
-        args.push(format!("%{}", v));
+        args.push(BindValue::Text(format!("%{}", v)));
         parts.push(format!("{} LIKE {}", col, ph(args)));
     }
     if let Some(v) = &f.gt {
-        args.push(v.clone());
+        args.push(BindValue::Text(v.clone()));
         parts.push(format!("{} > {}", col, ph(args)));
     }
     if let Some(v) = &f.gte {
-        args.push(v.clone());
+        args.push(BindValue::Text(v.clone()));
         parts.push(format!("{} >= {}", col, ph(args)));
     }
     if let Some(v) = &f.lt {
-        args.push(v.clone());
+        args.push(BindValue::Text(v.clone()));
         parts.push(format!("{} < {}", col, ph(args)));
     }
     if let Some(v) = &f.lte {
-        args.push(v.clone());
+        args.push(BindValue::Text(v.clone()));
         parts.push(format!("{} <= {}", col, ph(args)));
     }
     if !f.in_list.is_empty() {
         let mut phs = Vec::new();
         for v in &f.in_list {
-            args.push(v.clone());
+            args.push(BindValue::Text(v.clone()));
             phs.push(ph(args));
         }
         parts.push(format!("{} IN ({})", col, phs.join(", ")));
@@ -278,7 +342,7 @@ pub(crate) fn push_string_filter(
     if !f.not_in.is_empty() {
         let mut phs = Vec::new();
         for v in &f.not_in {
-            args.push(v.clone());
+            args.push(BindValue::Text(v.clone()));
             phs.push(ph(args));
         }
         parts.push(format!("{} NOT IN ({})", col, phs.join(", ")));
@@ -289,38 +353,38 @@ pub(crate) fn push_int_filter(
     col: &str,
     f: &IntFilter,
     dialect: Dialect,
-    args: &mut Vec<String>,
+    args: &mut Vec<BindValue>,
     parts: &mut Vec<String>,
 ) {
-    let ph = |args: &Vec<String>| dialect.placeholder(args.len() + 1);
+    let ph = |args: &Vec<BindValue>| dialect.placeholder(args.len() + 1);
     if let Some(v) = f.equals {
-        args.push(v.to_string());
+        args.push(BindValue::Int(v));
         parts.push(format!("{} = {}", col, ph(args)));
     }
     if let Some(v) = f.not {
-        args.push(v.to_string());
+        args.push(BindValue::Int(v));
         parts.push(format!("{} <> {}", col, ph(args)));
     }
     if let Some(v) = f.gt {
-        args.push(v.to_string());
+        args.push(BindValue::Int(v));
         parts.push(format!("{} > {}", col, ph(args)));
     }
     if let Some(v) = f.gte {
-        args.push(v.to_string());
+        args.push(BindValue::Int(v));
         parts.push(format!("{} >= {}", col, ph(args)));
     }
     if let Some(v) = f.lt {
-        args.push(v.to_string());
+        args.push(BindValue::Int(v));
         parts.push(format!("{} < {}", col, ph(args)));
     }
     if let Some(v) = f.lte {
-        args.push(v.to_string());
+        args.push(BindValue::Int(v));
         parts.push(format!("{} <= {}", col, ph(args)));
     }
     if !f.in_list.is_empty() {
         let mut phs = Vec::new();
         for v in &f.in_list {
-            args.push(v.to_string());
+            args.push(BindValue::Int(*v));
             phs.push(ph(args));
         }
         parts.push(format!("{} IN ({})", col, phs.join(", ")));
@@ -331,33 +395,41 @@ pub(crate) fn push_number_filter(
     col: &str,
     f: &NumberFilter,
     dialect: Dialect,
-    args: &mut Vec<String>,
+    args: &mut Vec<BindValue>,
     parts: &mut Vec<String>,
 ) {
-    let ph = |args: &Vec<String>| dialect.placeholder(args.len() + 1);
+    let ph = |args: &Vec<BindValue>| dialect.placeholder(args.len() + 1);
     if let Some(v) = f.equals {
-        args.push(v.to_string());
+        args.push(BindValue::Float(v));
         parts.push(format!("{} = {}", col, ph(args)));
     }
     if let Some(v) = f.not {
-        args.push(v.to_string());
+        args.push(BindValue::Float(v));
         parts.push(format!("{} <> {}", col, ph(args)));
     }
     if let Some(v) = f.gt {
-        args.push(v.to_string());
+        args.push(BindValue::Float(v));
         parts.push(format!("{} > {}", col, ph(args)));
     }
     if let Some(v) = f.gte {
-        args.push(v.to_string());
+        args.push(BindValue::Float(v));
         parts.push(format!("{} >= {}", col, ph(args)));
     }
     if let Some(v) = f.lt {
-        args.push(v.to_string());
+        args.push(BindValue::Float(v));
         parts.push(format!("{} < {}", col, ph(args)));
     }
     if let Some(v) = f.lte {
-        args.push(v.to_string());
+        args.push(BindValue::Float(v));
         parts.push(format!("{} <= {}", col, ph(args)));
+    }
+    if !f.in_list.is_empty() {
+        let mut phs = Vec::new();
+        for v in &f.in_list {
+            args.push(BindValue::Float(*v));
+            phs.push(ph(args));
+        }
+        parts.push(format!("{} IN ({})", col, phs.join(", ")));
     }
 }
 
@@ -365,32 +437,32 @@ pub(crate) fn push_datetime_filter(
     col: &str,
     f: &DateTimeFilter,
     dialect: Dialect,
-    args: &mut Vec<String>,
+    args: &mut Vec<BindValue>,
     parts: &mut Vec<String>,
 ) {
-    let ph = |args: &Vec<String>| dialect.placeholder(args.len() + 1);
+    let ph = |args: &Vec<BindValue>| dialect.placeholder(args.len() + 1);
     if let Some(v) = &f.equals {
-        args.push(v.to_rfc3339());
+        args.push(BindValue::DateTime(v.to_rfc3339()));
         parts.push(format!("{} = {}", col, ph(args)));
     }
     if let Some(v) = &f.not {
-        args.push(v.to_rfc3339());
+        args.push(BindValue::DateTime(v.to_rfc3339()));
         parts.push(format!("{} <> {}", col, ph(args)));
     }
     if let Some(v) = &f.gt {
-        args.push(v.to_rfc3339());
+        args.push(BindValue::DateTime(v.to_rfc3339()));
         parts.push(format!("{} > {}", col, ph(args)));
     }
     if let Some(v) = &f.gte {
-        args.push(v.to_rfc3339());
+        args.push(BindValue::DateTime(v.to_rfc3339()));
         parts.push(format!("{} >= {}", col, ph(args)));
     }
     if let Some(v) = &f.lt {
-        args.push(v.to_rfc3339());
+        args.push(BindValue::DateTime(v.to_rfc3339()));
         parts.push(format!("{} < {}", col, ph(args)));
     }
     if let Some(v) = &f.lte {
-        args.push(v.to_rfc3339());
+        args.push(BindValue::DateTime(v.to_rfc3339()));
         parts.push(format!("{} <= {}", col, ph(args)));
     }
 }
@@ -415,12 +487,16 @@ pub(crate) fn push_datetime_filter(
             s.push(`#[derive(Debug, Clone, Serialize, Deserialize)]`);
             s.push(`pub struct ${name} {`);
             for (const f of model.fields) {
-                const rsType = this.mapRustType(f.type, f.isOptional);
+                // A field with a schema default (`@default(now())`) may come back NULL
+                // when the caller never set it, so it is optional here just like in
+                // CreateInput. Matches the Python generator's required-field rule.
+                const isOptional = f.isOptional || f.hasDefault;
+                const rsType = this.mapRustType(f.type, isOptional);
                 const snake = this.toSnakeCase(f.name);
                 if (f.description) {
                     s.push(`    /// ${f.description}`);
                 }
-                if (f.isOptional) {
+                if (isOptional) {
                     s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
                 }
                 s.push(`    pub ${snake}: ${rsType},`);
@@ -519,11 +595,20 @@ pub(crate) fn push_datetime_filter(
             s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
             s.push(`    pub order_by: Option<${name}OrderByInput>,`);
             s.push(`}\n`);
-            s.push(`/// ORM-style args for ${name}.find_unique() / count().`);
+            s.push(`/// ORM-style args for ${name}.find_unique() / count() / delete().`);
             s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
             s.push(`pub struct ${name}FindUniqueArgs {`);
             s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
             s.push(`    pub where_: Option<${name}WhereInput>,`);
+            s.push(`}\n`);
+            // UpdateArgs carries the typed input alongside the where clause.
+            s.push(`/// ORM-style args for ${name}.update().`);
+            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+            s.push(`pub struct ${name}UpdateArgs {`);
+            s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub where_: Option<${name}WhereInput>,`);
+            s.push(`    #[serde(default)]`);
+            s.push(`    pub data: ${name}UpdateInput,`);
             s.push(`}\n`);
         }
         return s.join('\n') + '\n';
@@ -544,6 +629,21 @@ pub(crate) fn push_datetime_filter(
             }
         }
         content += `        _ => None,\n    }\n}\n\n`;
+        // Full alias → table map, handed to the adapter so `db.table("user")`
+        // resolves exactly like `db.user` does in the other languages.
+        content += `/// Every model alias mapped to its physical table, for adapter registration.\n`;
+        content += `pub fn model_to_table_map() -> Vec<(&'static str, &'static str)> {\n    vec![\n`;
+        const seenMap = new Set();
+        for (const model of models) {
+            const full = `[${model.schemaName}].[${model.tableName}]`;
+            for (const prop of this.getAllPropertyVariations(model.name)) {
+                if (seenMap.has(prop))
+                    continue;
+                seenMap.add(prop);
+                content += `        ("${prop}", "${full}"),\n`;
+            }
+        }
+        content += `    ]\n}\n\n`;
         content += `/// Primary-key column (snake_case) for a model alias.\n`;
         content += `pub fn model_primary_key(model: &str) -> Option<&'static str> {\n    match model {\n`;
         const seenPk = new Set();
@@ -567,146 +667,294 @@ pub(crate) fn push_datetime_filter(
     }
     // ─── src/client.rs ─────────────────────────────────────────────────────────
     generateClientRs(models) {
-        let content = `//! Query builders + vector math for the AN5 Rust client.\n//! Code generated by an5ORM. DO NOT EDIT.\n\nuse crate::filters::*;\nuse crate::metadata::{model_primary_key, model_to_table};\nuse crate::models::*;\n\n/// Main ORM context. Owns the connection string + dialect.\n#[derive(Debug, Clone)]\npub struct An5Client {\n    pub connection_string: String,\n    pub dialect: Dialect,\n}\n\nimpl An5Client {\n    pub fn new(connection_string: Option<String>) -> Self {\n        let cs = connection_string.unwrap_or_else(crate::config::get_default_connection_string);\n        let dialect = Dialect::detect(&cs);\n        Self {\n            connection_string: cs,\n            dialect,\n        }\n    }\n\n    pub fn table_name(&self, model: &str) -> Option<&'static str> {\n        model_to_table(model)\n    }\n\n    pub fn primary_key(&self, model: &str) -> Option<&'static str> {\n        model_primary_key(model)\n    }\n\n    pub fn quote_ident(&self, name: &str) -> String {\n        self.dialect.quote_ident(name)\n    }\n\n    pub fn placeholder(&self, n: usize) -> String {\n        self.dialect.placeholder(n)\n    }\n}\n\n/// Cosine similarity in [0,1]-ish range; 1.0 == identical direction.\npub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {\n    if a.len() != b.len() || a.is_empty() {\n        return 0.0;\n    }\n    let mut dot = 0.0;\n    let mut m1 = 0.0;\n    let mut m2 = 0.0;\n    for i in 0..a.len() {\n        dot += a[i] * b[i];\n        m1 += a[i] * a[i];\n        m2 += b[i] * b[i];\n    }\n    if m1 == 0.0 || m2 == 0.0 {\n        return 0.0;\n    }\n    dot / (m1.sqrt() * m2.sqrt())\n}\n\n/// Euclidean distance between two vectors.\npub fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {\n    a.iter()\n        .zip(b.iter())\n        .map(|(x, y)| (x - y) * (x - y))\n        .sum::<f64>()\n        .sqrt()\n}\n\n/// Dot product between two vectors.\npub fn dot_product(a: &[f64], b: &[f64]) -> f64 {\n    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()\n}\n\n/// Distance wrapper honouring the AN5 distance metric names.\npub fn vector_distance(a: &[f64], b: &[f64], metric: &str) -> f64 {\n    match metric.to_lowercase().as_str() {\n        "euclidean" => euclidean_distance(a, b),\n        "dot" => -dot_product(a, b),\n        _ => 1.0 - cosine_similarity(a, b),\n    }\n}\n\n`;
+        let content = `//! Typed model handles, SQL builders and vector math for the AN5 Rust client.
+//! Code generated by an5ORM. DO NOT EDIT.
+
+use an5_adapters::{
+    AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, RowMap, TableClient,
+    UpdateArgs,
+};
+use serde::de::DeserializeOwned;
+
+use crate::filters::*;
+use crate::metadata::{model_primary_key, model_to_table, model_to_table_map};
+use crate::models::*;
+
+/// Error type shared with the adapter runtime.
+pub type Result<T> = an5_adapters::Result<T>;
+
+/// Serializes an optional ORM input into the JSON shape the adapter expects.
+fn to_value<T: serde::Serialize>(input: &Option<T>) -> Result<Option<serde_json::Value>> {
+    match input {
+        Some(v) => Ok(Some(serde_json::to_value(v)?)),
+        None => Ok(None),
+    }
+}
+
+/// Serializes an input into the row map used for writes.
+fn to_map<T: serde::Serialize>(input: &T) -> Result<RowMap> {
+    Ok(serde_json::to_value(input)?
+        .as_object()
+        .cloned()
+        .unwrap_or_default())
+}
+
+/// Converts an adapter row into a generated model.
+fn deserialize_row<T: DeserializeOwned>(row: RowMap) -> Result<T> {
+    Ok(serde_json::from_value(serde_json::Value::Object(row))?)
+}
+
+/// Converts adapter rows into generated models.
+fn deserialize_rows<T: DeserializeOwned>(rows: Vec<RowMap>) -> Result<Vec<T>> {
+    rows.into_iter().map(deserialize_row).collect()
+}
+
+/// Main ORM context. Wraps the an5-adapters runtime.
+#[derive(Clone)]
+pub struct An5Client {
+    adapter: An5Adapter,
+}
+
+impl An5Client {
+    /// Connect and register this client's model to table mapping.
+    pub async fn connect(connection_string: &str) -> Result<Self> {
+        let adapter = An5Adapter::connect(connection_string).await?;
+        Ok(Self::from_adapter(adapter))
+    }
+
+    /// Wrap an existing adapter, registering this client's metadata.
+    pub fn from_adapter(adapter: An5Adapter) -> Self {
+        let mut map = std::collections::HashMap::new();
+        for (alias, table) in model_to_table_map() {
+            map.insert(alias.to_string(), table.to_string());
+        }
+        adapter.set_metadata(AdapterMetadata {
+            model_to_table: map,
+            ..Default::default()
+        });
+        Self { adapter }
+    }
+
+    /// The underlying adapter, for raw SQL, views and transactions.
+    pub fn adapter(&self) -> &An5Adapter {
+        &self.adapter
+    }
+
+    /// Dynamic access by model name, the equivalent of \`db.table("User")\`.
+    pub fn table(&self, name: &str) -> TableClient {
+        self.adapter.table(name)
+    }
+
+    /// Point a model at a different physical table (schema-less engines).
+    pub fn with_table(self, model: &str, table: &str) -> Self {
+        self.adapter.add_table_override(model, table);
+        self
+    }
+
+    /// Resolve the table for a model.
+    pub fn table_name(&self, model: &str) -> Option<String> {
+        model_to_table(model).map(|t| t.to_string())
+    }
+
+    pub fn primary_key(&self, model: &str) -> Option<&'static str> {
+        model_primary_key(model)
+    }
+}
+
+/// Cosine similarity in [0,1]-ish range; 1.0 == identical direction.
+pub fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut m1 = 0.0;
+    let mut m2 = 0.0;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        m1 += a[i] * a[i];
+        m2 += b[i] * b[i];
+    }
+    if m1 == 0.0 || m2 == 0.0 {
+        return 0.0;
+    }
+    dot / (m1.sqrt() * m2.sqrt())
+}
+
+/// Euclidean distance between two vectors.
+pub fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y) * (x - y))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// Dot product between two vectors.
+pub fn dot_product(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+/// Distance honouring the AN5 metric names.
+pub fn vector_distance(a: &[f64], b: &[f64], metric: &str) -> f64 {
+    match metric.to_lowercase().as_str() {
+        "euclidean" => euclidean_distance(a, b),
+        "dot" => -dot_product(a, b),
+        _ => 1.0 - cosine_similarity(a, b),
+    }
+}
+
+/// Standalone SQL builder for callers that prefer to drive their own driver.
+#[derive(Clone)]
+pub struct SqlBuilder {
+    pub connection_string: String,
+    pub dialect: Dialect,
+}
+
+impl SqlBuilder {
+    pub fn new(connection_string: Option<String>) -> Self {
+        let cs = connection_string.unwrap_or_else(crate::config::get_default_connection_string);
+        let dialect = Dialect::detect(&cs);
+        Self {
+            connection_string: cs,
+            dialect,
+        }
+    }
+
+    pub fn table_name(&self, model: &str) -> Option<String> {
+        model_to_table(model).map(|t| t.to_string())
+    }
+
+    pub fn primary_key(&self, model: &str) -> Option<&'static str> {
+        model_primary_key(model)
+    }
+
+    pub fn quote_ident(&self, name: &str) -> String {
+        self.dialect.quote_ident(name)
+    }
+
+    pub fn placeholder(&self, n: usize) -> String {
+        self.dialect.placeholder(n)
+    }
+}
+
+`;
         for (const model of models) {
-            content += this.buildModelClientImpl(model);
+            content += this.buildModelRuntimeHandle(model);
         }
         fs_1.default.writeFileSync(path_1.default.join(this.outputDir, 'src', 'client.rs'), content);
     }
-    buildModelClientImpl(model) {
+    /**
+     * Typed, executing accessors for a model.
+     *
+     * Rust has no dynamic property access, so `db.user` cannot exist the way it
+     * does in TypeScript or Python. Following the Go generator (which emits a
+     * real `ctx.User` field), each model gets a generated method returning a
+     * typed handle whose queries run through the an5-adapters runtime.
+     */
+    buildModelRuntimeHandle(model) {
         const name = this.capitalize(model.name);
         const snake = this.toSnakeCase(model.name);
         const lines = [];
-        lines.push(`// ─── ${name} query builders ──────────────────────────────────────────────\n`);
-        // build where
-        lines.push(`fn build_where_${snake}(`);
-        lines.push(`    where_: &Option<${name}WhereInput>,`);
-        lines.push(`    dialect: Dialect,`);
-        lines.push(`    args: &mut Vec<String>,`);
-        lines.push(`) -> String {`);
-        lines.push(`    let Some(w) = where_ else { return String::new(); };`);
-        lines.push(`    let mut parts: Vec<String> = Vec::new();`);
-        // AND / OR / NOT
-        lines.push(`    if let Some(and_list) = &w.and {`);
-        lines.push(`        let mut sub = Vec::new();`);
-        lines.push(`        for item in and_list {`);
-        lines.push(`            let s = build_where_${snake}(&Some(item.clone()), dialect, args);`);
-        lines.push(`            if !s.is_empty() { sub.push(s); }`);
-        lines.push(`        }`);
-        lines.push(`        if !sub.is_empty() { parts.push(format!("({})", sub.join(" AND "))); }`);
-        lines.push(`    }`);
-        lines.push(`    if let Some(or_list) = &w.or {`);
-        lines.push(`        let mut sub = Vec::new();`);
-        lines.push(`        for item in or_list {`);
-        lines.push(`            let s = build_where_${snake}(&Some(item.clone()), dialect, args);`);
-        lines.push(`            if !s.is_empty() { sub.push(s); }`);
-        lines.push(`        }`);
-        lines.push(`        if !sub.is_empty() { parts.push(format!("({})", sub.join(" OR "))); }`);
-        lines.push(`    }`);
-        lines.push(`    if let Some(not) = &w.not {`);
-        lines.push(`        let s = build_where_${snake}(&Some((**not).clone()), dialect, args);`);
-        lines.push(`        if !s.is_empty() { parts.push(format!("NOT ({})", s)); }`);
-        lines.push(`    }`);
-        for (const f of model.fields) {
-            const fieldSnake = this.toSnakeCase(f.name);
-            const colExpr = `&dialect.quote_ident("${fieldSnake}")`;
-            const lower = f.type.toLowerCase();
-            if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset', 'timestamp', 'time'].includes(lower)) {
-                lines.push(`    if let Some(v) = &w.${fieldSnake} {`);
-                lines.push(`        let mut fp: Vec<String> = Vec::new();`);
-                lines.push(`        push_datetime_filter(${colExpr}, v, dialect, args, &mut fp);`);
-                lines.push(`        parts.extend(fp);`);
-                lines.push(`    }`);
-            }
-            else if (['bool', 'boolean', 'bit'].includes(lower)) {
-                lines.push(`    if let Some(v) = &w.${fieldSnake} {`);
-                lines.push(`        if let Some(eq) = v.equals {`);
-                lines.push(`            args.push(eq.to_string());`);
-                lines.push(`            parts.push(format!("{} = {}", ${colExpr}, dialect.placeholder(args.len())));`);
-                lines.push(`        }`);
-                lines.push(`    }`);
-            }
-            else if (['int', 'integer', 'smallint', 'tinyint', 'bigint', 'long', 'number'].includes(lower)) {
-                lines.push(`    if let Some(v) = &w.${fieldSnake} {`);
-                lines.push(`        let mut fp: Vec<String> = Vec::new();`);
-                lines.push(`        push_int_filter(${colExpr}, v, dialect, args, &mut fp);`);
-                lines.push(`        parts.extend(fp);`);
-                lines.push(`    }`);
-            }
-            else if (['float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower)) {
-                lines.push(`    if let Some(v) = &w.${fieldSnake} {`);
-                lines.push(`        let mut fp: Vec<String> = Vec::new();`);
-                lines.push(`        push_number_filter(${colExpr}, v, dialect, args, &mut fp);`);
-                lines.push(`        parts.extend(fp);`);
-                lines.push(`    }`);
-            }
-            else {
-                lines.push(`    if let Some(v) = &w.${fieldSnake} {`);
-                lines.push(`        let mut fp: Vec<String> = Vec::new();`);
-                lines.push(`        push_string_filter(${colExpr}, v, dialect, args, &mut fp);`);
-                lines.push(`        parts.extend(fp);`);
-                lines.push(`    }`);
-            }
-        }
-        lines.push(`    parts.join(" AND ")`);
-        lines.push(`}\n`);
-        // order by
-        lines.push(`fn build_order_by_${snake}(order_by: &Option<${name}OrderByInput>, dialect: Dialect) -> String {`);
-        lines.push(`    let Some(o) = order_by else { return String::new(); };`);
-        lines.push(`    let mut parts: Vec<String> = Vec::new();`);
-        for (const f of model.fields) {
-            const fieldSnake = this.toSnakeCase(f.name);
-            lines.push(`    if let Some(dir) = &o.${fieldSnake} {`);
-            lines.push(`        parts.push(format!("{} {}", dialect.quote_ident("${fieldSnake}"), dir.as_sql()));`);
-            lines.push(`    }`);
-        }
-        lines.push(`    if parts.is_empty() { String::new() } else { format!("ORDER BY {}", parts.join(", ")) }`);
-        lines.push(`}\n`);
-        // public select builder
+        lines.push(`/// Typed queries for ${name}. Obtained via \`An5Client::${snake}()\`.`);
+        lines.push(`#[derive(Clone)]`);
+        lines.push(`pub struct ${name}Table {`);
+        lines.push(`    db: An5Client,`);
+        lines.push(`}`);
+        lines.push(``);
         lines.push(`impl An5Client {`);
-        lines.push(`    /// Build a SELECT for ${name} — returns (sql, bind_args). Plug into sqlx / tiberius / rusqlite.`);
-        lines.push(`    pub fn find_many_${snake}_sql(&self, args: &${name}FindManyArgs) -> (String, Vec<String>) {`);
-        lines.push(`        let table = model_to_table("${model.name}").unwrap_or("[dbo].[${model.tableName}]");`);
-        lines.push(`        let mut bind: Vec<String> = Vec::new();`);
-        lines.push(`        let where_sql = build_where_${snake}(&args.where_, self.dialect, &mut bind);`);
-        lines.push(`        let order_sql = build_order_by_${snake}(&args.order_by, self.dialect);`);
-        lines.push(`        let cols = match &args.select {`);
-        lines.push(`            Some(list) if !list.is_empty() => list.iter().map(|c| self.quote_ident(c)).collect::<Vec<_>>().join(", "),`);
-        lines.push(`            _ => "*".to_string(),`);
-        lines.push(`        };`);
-        lines.push(`        let mut sql = format!("SELECT {} FROM {}", cols, table);`);
-        lines.push(`        if !where_sql.is_empty() { sql.push_str(&format!(" WHERE {}", where_sql)); }`);
-        lines.push(`        if !order_sql.is_empty() { sql.push_str(&format!(" {}", order_sql)); }`);
-        lines.push(`        match self.dialect {`);
-        lines.push(`            Dialect::Postgres | Dialect::Sqlite => {`);
-        lines.push(`                if let Some(t) = args.take { sql.push_str(&format!(" LIMIT {}", t)); }`);
-        lines.push(`                if args.skip > 0 { sql.push_str(&format!(" OFFSET {}", args.skip)); }`);
-        lines.push(`            }`);
-        lines.push(`            Dialect::Mssql => {`);
-        lines.push(`                if args.skip > 0 {`);
-        lines.push(`                    sql.push_str(&format!(" OFFSET {} ROWS", args.skip));`);
-        lines.push(`                    if let Some(t) = args.take { sql.push_str(&format!(" FETCH NEXT {} ROWS ONLY", t)); }`);
-        lines.push(`                } else if let Some(t) = args.take {`);
-        lines.push(`                    sql = sql.replacen("SELECT", &format!("SELECT TOP ({})", t), 1);`);
-        lines.push(`                }`);
-        lines.push(`            }`);
-        lines.push(`        }`);
-        lines.push(`        (sql, bind)`);
+        lines.push(`    /// Typed handle for ${name}.`);
+        lines.push(`    pub fn ${snake}(&self) -> ${name}Table {`);
+        lines.push(`        ${name}Table { db: self.clone() }`);
+        lines.push(`    }`);
+        lines.push(`}`);
+        lines.push(``);
+        lines.push(`impl ${name}Table {`);
+        lines.push(`    /// The underlying adapter, for raw SQL or transactions.`);
+        lines.push(`    pub fn adapter(&self) -> &An5Adapter { self.db.adapter() }`);
+        lines.push(``);
+        lines.push(`    pub async fn find_many(&self, args: &${name}FindManyArgs) -> Result<Vec<${name}>> {`);
+        lines.push(`        let rows = self`);
+        lines.push(`            .db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .find_many(&FindManyArgs {`);
+        lines.push(`                r#where: to_value(&args.where_)?,`);
+        lines.push(`                order_by: to_value(&args.order_by)?,`);
+        lines.push(`                take: args.take.unwrap_or(0),`);
+        lines.push(`                skip: args.skip,`);
+        lines.push(`                select: args.select.as_ref().map(|s| serde_json::json!(s)),`);
+        lines.push(`                ..Default::default()`);
+        lines.push(`            })`);
+        lines.push(`            .await?;`);
+        lines.push(`        deserialize_rows(rows)`);
         lines.push(`    }`);
         lines.push(``);
-        lines.push(`    /// Build a COUNT(*) for ${name}.`);
-        lines.push(`    pub fn count_${snake}_sql(&self, args: &${name}FindUniqueArgs) -> (String, Vec<String>) {`);
-        lines.push(`        let table = model_to_table("${model.name}").unwrap_or("[dbo].[${model.tableName}]");`);
-        lines.push(`        let mut bind: Vec<String> = Vec::new();`);
-        lines.push(`        let where_sql = build_where_${snake}(&args.where_, self.dialect, &mut bind);`);
-        lines.push(`        let mut sql = format!("SELECT COUNT(*) FROM {}", table);`);
-        lines.push(`        if !where_sql.is_empty() { sql.push_str(&format!(" WHERE {}", where_sql)); }`);
-        lines.push(`        (sql, bind)`);
+        lines.push(`    pub async fn find_first(&self, args: &${name}FindFirstArgs) -> Result<Option<${name}>> {`);
+        lines.push(`        let row = self`);
+        lines.push(`            .db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .find_first(&FindManyArgs {`);
+        lines.push(`                r#where: to_value(&args.where_)?,`);
+        lines.push(`                order_by: to_value(&args.order_by)?,`);
+        lines.push(`                ..Default::default()`);
+        lines.push(`            })`);
+        lines.push(`            .await?;`);
+        lines.push(`        match row {`);
+        lines.push(`            Some(r) => Ok(Some(deserialize_row(r)?)),`);
+        lines.push(`            None => Ok(None),`);
+        lines.push(`        }`);
         lines.push(`    }`);
-        lines.push(`}\n`);
+        lines.push(``);
+        lines.push(`    pub async fn find_unique(&self, args: &${name}FindUniqueArgs) -> Result<Option<${name}>> {`);
+        lines.push(`        let row = self`);
+        lines.push(`            .db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .find_unique(&FindManyArgs {`);
+        lines.push(`                r#where: to_value(&args.where_)?,`);
+        lines.push(`                ..Default::default()`);
+        lines.push(`            })`);
+        lines.push(`            .await?;`);
+        lines.push(`        match row {`);
+        lines.push(`            Some(r) => Ok(Some(deserialize_row(r)?)),`);
+        lines.push(`            None => Ok(None),`);
+        lines.push(`        }`);
+        lines.push(`    }`);
+        lines.push(``);
+        lines.push(`    pub async fn count(&self, args: &${name}FindUniqueArgs) -> Result<i64> {`);
+        lines.push(`        self.db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .count(&CountArgs { r#where: to_value(&args.where_)? })`);
+        lines.push(`            .await`);
+        lines.push(`    }`);
+        lines.push(``);
+        lines.push(`    pub async fn create(&self, data: &${name}CreateInput) -> Result<${name}> {`);
+        lines.push(`        let row = self`);
+        lines.push(`            .db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .create(&to_map(data)?)`);
+        lines.push(`            .await?;`);
+        lines.push(`        deserialize_row(row)`);
+        lines.push(`    }`);
+        lines.push(``);
+        lines.push(`    pub async fn update(&self, args: &${name}UpdateArgs) -> Result<u64> {`);
+        lines.push(`        self.db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .update(&UpdateArgs {`);
+        lines.push(`                r#where: to_value(&args.where_)?,`);
+        lines.push(`                data: serde_json::to_value(&args.data)?,`);
+        lines.push(`            })`);
+        lines.push(`            .await`);
+        lines.push(`    }`);
+        lines.push(``);
+        lines.push(`    pub async fn delete(&self, args: &${name}FindUniqueArgs) -> Result<u64> {`);
+        lines.push(`        self.db`);
+        lines.push(`            .table("${model.name}")`);
+        lines.push(`            .delete_many(&DeleteManyArgs { r#where: to_value(&args.where_)? })`);
+        lines.push(`            .await`);
+        lines.push(`    }`);
+        lines.push(`}`);
+        lines.push(``);
         return lines.join('\n') + '\n';
     }
-    // ─── Type mapping ──────────────────────────────────────────────────────────
     mapRustType(fieldType, isOptional) {
         const lower = fieldType.toLowerCase();
         let t = 'String';
