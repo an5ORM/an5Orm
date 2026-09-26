@@ -245,13 +245,25 @@ export class PythonGenerator {
 
       // TypedDict row shape: mirrors what the runtime actually returns
       // (plain dicts), so `AdapterTableClient["<Model>Row"]` delegates
-      // type-check. total=False keeps partial selects valid.
-      content += `class ${model.name}Row(TypedDict, total=False):\n`;
-      content += `    """Row shape returned for ${model.name} queries."""\n`;
-      if (model.fields.length === 0 && model.relations.length === 0) {
+      // type-check. Required keys stay required via a total=True base;
+      // everything else is optional (total=False), keeping partial
+      // selects valid without extra dependencies.
+      const rowRequired = model.fields.filter(f => !f.isOptional && !f.hasDefault);
+      const rowOptional = model.fields.filter(f => f.isOptional || f.hasDefault);
+      content += `class _${model.name}Required(TypedDict):\n`;
+      content += `    """Required keys of a ${model.name} row."""\n`;
+      if (rowRequired.length === 0) {
         content += '    pass\n';
       }
-      for (const f of model.fields) {
+      for (const f of rowRequired) {
+        content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+      }
+      content += `\nclass ${model.name}Row(_${model.name}Required, total=False):\n`;
+      content += `    """Row shape returned for ${model.name} queries."""\n`;
+      if (rowOptional.length === 0 && model.relations.length === 0) {
+        content += '    pass\n';
+      }
+      for (const f of rowOptional) {
         content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
       }
       for (const rel of model.relations) {
