@@ -5,6 +5,7 @@ import { MetadataGenerator } from './metadata-generator';
 import { PythonGenerator } from './python-generator';
 import { DotnetGenerator } from './dotnet-generator';
 import { GolangGenerator } from './golang-generator';
+import { RustGenerator } from './rust-generator';
 
 import fs from 'fs';
 
@@ -19,6 +20,24 @@ function clearGeneratedFiles(outputDir: string, extension: string) {
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) continue;
     if (entry.endsWith(extension)) {
+      fs.unlinkSync(fullPath);
+    }
+  }
+}
+
+function clearGeneratedPythonFiles(outputDir: string) {
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+    return;
+  }
+
+  // Delete generated .py files but preserve hand-maintained adapter.
+  const preserve = new Set(['an5_adapter.py']);
+  for (const entry of fs.readdirSync(outputDir)) {
+    const fullPath = path.join(outputDir, entry);
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) continue;
+    if (entry.endsWith('.py') && !preserve.has(entry)) {
       fs.unlinkSync(fullPath);
     }
   }
@@ -55,6 +74,7 @@ async function main() {
   const outputPythonMetadataPath = path.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
   const outputDotnetDir = path.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
   const outputGolangDir = path.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
+  const outputRustDir = path.resolve(rootDir, config.outputs?.rust?.outputDir || 'an5Client/rust');
 
   console.log('🚀 Starting ORM generation...');
 
@@ -62,11 +82,11 @@ async function main() {
     clearGeneratedFiles(outputTypesDir, '.ts');
     clearGeneratedFiles(outputDotnetDir, '.cs');
     clearGeneratedFiles(outputGolangDir, '.go');
+    clearGeneratedFiles(path.join(outputRustDir, 'src'), '.rs');
+    const pythonDirEarly = path.dirname(outputPythonMetadataPath);
+    clearGeneratedPythonFiles(pythonDirEarly);
     if (fs.existsSync(outputMetadataPath)) {
       fs.unlinkSync(outputMetadataPath);
-    }
-    if (fs.existsSync(outputPythonMetadataPath)) {
-      fs.unlinkSync(outputPythonMetadataPath);
     }
 
     const parser = new SchemaParser(schemaDir);
@@ -100,6 +120,10 @@ async function main() {
     const golangGen = new GolangGenerator(outputGolangDir);
     golangGen.generate(models);
     console.log(`✨ Generated Golang models in ${outputGolangDir}`);
+
+    const rustGen = new RustGenerator(outputRustDir);
+    rustGen.generate(models);
+    console.log(`✨ Generated Rust client in ${outputRustDir}`);
 
     console.log('✅ ORM generation completed successfully.');
   } catch (error) {

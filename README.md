@@ -4,14 +4,14 @@ The Schema, Code Generator, and Migration Toolkit for the AN5 ecosystem.
 
 ## Overview
 
-`@an5/orm` provides core schema parsing, multi-language code generation (TypeScript, Python, .NET C#, Golang), database introspection (`pull`), schema deployment (`push`), and automated database migrations.
+`@an5/orm` provides core schema parsing, multi-language code generation (TypeScript, Python, .NET C#, Golang, Rust), database introspection (`pull`), schema deployment (`push`), and automated database migrations.
 
 Runtime database connections, query building, transactions, and multi-database drivers (MSSQL, PostgreSQL, MySQL, SQLite, Google Sheets) are powered by **[@an5/adapters](https://github.com/an5ORM/an5/tree/main/an5Adapters)**.
 
 ## Features
 
 - **Schema Definition:** Define models and relationships using concise `.an5` syntax with native database types.
-- **Multi-Language Generator:** Generate typed clients and entity models for TypeScript, Python, .NET (C#), and Golang.
+- **Multi-Language Generator:** Generate typed clients and entity models for TypeScript, Python, .NET (C#), Golang, and Rust.
 - **Database Introspection (`db:pull`):** Inspect an existing database schema and generate matching `.an5` models.
 - **Direct Schema Push (`db:push`):** Synchronize `.an5` schema definitions directly to the database.
 - **Automated Migrations (`db:migrate`):** Diff schema against database, generate up/down migration SQL scripts, apply, rollback, and check migration status.

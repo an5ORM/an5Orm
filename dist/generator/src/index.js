@@ -10,6 +10,7 @@ const metadata_generator_1 = require("./metadata-generator");
 const python_generator_1 = require("./python-generator");
 const dotnet_generator_1 = require("./dotnet-generator");
 const golang_generator_1 = require("./golang-generator");
+const rust_generator_1 = require("./rust-generator");
 const fs_1 = __importDefault(require("fs"));
 function clearGeneratedFiles(outputDir, extension) {
     if (!fs_1.default.existsSync(outputDir)) {
@@ -22,6 +23,23 @@ function clearGeneratedFiles(outputDir, extension) {
         if (stat.isDirectory())
             continue;
         if (entry.endsWith(extension)) {
+            fs_1.default.unlinkSync(fullPath);
+        }
+    }
+}
+function clearGeneratedPythonFiles(outputDir) {
+    if (!fs_1.default.existsSync(outputDir)) {
+        fs_1.default.mkdirSync(outputDir, { recursive: true });
+        return;
+    }
+    // Delete generated .py files but preserve hand-maintained adapter.
+    const preserve = new Set(['an5_adapter.py']);
+    for (const entry of fs_1.default.readdirSync(outputDir)) {
+        const fullPath = path_1.default.join(outputDir, entry);
+        const stat = fs_1.default.statSync(fullPath);
+        if (stat.isDirectory())
+            continue;
+        if (entry.endsWith('.py') && !preserve.has(entry)) {
             fs_1.default.unlinkSync(fullPath);
         }
     }
@@ -57,16 +75,17 @@ async function main() {
     const outputPythonMetadataPath = path_1.default.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
     const outputDotnetDir = path_1.default.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
     const outputGolangDir = path_1.default.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
+    const outputRustDir = path_1.default.resolve(rootDir, config.outputs?.rust?.outputDir || 'an5Client/rust');
     console.log('🚀 Starting ORM generation...');
     try {
         clearGeneratedFiles(outputTypesDir, '.ts');
         clearGeneratedFiles(outputDotnetDir, '.cs');
         clearGeneratedFiles(outputGolangDir, '.go');
+        clearGeneratedFiles(path_1.default.join(outputRustDir, 'src'), '.rs');
+        const pythonDirEarly = path_1.default.dirname(outputPythonMetadataPath);
+        clearGeneratedPythonFiles(pythonDirEarly);
         if (fs_1.default.existsSync(outputMetadataPath)) {
             fs_1.default.unlinkSync(outputMetadataPath);
-        }
-        if (fs_1.default.existsSync(outputPythonMetadataPath)) {
-            fs_1.default.unlinkSync(outputPythonMetadataPath);
         }
         const parser = new parser_1.SchemaParser(schemaDir);
         const models = await parser.parse();
@@ -94,6 +113,9 @@ async function main() {
         const golangGen = new golang_generator_1.GolangGenerator(outputGolangDir);
         golangGen.generate(models);
         console.log(`✨ Generated Golang models in ${outputGolangDir}`);
+        const rustGen = new rust_generator_1.RustGenerator(outputRustDir);
+        rustGen.generate(models);
+        console.log(`✨ Generated Rust client in ${outputRustDir}`);
         console.log('✅ ORM generation completed successfully.');
     }
     catch (error) {
