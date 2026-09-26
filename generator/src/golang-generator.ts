@@ -401,6 +401,9 @@ func (c *TableClient[T]) queryAndScan(ctx context.Context, query string, args ..
 \t\t}
 \t\tresults = append(results, item)
 \t}
+\tif err := rows.Err(); err != nil {
+\t\treturn nil, err
+\t}
 \treturn results, nil
 }
 
