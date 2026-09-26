@@ -292,6 +292,64 @@ async function main() {
     assert.strictEqual(await tableExists(setup, migrationTable), false);
     assert.strictEqual(await tableExists(setup, migrationTableB), false);
 
+    // Mapped + advanced index metadata: schema diff generate → apply → rollback (live).
+    // Covers @unique(map), @@index(map, include, filter) end to end against SQL Server.
+    // Two phases: create the bare table first, then add the mapped artifacts so the
+    // generated migration exercises ALTER TABLE ... ADD CONSTRAINT and CREATE INDEX
+    // (plus DROP counterparts on rollback) rather than inline CREATE TABLE constraints.
+    const idxTable = `an5_orm_idx_${suffix}`;
+    const idxTableSql = `[dbo].${q(idxTable)}`;
+    const uqName = `uq_${idxTable}_email`;
+    const ixName = `ix_${idxTable}_score`;
+    const idxWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-orm-idx-live-'));
+    fs.mkdirSync(path.join(idxWorkspace, 'migrations'), { recursive: true });
+    fs.mkdirSync(path.join(idxWorkspace, 'schema'), { recursive: true });
+    fs.writeFileSync(path.join(idxWorkspace, 'an5Orm.config.js'), 'module.exports = { schemaDir: "schema" };\n');
+    const writeIdxSchema = (withMeta) => fs.writeFileSync(path.join(idxWorkspace, 'schema', 'Indexed.an5'), [
+      'model LiveIndexed {',
+      '  id    INT           @id',
+      withMeta ? `  email NVARCHAR(255) @unique(map: "${uqName}")` : '  email NVARCHAR(255)',
+      '  score INT           @default(0)',
+      '  note  NVARCHAR(255)?',
+      '',
+      `  @@map("${idxTable}")`,
+      ...(withMeta ? [`  @@index([score], map: "${ixName}", include: [note], filter: "[score] IS NOT NULL")`] : []),
+      '}',
+      '',
+    ].join('\n'));
+    const generatedSqlFiles = () => fs.readdirSync(path.join(idxWorkspace, 'migrations')).filter((f) => f.endsWith('.sql')).sort();
+
+    const indexNames = async () => (await setup.$queryRawUnsafe(
+      `SELECT name FROM sys.indexes WHERE object_id = OBJECT_ID(@p_0) AND name IN (@p_1, @p_2)`,
+      `dbo.${idxTable}`,
+      uqName,
+      ixName
+    )).map((row) => row.name).sort();
+
+    writeIdxSchema(false);
+    runMigrationCli(idxWorkspace, 'generate');
+    assert.strictEqual(generatedSqlFiles().length, 1);
+    runMigrationCli(idxWorkspace, 'apply');
+    assert.strictEqual(await tableExists(setup, idxTable), true);
+    assert.deepStrictEqual(await indexNames(), []);
+
+    writeIdxSchema(true);
+    runMigrationCli(idxWorkspace, 'generate');
+    assert.strictEqual(generatedSqlFiles().length, 2);
+    const generatedSql = fs.readFileSync(path.join(idxWorkspace, 'migrations', generatedSqlFiles()[1]), 'utf8');
+    assert.ok(generatedSql.includes(`CONSTRAINT [${uqName}]`), 'generated migration has mapped unique constraint');
+    assert.ok(generatedSql.includes(`CREATE INDEX [${ixName}]`), 'generated migration has mapped index');
+    assert.ok(generatedSql.includes('INCLUDE ([note])'), 'generated migration honors index include');
+    assert.ok(generatedSql.includes('WHERE [score] IS NOT NULL'), 'generated migration honors index filter');
+    assert.ok(generatedSql.includes(`DROP INDEX [${ixName}]`), 'generated rollback drops the index');
+    assert.ok(generatedSql.includes(`DROP CONSTRAINT [${uqName}]`), 'generated rollback drops the constraint');
+
+    runMigrationCli(idxWorkspace, 'apply');
+    assert.deepStrictEqual(await indexNames(), [ixName, uqName].sort());
+    runMigrationCli(idxWorkspace, ['rollback', '1']);
+    assert.deepStrictEqual(await indexNames(), []);
+    assert.strictEqual(await tableExists(setup, idxTable), true);
+
     const deleted = await db.liveOrder.delete({ where: { id: 'o3' } });
     assert.strictEqual(deleted.id, 'o3');
     assert.deepStrictEqual(await db.liveOrder.deleteMany({ where: { userId: null } }), { count: 1 });
@@ -302,6 +360,7 @@ async function main() {
     await setup._executeRaw(`IF OBJECT_ID('dbo.${orderTable}', 'U') IS NOT NULL DROP TABLE ${orderTableSql}`).catch(() => {});
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTable}', 'U') IS NOT NULL DROP TABLE ${migrationTableSql}`).catch(() => {});
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTableB}', 'U') IS NOT NULL DROP TABLE ${migrationTableBSql}`).catch(() => {});
+    await setup._executeRaw(`IF OBJECT_ID('dbo.an5_orm_idx_${suffix}', 'U') IS NOT NULL DROP TABLE [dbo].[an5_orm_idx_${suffix}]`).catch(() => {});
     await setup._executeRaw(`IF OBJECT_ID('dbo.${userTable}', 'U') IS NOT NULL DROP TABLE ${userTableSql}`).catch(() => {});
     await setup.$disconnect().catch(() => {});
   }
