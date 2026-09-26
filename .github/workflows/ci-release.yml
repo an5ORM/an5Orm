@@ -30,7 +30,16 @@ jobs:
       - name: Run unit tests
         run: node test/unit.test.js
       - name: Run generator tests
-        run: npm run generate && node test/generator.test.js
+        run: |
+          mkdir -p an5Schema
+          cat > an5Schema/CiSmoke.an5 <<'EOF'
+          model CiSmoke {
+            id    NVARCHAR(100) @id @default(uuid())
+            email NVARCHAR(255) @unique
+            name  NVARCHAR(255)?
+          }
+          EOF
+          npm run generate && node test/generator.test.js
       - name: Run smoke test
         run: npm test
       - name: Build Python package
