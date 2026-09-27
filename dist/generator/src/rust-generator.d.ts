@@ -11,7 +11,16 @@ export declare class RustGenerator {
     private generateMetadataRs;
     private generateConfigRs;
     private generateClientRs;
-    private buildModelClientImpl;
+    /**
+     * Typed, executing accessors for a model.
+     *
+     * Rust has no dynamic property access, so `db.user` cannot exist the way it
+     * does in TypeScript or Python. Following the Go generator (which emits a
+     * real `ctx.User` field), each model gets a generated method returning a
+     * typed handle whose queries run through the an5-adapters runtime.
+     */
+    private buildModelRuntimeHandle;
+    private isBoolField;
     private mapRustType;
     private getRustFilterType;
     private getAllPropertyVariations;
