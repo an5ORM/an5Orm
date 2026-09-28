@@ -15,6 +15,8 @@ export interface Relation {
     foreignKey: string;
     localKey: string;
     relationName: string;
+    /** From a trailing @description("...") on the relation line. */
+    description?: string;
 }
 export interface Model {
     name: string;
