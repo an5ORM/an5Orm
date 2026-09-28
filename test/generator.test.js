@@ -133,6 +133,35 @@ test('rust-generator.ts exists', () => {
   assertExists(rustPath);
 });
 
+test('api.ts exposes the generators without running the CLI', () => {
+  const apiPath = path.join(__dirname, '..', 'generator', 'src', 'api.ts');
+  assertExists(apiPath);
+  const content = fs.readFileSync(apiPath, 'utf8');
+  for (const exported of [
+    'SchemaParser',
+    'CodeGenerator',
+    'MetadataGenerator',
+    'PythonGenerator',
+    'DotnetGenerator',
+    'GolangGenerator',
+    'RustGenerator',
+  ]) {
+    assertIncludes(content, exported);
+  }
+  assert.ok(
+    !content.includes("import './index'"),
+    'api.ts must not import ./index, which would run the CLI on import'
+  );
+});
+
+test('package.json exposes the generator entrypoint', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.ok(pkg.exports, 'expected an exports map');
+  assert.strictEqual(pkg.exports['.'].default, './dist/index.js');
+  assert.strictEqual(pkg.exports['./generator'].default, './dist/generator/src/api.js');
+  assertIncludes(pkg.scripts.build, 'generator/tsconfig.json');
+});
+
 test('types.ts exists with Model and Field interfaces', () => {
   const typesPath = path.join(__dirname, '..', 'generator', 'src', 'types.ts');
   assertExists(typesPath);

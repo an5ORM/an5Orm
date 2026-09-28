@@ -5,6 +5,18 @@
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./generator": {
+      "types": "./dist/generator/src/api.d.ts",
+      "default": "./dist/generator/src/api.js"
+    },
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist/**/*.{js,d.ts}",
     "generator/src/**/*.ts",
@@ -17,7 +29,7 @@
     "url": "https://github.com/an5ORM/an5Orm.git"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p generator/tsconfig.json",
     "pretest": "npm run build",
     "prepack": "npm run build",
     "generate": "npx tsx generator/src/index.ts",
