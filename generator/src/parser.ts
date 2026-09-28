@@ -173,7 +173,17 @@ export class SchemaParser {
         foreignKey = relationMatch[1] || '';
         localKey = relationMatch[2] || '';
       }
-      model.relations.push({ name: fieldName, type: tsType, isArray, isOptional, foreignKey, localKey, relationName });
+      const description = line.match(/@description\("(.+)"\)/)?.[1];
+      model.relations.push({
+        name: fieldName,
+        type: tsType,
+        isArray,
+        isOptional,
+        foreignKey,
+        localKey,
+        relationName,
+        ...(description ? { description } : {}),
+      });
     } else {
       const hasDefault = line.includes('@default') || line.includes('@updatedAt') || line.includes('@id');
       const isId = line.includes('@id');
