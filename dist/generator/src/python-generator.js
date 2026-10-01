@@ -6,9 +6,21 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PythonGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const types_1 = require("./types");
 class PythonGenerator {
     constructor(outputPath) {
         this.outputPath = outputPath;
+    }
+    /**
+     * Tên module metadata, lấy từ chính tên file cấu hình.
+     *
+     * Trước đây các import hardcode `an5_metadata` trong khi `outputPath` lại cấu
+     * hình được, nên đặt `python.metadataFile` thành tên khác (ví dụ
+     * `an5Metadata.py`) thì generator vẫn sinh `from an5_metadata import ...` và
+     * client hỏng ngay khi import — lỗi chỉ lộ ra lúc chạy.
+     */
+    metadataModule() {
+        return path_1.default.basename(this.outputPath).replace(/\.py$/i, '');
     }
     generate(models) {
         const outputDir = path_1.default.dirname(this.outputPath);
@@ -119,7 +131,7 @@ class PythonGenerator {
         pyContent += 'MODEL_TO_TABLE = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
-            const fullTableName = `[${model.schemaName}].[${model.tableName}]`;
+            const fullTableName = (0, types_1.bracketedTableName)(model);
             for (const prop of props) {
                 pyContent += `    "${prop}": "${fullTableName}",\n`;
             }
@@ -289,10 +301,11 @@ class PythonGenerator {
         // relative fallback would be unresolvable and trip Pylance
         // `reportMissingImports` on every generated client.
         content += 'from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n\n';
+        const metadataModule = this.metadataModule();
         content += 'try:\n';
-        content += '    from .an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n';
+        content += `    from .${metadataModule} import MODEL_TO_TABLE, MODEL_FIELDS\n`;
         content += 'except ImportError:\n';
-        content += '    from an5_metadata import MODEL_TO_TABLE, MODEL_FIELDS\n\n';
+        content += `    from ${metadataModule} import MODEL_TO_TABLE, MODEL_FIELDS\n\n`;
         if (models.length > 0) {
             content += 'if TYPE_CHECKING:\n';
             for (const m of models) {
@@ -339,7 +352,7 @@ class PythonGenerator {
     }
     generateInit(models, outputDir) {
         let content = '# This file is auto-generated. Do not edit directly.\n';
-        content += 'from .an5_metadata import MODEL_TO_TABLE, MODEL_DESCRIPTIONS, MODEL_FIELDS, RELATION_MAP\n';
+        content += `from .${this.metadataModule()} import MODEL_TO_TABLE, MODEL_DESCRIPTIONS, MODEL_FIELDS, RELATION_MAP\n`;
         content += 'from .an5_models import *\n';
         content += 'from .an5_orm_types import (\n';
         content += '    StringFilter, IntFilter, NumberFilter, BoolFilter, DateTimeFilter,\n';
