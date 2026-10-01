@@ -23,6 +23,16 @@ const AN5_TO_TS: Record<string, string> = {
   'NUMERIC': 'number',
   'MONEY': 'number',
   'SMALLMONEY': 'number',
+  // SQLite affinity names. Thiếu mấy cái này thì `parseModelLine` rơi vào nhánh
+  // "viết hoa, không ngoặc → relation", nên một cột `INTEGER` hay `BOOLEAN` bị
+  // sinh thành quan hệ tới model tên `INTEGER`/`BOOLEAN` thay vì là cột thường.
+  'INTEGER': 'number',
+  'INT2': 'number',
+  'INT8': 'number',
+  'DOUBLE': 'number',
+  'DOUBLE PRECISION': 'number',
+  'BOOLEAN': 'boolean',
+  'BOOL': 'boolean',
   // Boolean
   'BIT': 'boolean',
   // Date types
@@ -36,6 +46,7 @@ const AN5_TO_TS: Record<string, string> = {
   'VARBINARY': 'Buffer',
   'BINARY': 'Buffer',
   'IMAGE': 'Buffer',
+  'BLOB': 'Buffer',
   // Other
   'UNIQUEIDENTIFIER': 'string',
   'SQL_VARIANT': 'any',
