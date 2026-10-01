@@ -26,6 +26,9 @@ env/
 # Env files
 .env
 .env.*
+# Holds the npm publish token. It was never committed, but nothing stopped a
+# `git add .` from doing so, so keep it out of reach explicitly.
+.npmrc
 
 # OS/editor
 .DS_Store
