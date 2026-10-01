@@ -16,6 +16,7 @@
     "resolveJsonModule": true,
     "outDir": "./dist",
     "rootDir": ".",
+    "newLine": "lf",
     "types": ["node"],
     "declaration": true,
     "declarationMap": true,

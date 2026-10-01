@@ -27,6 +27,8 @@ jobs:
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
       - name: Build TypeScript
         run: npm run build
+      - name: Verify published artifact is complete
+        run: npm run verify:pack
       - name: Run unit tests
         run: node test/unit.test.js
       - name: Run generator tests

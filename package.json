@@ -29,9 +29,10 @@
     "url": "https://github.com/an5ORM/an5Orm.git"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p generator/tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p generator/tsconfig.json && node scripts/normalize-eol.js",
     "pretest": "npm run build",
-    "prepack": "npm run build",
+    "prepack": "npm run build && npm run verify:pack",
+    "prepublishOnly": "npm run verify:pack",
     "generate": "npx tsx generator/src/index.ts",
     "db:push": "npx tsx push.ts",
     "db:pull": "npx tsx pull.ts",
@@ -48,8 +49,10 @@
     "test": "node test/smoke.test.js && node test/unit.test.js && node test/generator-regressions.test.js",
     "test:unit": "node test/unit.test.js",
     "test:generator": "npm run generate && node test/generator.test.js",
-    "test:generator:regressions": "node test/generator-regressions.test.js",
-    "test:integration:live": "node test/live-db.integration.test.js"
+"test:generator:regressions": "node test/generator-regressions.test.js",
+    "test:integration:live": "node test/live-db.integration.test.js",
+    "verify:pack": "node scripts/verify-pack.js",
+    "normalize:eol": "node scripts/normalize-eol.js"
   },
   "dependencies": {
     "@an5/adapters": "^0.2.6",

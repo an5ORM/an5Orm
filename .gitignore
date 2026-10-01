@@ -1,6 +1,11 @@
 # Node
 node_modules/
-dist/
+# dist/ and dist-py/ are intentionally committed: the npm tarball and the
+# PyPI sdist are built from this tree, and the CI publish job checks them out
+# from git. Ignoring them here meant a freshly emitted file (for example
+# dist/generator/src/golang-generator.js) was silently dropped by `git add dist`
+# and shipped missing - which is exactly how 1.0.9 published a generator whose
+# index.js required a file that was not in the tarball.
 dist-py/
 build/
 *.tsbuildinfo
