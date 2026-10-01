@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.11] - 2026-10-01
+
+- fix(ci): let `publish-npm` install without a lockfile, so a v* tag can actually reach `npm publish`
+- chore: ignore `.npmrc`
+
 ## [1.0.10] - 2026-10-01
 
 - fix(pack): verify the npm tarball before publishing, so a missing generator file can no longer ship again

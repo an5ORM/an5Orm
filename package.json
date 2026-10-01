@@ -1,6 +1,6 @@
 {
   "name": "@an5/orm",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, .NET (C#), Go, and Rust.",
   "license": "MIT",
   "main": "dist/index.js",
@@ -49,7 +49,7 @@
     "test": "node test/smoke.test.js && node test/unit.test.js && node test/generator-regressions.test.js",
     "test:unit": "node test/unit.test.js",
     "test:generator": "npm run generate && node test/generator.test.js",
-"test:generator:regressions": "node test/generator-regressions.test.js",
+    "test:generator:regressions": "node test/generator-regressions.test.js",
     "test:integration:live": "node test/live-db.integration.test.js",
     "verify:pack": "node scripts/verify-pack.js",
     "normalize:eol": "node scripts/normalize-eol.js"
