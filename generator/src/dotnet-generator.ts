@@ -288,31 +288,138 @@ namespace An5Orm.Entities
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Reflection;
 using System.Text.Json;
-using Microsoft.Data.SqlClient;
 using An5Orm.Entities;
 
 namespace An5Orm
 {
+    /// <summary>SQL dialects this client can talk to.</summary>
+    public enum An5Dialect
+    {
+        Mssql,
+        Postgres,
+        Sqlite
+    }
+
+    /// <summary>
+    /// Picks the ADO.NET provider and rewrites the connection string.
+    ///
+    /// Everything below works against DbConnection/DbCommand rather than the
+    /// SQL Server types, because SqlClient, Npgsql and Sqlite each derive from
+    /// those but share no other members. Only the SQL that differs per dialect
+    /// is branched on.
+    /// </summary>
+    internal static class An5Provider
+    {
+        public static An5Dialect Detect(string connectionString)
+        {
+            var cs = (connectionString ?? "").Trim().ToLowerInvariant();
+            // SQLite first: a bare path or Data Source= would otherwise fall
+            // through to SQL Server.
+            if (cs.StartsWith("sqlite:") || cs.StartsWith("file:") || cs == ":memory:"
+                || cs.Contains("data source=") || cs.Contains("datasource=")
+                || cs.EndsWith(".db") || cs.EndsWith(".sqlite") || cs.EndsWith(".sqlite3"))
+                return An5Dialect.Sqlite;
+            if (cs.StartsWith("postgres://") || cs.StartsWith("postgresql://") || cs.Contains("host="))
+                return An5Dialect.Postgres;
+            return An5Dialect.Mssql;
+        }
+
+        /// <summary>
+        /// Rewrites the accepted SQLite spellings into the one
+        /// Microsoft.Data.Sqlite reads, which is Data Source=.
+        /// </summary>
+        public static string NormalizeSqlite(string connectionString)
+        {
+            var cs = (connectionString ?? "").Trim();
+            if (cs.Length == 0) return "Data Source=:memory:";
+            if (cs.IndexOf("Data Source", StringComparison.OrdinalIgnoreCase) >= 0
+                || cs.IndexOf("DataSource", StringComparison.OrdinalIgnoreCase) >= 0
+                || cs.IndexOf("Mode", StringComparison.OrdinalIgnoreCase) >= 0)
+                return cs;
+            if (cs == ":memory:") return "Data Source=:memory:";
+            if (cs.StartsWith("sqlite://", StringComparison.OrdinalIgnoreCase))
+                return "Data Source=" + cs.Substring("sqlite://".Length);
+            if (cs.StartsWith("sqlite:", StringComparison.OrdinalIgnoreCase))
+                return "Data Source=" + cs.Substring("sqlite:".Length);
+            if (cs.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) return cs;
+            return "Data Source=" + cs;
+        }
+
+        public static DbConnection Open(string connectionString, An5Dialect dialect)
+        {
+            DbConnection conn = dialect switch
+            {
+                An5Dialect.Postgres => new Npgsql.NpgsqlConnection(connectionString),
+                An5Dialect.Sqlite => new Microsoft.Data.Sqlite.SqliteConnection(NormalizeSqlite(connectionString)),
+                _ => new Microsoft.Data.SqlClient.SqlConnection(connectionString)
+            };
+            conn.Open();
+            if (dialect == An5Dialect.Sqlite)
+            {
+                // WAL keeps readers off the writer's back, and SQLite leaves
+                // foreign keys off even when the schema declares them.
+                using var pragma = conn.CreateCommand();
+                pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;";
+                pragma.ExecuteNonQuery();
+            }
+            return conn;
+        }
+
+        /// <summary>
+        /// Adds a parameter. The name is stored without the @ prefix: Npgsql and
+        /// Sqlite treat a leading @ as part of the name, while SqlClient adds it
+        /// back, so stripping it is the only spelling all three agree on.
+        /// </summary>
+        public static DbParameter Bind(DbCommand cmd, string name, object value)
+        {
+            var p = cmd.CreateParameter();
+            p.ParameterName = (name ?? "").TrimStart('@');
+            p.Value = value ?? DBNull.Value;
+            cmd.Parameters.Add(p);
+            return p;
+        }
+
+        /// <summary>Quotes an identifier for the dialect.</summary>
+        public static string Quote(string name, An5Dialect dialect)
+        {
+            if (name.StartsWith("[") || name.StartsWith("\\"")) return name;
+            if (dialect == An5Dialect.Mssql)
+                return "[" + name.Replace("]", "]]") + "]";
+            return "\\"" + name.Replace("\\"", "\\"\\"") + "\\"";
+        }
+
+        /// <summary>Schema-less engines have no dbo prefix on the generated table names.</summary>
+        public static string TableName(string tableName, An5Dialect dialect)
+        {
+            if (dialect != An5Dialect.Sqlite) return tableName;
+            if (tableName.StartsWith("dbo.", StringComparison.OrdinalIgnoreCase))
+                return tableName.Substring(4);
+            return tableName;
+        }
+    }
+
     public class An5DbContext
     {
         public string ConnectionString { get; }
-        
+        public An5Dialect Dialect { get; }
+
         [ThreadStatic]
-        private static SqlConnection _txConn;
+        private static DbConnection _txConn;
         [ThreadStatic]
-        private static SqlTransaction _tx;
+        private static DbTransaction _tx;
 
         public An5DbContext(string connectionString = null)
         {
             ConnectionString = connectionString ?? An5Config.ConnectionString;
+            Dialect = An5Provider.Detect(ConnectionString);
         }
 
         public An5Transaction BeginTransaction()
         {
-            var conn = new SqlConnection(ConnectionString);
-            conn.Open();
+            var conn = An5Provider.Open(ConnectionString, Dialect);
             var tx = conn.BeginTransaction();
             _txConn = conn;
             _tx = tx;
@@ -321,8 +428,8 @@ namespace An5Orm
                 _tx = null;
             });
         }
-        
-        public static SqlConnection GetActiveConnection(string connectionString, out bool isTx)
+
+        public static DbConnection GetActiveConnection(string connectionString, out bool isTx)
         {
             if (_txConn != null)
             {
@@ -330,12 +437,10 @@ namespace An5Orm
                 return _txConn;
             }
             isTx = false;
-            var conn = new SqlConnection(connectionString);
-            conn.Open();
-            return conn;
+            return An5Provider.Open(connectionString, An5Provider.Detect(connectionString));
         }
-        
-        public static SqlTransaction GetActiveTransaction() => _tx;
+
+        public static DbTransaction GetActiveTransaction() => _tx;
 
         // ── Tables / Repositories ──────────────────────────────────────────────
 `;
@@ -350,12 +455,12 @@ namespace An5Orm
 
     public class An5Transaction : IDisposable
     {
-        private readonly SqlConnection _conn;
-        private readonly SqlTransaction _tx;
+        private readonly DbConnection _conn;
+        private readonly DbTransaction _tx;
         private readonly Action _cleanup;
         private bool _completed;
 
-        public An5Transaction(SqlConnection conn, SqlTransaction tx, Action cleanup)
+        public An5Transaction(DbConnection conn, DbTransaction tx, Action cleanup)
         {
             _conn = conn;
             _tx = tx;
@@ -390,16 +495,21 @@ namespace An5Orm
     {
         public string ConnectionString { get; }
         public string TableName { get; }
+        public An5Dialect Dialect { get; }
 
         public TableClient(string connectionString, string tableName)
         {
             ConnectionString = connectionString;
-            TableName = tableName;
+            Dialect = An5Provider.Detect(connectionString);
+            // SQLite has no schemas, so the generated dbo. prefix would be part
+            // of the table name and match nothing.
+            TableName = An5Provider.TableName(tableName, Dialect);
         }
 
-        private SqlCommand CreateCommand(SqlConnection conn, string query)
+        private DbCommand CreateCommand(DbConnection conn, string query)
         {
-            var cmd = new SqlCommand(query, conn);
+            var cmd = conn.CreateCommand();
+            cmd.CommandText = query;
             var activeTx = An5DbContext.GetActiveTransaction();
             if (activeTx != null)
             {
@@ -420,7 +530,7 @@ namespace An5Orm
                     {
                         foreach (var kvp in parameters)
                         {
-                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                            An5Provider.Bind(cmd, kvp.Key, kvp.Value);
                         }
                     }
 
@@ -437,7 +547,7 @@ namespace An5Orm
                                     var val = reader[prop.Name];
                                     if (val != DBNull.Value)
                                     {
-                                        prop.SetValue(item, val);
+                                        SetValue(prop, item, val);
                                     }
                                 }
                             }
@@ -471,7 +581,7 @@ namespace An5Orm
                     {
                         foreach (var kvp in parameters)
                         {
-                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                            An5Provider.Bind(cmd, kvp.Key, kvp.Value);
                         }
                     }
 
@@ -488,7 +598,7 @@ namespace An5Orm
                                     var val = reader[prop.Name];
                                     if (val != DBNull.Value)
                                     {
-                                        prop.SetValue(item, val);
+                                        SetValue(prop, item, val);
                                     }
                                 }
                             }
@@ -506,10 +616,18 @@ namespace An5Orm
 
         public T FindFirst(string whereClause = null, Dictionary<string, object> parameters = null)
         {
-            string query = $"SELECT TOP 1 * FROM {TableName}";
+            // TOP goes before the table, LIMIT after the WHERE — appending LIMIT
+            // to the SELECT would put it ahead of the predicate.
+            string query = Dialect == An5Dialect.Mssql
+                ? $"SELECT TOP 1 * FROM {TableName}"
+                : $"SELECT * FROM {TableName}";
             if (!string.IsNullOrEmpty(whereClause))
             {
                 query += $" WHERE {whereClause}";
+            }
+            if (Dialect != An5Dialect.Mssql)
+            {
+                query += " LIMIT 1";
             }
 
             var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
@@ -521,7 +639,7 @@ namespace An5Orm
                     {
                         foreach (var kvp in parameters)
                         {
-                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                            An5Provider.Bind(cmd, kvp.Key, kvp.Value);
                         }
                     }
 
@@ -538,7 +656,7 @@ namespace An5Orm
                                     var val = reader[prop.Name];
                                     if (val != DBNull.Value)
                                     {
-                                        prop.SetValue(item, val);
+                                        SetValue(prop, item, val);
                                     }
                                 }
                             }
@@ -564,7 +682,9 @@ namespace An5Orm
             var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
             var columns = new List<string>();
             var values = new List<string>();
-            var sqlParams = new List<SqlParameter>();
+            // Collected before the command exists; the provider creates the
+            // concrete parameter type, so binding has to wait for the command.
+            var sqlParams = new List<(string Name, object Value)>();
 
             foreach (var prop in properties)
             {
@@ -573,7 +693,7 @@ namespace An5Orm
                 {
                     columns.Add(prop.Name);
                     values.Add("@" + prop.Name);
-                    sqlParams.Add(new SqlParameter("@" + prop.Name, val));
+                    sqlParams.Add((prop.Name, val));
                 }
             }
 
@@ -583,7 +703,7 @@ namespace An5Orm
             {
                 using (var cmd = CreateCommand(conn, query))
                 {
-                    cmd.Parameters.AddRange(sqlParams.ToArray());
+                    foreach (var (name, value) in sqlParams) An5Provider.Bind(cmd, name, value);
                     cmd.ExecuteNonQuery();
                     if (!isTx)
                     {
@@ -602,7 +722,9 @@ namespace An5Orm
         {
             var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
             var sets = new List<string>();
-            var sqlParams = new List<SqlParameter>();
+            // Collected before the command exists; the provider creates the
+            // concrete parameter type, so binding has to wait for the command.
+            var sqlParams = new List<(string Name, object Value)>();
             object idVal = null;
 
             foreach (var prop in properties)
@@ -615,7 +737,7 @@ namespace An5Orm
                 else if (val != null)
                 {
                     sets.Add($"{prop.Name} = @{prop.Name}");
-                    sqlParams.Add(new SqlParameter("@" + prop.Name, val));
+                    sqlParams.Add((prop.Name, val));
                 }
             }
 
@@ -624,14 +746,14 @@ namespace An5Orm
                 throw new InvalidOperationException("Cannot update entity without Id");
             }
 
-            sqlParams.Add(new SqlParameter("@id", idVal));
+            sqlParams.Add(("id", idVal));
             string query = $"UPDATE {TableName} SET {string.Join(", ", sets)} WHERE Id = @id";
             var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
             try
             {
                 using (var cmd = CreateCommand(conn, query))
                 {
-                    cmd.Parameters.AddRange(sqlParams.ToArray());
+                    foreach (var (name, value) in sqlParams) An5Provider.Bind(cmd, name, value);
                     cmd.ExecuteNonQuery();
                 }
             }
@@ -650,7 +772,7 @@ namespace An5Orm
             {
                 using (var cmd = CreateCommand(conn, query))
                 {
-                    cmd.Parameters.AddWithValue("@id", id);
+                    An5Provider.Bind(cmd, "id", id);
                     int affected = cmd.ExecuteNonQuery();
                     return affected > 0;
                 }
@@ -673,7 +795,7 @@ namespace An5Orm
                     if (parameters != null)
                     {
                         foreach (var kvp in parameters)
-                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                            An5Provider.Bind(cmd, kvp.Key, kvp.Value);
                     }
                     var res = cmd.ExecuteScalar();
                     return res != null && res != DBNull.Value ? Convert.ToInt32(res) : 0;
@@ -697,13 +819,15 @@ namespace An5Orm
         {
             if (updateData == null || updateData.Count == 0) return 0;
             var sets = new List<string>();
-            var sqlParams = new List<SqlParameter>();
+            // Bound after the command exists, so the provider can create the
+            // right parameter type; a value tuple carries (name, value) until then.
+            var sqlParams = new List<(string Name, object Value)>();
             int pIndex = 0;
             foreach (var kvp in updateData)
             {
                 string paramName = "@u_" + pIndex++;
                 sets.Add($"{kvp.Key} = {paramName}");
-                sqlParams.Add(new SqlParameter(paramName, kvp.Value ?? DBNull.Value));
+                sqlParams.Add((paramName, kvp.Value));
             }
             string query = $"UPDATE {TableName} SET {string.Join(", ", sets)}";
             if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
@@ -712,11 +836,11 @@ namespace An5Orm
             {
                 using (var cmd = CreateCommand(conn, query))
                 {
-                    cmd.Parameters.AddRange(sqlParams.ToArray());
+                    foreach (var (name, value) in sqlParams) An5Provider.Bind(cmd, name, value);
                     if (parameters != null)
                     {
                         foreach (var kvp in parameters)
-                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                            An5Provider.Bind(cmd, kvp.Key, kvp.Value);
                     }
                     return cmd.ExecuteNonQuery();
                 }
@@ -736,7 +860,7 @@ namespace An5Orm
                     if (parameters != null)
                     {
                         foreach (var kvp in parameters)
-                            cmd.Parameters.AddWithValue(kvp.Key.StartsWith("@") ? kvp.Key : "@" + kvp.Key, kvp.Value ?? DBNull.Value);
+                            An5Provider.Bind(cmd, kvp.Key, kvp.Value);
                     }
                     return cmd.ExecuteNonQuery();
                 }
@@ -762,6 +886,9 @@ namespace An5Orm
                 var dim = vector.Count;
                 var vecJson = JsonSerializer.Serialize(vector);
                 var sql = $"SELECT TOP ({take}) *, VECTOR_DISTANCE('{distanceMetric}', CAST([{vectorField}] AS VECTOR({dim}, float32)), CAST(@query_vector AS VECTOR({dim}, float32))) AS distance FROM {TableName} WITH (NOLOCK)";
+                // Postgres reaches this through pgvector below; SQLite has no
+                // vector operator at all, so it goes straight to the in-memory
+                // path rather than build SQL that can only fail.
 
                 var p = parameters != null ? new Dictionary<string, object>(parameters) : new Dictionary<string, object>();
                 p["query_vector"] = vecJson;
@@ -859,7 +986,40 @@ namespace An5Orm
             return dot / (Math.Sqrt(m1) * Math.Sqrt(m2));
         }
 
-        private bool HasColumn(SqlDataReader reader, string columnName)
+        /// <summary>
+        /// Assigns a column to a property, converting when the provider's CLR
+        /// type does not match the property.
+        ///
+        /// Required across dialects, not just for SQLite: SQLite hands back
+        /// dates as TEXT and every integer as Int64, so a DateTime or int
+        /// property would otherwise fail to set. A value that cannot be
+        /// converted is skipped rather than aborting the whole read.
+        /// </summary>
+        private static void SetValue(System.Reflection.PropertyInfo prop, object target, object value)
+        {
+            var wanted = prop.PropertyType;
+            if (wanted.IsInstanceOfType(value))
+            {
+                prop.SetValue(target, value);
+                return;
+            }
+            try
+            {
+                var underlying = Nullable.GetUnderlyingType(wanted);
+                if (underlying != null && value == null) { prop.SetValue(target, null); return; }
+                if (underlying != null)
+                {
+                    prop.SetValue(target, Convert.ChangeType(value, underlying));
+                    return;
+                }
+                if (value is string text && wanted == typeof(Guid)) { prop.SetValue(target, Guid.Parse(text)); return; }
+                if (value is string when && wanted == typeof(DateTime)) { prop.SetValue(target, DateTime.Parse(when, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind)); return; }
+                prop.SetValue(target, Convert.ChangeType(value, wanted));
+            }
+            catch { }
+        }
+
+        private bool HasColumn(DbDataReader reader, string columnName)
         {
             for (int i = 0; i < reader.FieldCount; i++)
             {

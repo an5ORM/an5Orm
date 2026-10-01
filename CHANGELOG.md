@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.12] - 2026-10-01
+
+### Added
+- **SQLite for the generated .NET client** — the client works against
+  `DbConnection`/`DbCommand` and picks the provider from the connection string,
+  so MSSQL, Postgres and SQLite all work from one generated file. It also
+  fixes the client for Postgres, which was generated as SQL Server only.
+  `SELECT TOP 1` becomes `LIMIT 1` where needed, and the generated `dbo.` table
+  prefix is stripped for SQLite, which has no schemas.
+
+### Fixed
+- **Row materialisation converts values** — `SetValue` was called with whatever
+  the provider returned, so a `DateTime` property failed against SQLite's TEXT
+  and an `int` property against its Int64. Conversion now matches the adapter's.
+
 ## [1.0.11] - 2026-10-01
 
 - fix(ci): let `publish-npm` install without a lockfile, so a v* tag can actually reach `npm publish`
