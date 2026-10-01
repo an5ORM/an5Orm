@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.10] - 2026-10-01
+
+- fix(pack): verify the npm tarball before publishing, so a missing generator file can no longer ship again
+- fix(build): stop ignoring the committed `dist/`, which silently dropped new build output from commits
+- fix(build): normalise emitted files to LF, since TypeScript 7 ignores `newLine`
+
 ## [1.0.9] - 2026-08-19
 
 - chore: update misc, build
