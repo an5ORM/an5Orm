@@ -1,28 +1,17 @@
 import "dotenv/config";
 import { An5Adapter } from "@an5/adapters";
+import { loadConfig, resolveConnectionString } from "./generator/src/config";
 import fs from "fs";
 import path from "path";
 
 const rootDir = process.cwd();
-let config: any = {};
-try {
-  let configPath = path.join(rootDir, "an5Orm.config.js");
-  if (!fs.existsSync(configPath)) {
-    configPath = path.join(rootDir, "an5Orm.config.cjs");
-  }
-  if (fs.existsSync(configPath)) {
-    config = require(configPath);
-  }
-} catch (err) {
-  console.warn("⚠️ Could not load config file in cleanup.ts, using defaults.");
-}
-
-const schemaDir = path.resolve(rootDir, config.schemaDir || "an5Schema");
+const { config, outputs } = loadConfig();
+const schemaDir = outputs.schemaDir;
 
 let _adapter: An5Adapter | null = null;
 async function getDb(): Promise<An5Adapter> {
   if (!_adapter) {
-    _adapter = new An5Adapter({ connectionString: process.env.DATABASE_URL! });
+    _adapter = new An5Adapter({ connectionString: resolveConnectionString(config, process.env, "db:cleanup") });
     await _adapter.$connect();
   }
   return _adapter;

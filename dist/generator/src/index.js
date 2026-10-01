@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const path_1 = __importDefault(require("path"));
+const config_1 = require("./config");
 const parser_1 = require("./parser");
 const code_generator_1 = require("./code-generator");
 const metadata_generator_1 = require("./metadata-generator");
@@ -45,37 +46,30 @@ function clearGeneratedPythonFiles(outputDir) {
     }
 }
 async function main() {
-    let rootDir = process.cwd();
-    let config = {};
+    // Loaded through the validating loader, so a mistyped key or a wrong type
+    // stops here instead of quietly generating somewhere else.
+    let config;
     try {
-        let configPath = path_1.default.join(rootDir, 'an5Orm.config.js');
-        if (!fs_1.default.existsSync(configPath)) {
-            configPath = path_1.default.join(rootDir, 'an5Orm.config.cjs');
-        }
-        if (!fs_1.default.existsSync(configPath)) {
-            configPath = path_1.default.join(rootDir, '..', 'an5Orm.config.js');
-        }
-        if (!fs_1.default.existsSync(configPath)) {
-            configPath = path_1.default.join(rootDir, '..', 'an5Orm.config.cjs');
-        }
-        if (fs_1.default.existsSync(configPath)) {
-            config = require(configPath);
-            rootDir = path_1.default.dirname(configPath);
-        }
-        else if (fs_1.default.existsSync(path_1.default.join(rootDir, '..', 'an5Schema'))) {
-            rootDir = path_1.default.resolve(rootDir, '..');
-        }
+        config = (0, config_1.loadConfig)();
     }
     catch (err) {
+        if (err instanceof config_1.ConfigError) {
+            console.error(`❌ ${err.message}:`);
+            console.error((0, config_1.formatIssues)(err.issues));
+            process.exit(1);
+        }
         console.warn('⚠️ Could not load an5Orm.config.js/.cjs, using defaults.', err);
+        config = (0, config_1.loadConfig)(path_1.default.join(process.cwd(), 'no-such-dir'));
     }
-    const schemaDir = path_1.default.resolve(rootDir, config.schemaDir || 'an5Schema');
-    const outputTypesDir = path_1.default.resolve(rootDir, config.outputs?.typescript?.outputDir || 'an5Client/typescript');
-    const outputMetadataPath = path_1.default.resolve(rootDir, config.outputs?.typescript?.metadataFile || 'an5Client/typescript/an5Metadata.ts');
-    const outputPythonMetadataPath = path_1.default.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
-    const outputDotnetDir = path_1.default.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
-    const outputGolangDir = path_1.default.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
-    const outputRustDir = path_1.default.resolve(rootDir, config.outputs?.rust?.outputDir || 'an5Client/rust');
+    const { rootDir } = config;
+    const schemaDir = config.outputs.schemaDir;
+    const outputTypesDir = config.outputs.typescriptDir;
+    const outputMetadataPath = config.outputs.typescriptMetadataFile;
+    const outputPythonMetadataPath = config.outputs.pythonMetadataFile;
+    const outputDotnetDir = config.outputs.dotnetDir;
+    const outputGolangDir = config.outputs.golangDir;
+    const outputRustDir = config.outputs.rustDir;
+    const generateMetadata = config.config.generation.generateMetadata;
     console.log('🚀 Starting ORM generation...');
     try {
         clearGeneratedFiles(outputTypesDir, '.ts');
@@ -84,7 +78,7 @@ async function main() {
         clearGeneratedFiles(path_1.default.join(outputRustDir, 'src'), '.rs');
         const pythonDirEarly = path_1.default.dirname(outputPythonMetadataPath);
         clearGeneratedPythonFiles(pythonDirEarly);
-        if (fs_1.default.existsSync(outputMetadataPath)) {
+        if (config.config.generation.generateMetadata && fs_1.default.existsSync(outputMetadataPath)) {
             fs_1.default.unlinkSync(outputMetadataPath);
         }
         const parser = new parser_1.SchemaParser(schemaDir);
@@ -93,13 +87,18 @@ async function main() {
         const codeGen = new code_generator_1.CodeGenerator(outputTypesDir);
         codeGen.generate(models);
         console.log(`✨ Generated modular types in ${outputTypesDir}`);
-        const metadataDir = path_1.default.dirname(outputMetadataPath);
-        if (!fs_1.default.existsSync(metadataDir)) {
-            fs_1.default.mkdirSync(metadataDir, { recursive: true });
+        if (generateMetadata) {
+            const metadataDir = path_1.default.dirname(outputMetadataPath);
+            if (!fs_1.default.existsSync(metadataDir)) {
+                fs_1.default.mkdirSync(metadataDir, { recursive: true });
+            }
+            const metadataGen = new metadata_generator_1.MetadataGenerator(outputMetadataPath);
+            metadataGen.generate(models);
+            console.log(`✨ Generated metadata in ${outputMetadataPath}`);
         }
-        const metadataGen = new metadata_generator_1.MetadataGenerator(outputMetadataPath);
-        metadataGen.generate(models);
-        console.log(`✨ Generated metadata in ${outputMetadataPath}`);
+        else {
+            console.log('⏭ Skipping metadata (generation.generateMetadata is false)');
+        }
         const pythonDir = path_1.default.dirname(outputPythonMetadataPath);
         if (!fs_1.default.existsSync(pythonDir)) {
             fs_1.default.mkdirSync(pythonDir, { recursive: true });

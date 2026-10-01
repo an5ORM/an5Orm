@@ -1,4 +1,5 @@
 import path from 'path';
+import { loadConfig, ConfigError, formatIssues } from './config';
 import { SchemaParser } from './parser';
 import { CodeGenerator } from './code-generator';
 import { MetadataGenerator } from './metadata-generator';
@@ -44,37 +45,30 @@ function clearGeneratedPythonFiles(outputDir: string) {
 }
 
 async function main() {
-  let rootDir = process.cwd();
-  let config: any = {};
-  
+  // Loaded through the validating loader, so a mistyped key or a wrong type
+  // stops here instead of quietly generating somewhere else.
+  let config: ReturnType<typeof loadConfig>;
   try {
-    let configPath = path.join(rootDir, 'an5Orm.config.js');
-    if (!fs.existsSync(configPath)) {
-      configPath = path.join(rootDir, 'an5Orm.config.cjs');
-    }
-    if (!fs.existsSync(configPath)) {
-      configPath = path.join(rootDir, '..', 'an5Orm.config.js');
-    }
-    if (!fs.existsSync(configPath)) {
-      configPath = path.join(rootDir, '..', 'an5Orm.config.cjs');
-    }
-    if (fs.existsSync(configPath)) {
-      config = require(configPath);
-      rootDir = path.dirname(configPath);
-    } else if (fs.existsSync(path.join(rootDir, '..', 'an5Schema'))) {
-      rootDir = path.resolve(rootDir, '..');
-    }
+    config = loadConfig();
   } catch (err) {
+    if (err instanceof ConfigError) {
+      console.error(`❌ ${err.message}:`);
+      console.error(formatIssues(err.issues));
+      process.exit(1);
+    }
     console.warn('⚠️ Could not load an5Orm.config.js/.cjs, using defaults.', err);
+    config = loadConfig(path.join(process.cwd(), 'no-such-dir'));
   }
 
-  const schemaDir = path.resolve(rootDir, config.schemaDir || 'an5Schema');
-  const outputTypesDir = path.resolve(rootDir, config.outputs?.typescript?.outputDir || 'an5Client/typescript');
-  const outputMetadataPath = path.resolve(rootDir, config.outputs?.typescript?.metadataFile || 'an5Client/typescript/an5Metadata.ts');
-  const outputPythonMetadataPath = path.resolve(rootDir, config.outputs?.python?.metadataFile || 'an5Client/python/an5_metadata.py');
-  const outputDotnetDir = path.resolve(rootDir, config.outputs?.dotnet?.outputDir || 'an5Client/dotnet');
-  const outputGolangDir = path.resolve(rootDir, config.outputs?.golang?.outputDir || 'an5Client/golang');
-  const outputRustDir = path.resolve(rootDir, config.outputs?.rust?.outputDir || 'an5Client/rust');
+  const { rootDir } = config;
+  const schemaDir = config.outputs.schemaDir;
+  const outputTypesDir = config.outputs.typescriptDir;
+  const outputMetadataPath = config.outputs.typescriptMetadataFile;
+  const outputPythonMetadataPath = config.outputs.pythonMetadataFile;
+  const outputDotnetDir = config.outputs.dotnetDir;
+  const outputGolangDir = config.outputs.golangDir;
+  const outputRustDir = config.outputs.rustDir;
+  const generateMetadata = config.config.generation.generateMetadata;
 
   console.log('🚀 Starting ORM generation...');
 
@@ -85,7 +79,7 @@ async function main() {
     clearGeneratedFiles(path.join(outputRustDir, 'src'), '.rs');
     const pythonDirEarly = path.dirname(outputPythonMetadataPath);
     clearGeneratedPythonFiles(pythonDirEarly);
-    if (fs.existsSync(outputMetadataPath)) {
+    if (config.config.generation.generateMetadata && fs.existsSync(outputMetadataPath)) {
       fs.unlinkSync(outputMetadataPath);
     }
 
@@ -97,13 +91,17 @@ async function main() {
     codeGen.generate(models);
     console.log(`✨ Generated modular types in ${outputTypesDir}`);
 
-    const metadataDir = path.dirname(outputMetadataPath);
-    if (!fs.existsSync(metadataDir)) {
-      fs.mkdirSync(metadataDir, { recursive: true });
+    if (generateMetadata) {
+      const metadataDir = path.dirname(outputMetadataPath);
+      if (!fs.existsSync(metadataDir)) {
+        fs.mkdirSync(metadataDir, { recursive: true });
+      }
+      const metadataGen = new MetadataGenerator(outputMetadataPath);
+      metadataGen.generate(models);
+      console.log(`✨ Generated metadata in ${outputMetadataPath}`);
+    } else {
+      console.log('⏭ Skipping metadata (generation.generateMetadata is false)');
     }
-    const metadataGen = new MetadataGenerator(outputMetadataPath);
-    metadataGen.generate(models);
-    console.log(`✨ Generated metadata in ${outputMetadataPath}`);
 
     const pythonDir = path.dirname(outputPythonMetadataPath);
     if (!fs.existsSync(pythonDir)) {

@@ -14,6 +14,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { An5Adapter } from '@an5/adapters';
+import { loadConfig, resolveConnectionString } from './generator/src/config';
 import {
   DbColumn,
   SchemaModel,
@@ -29,32 +30,18 @@ import {
 } from './migration-core';
 
 const rootDir = process.cwd();
-let config: any = {};
-try {
-  let configPath = path.join(rootDir, 'an5Orm.config.js');
-  if (!fs.existsSync(configPath)) {
-    configPath = path.join(rootDir, 'an5Orm.config.cjs');
-  }
-  if (fs.existsSync(configPath)) {
-    config = require(configPath);
-  }
-} catch { /* ignore */ }
+const { config, outputs } = loadConfig();
 
-const schemaDir = path.resolve(rootDir, config.schemaDir || 'an5Schema');
+const schemaDir = outputs.schemaDir;
 const migrationsDir = path.resolve(rootDir, 'migrations');
 const migrationTableName = '[dbo].[_an5_migrations]';
 
 let _adapter: An5Adapter | null = null;
-function requireDatabaseUrl(): void {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is required for migration commands.');
-  }
-}
-
 async function getDb(): Promise<An5Adapter> {
   if (!_adapter) {
-    requireDatabaseUrl();
-    _adapter = new An5Adapter({ connectionString: process.env.DATABASE_URL! });
+    _adapter = new An5Adapter({
+      connectionString: resolveConnectionString(config, process.env, 'db:migrate'),
+    });
     await _adapter.$connect();
   }
   return _adapter;
