@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Model, Field, Relation } from './types';
+import { Model, Field, Relation, bracketedTableName, dottedTableName } from './types';
 
 export class GolangGenerator {
   constructor(private outputDir: string) {
@@ -115,7 +115,7 @@ package an5client
 var ModelToTable = map[string]string{
 `;
     for (const model of models) {
-      const fullTable = `[${model.schemaName}].[${model.tableName}]`;
+      const fullTable = bracketedTableName(model);
       for (const prop of this.getAllPropertyVariations(model.name)) {
         content += `\t"${prop}": "${fullTable}",\n`;
       }
@@ -323,7 +323,7 @@ func NewAn5DbContextWithConnStr(db *sql.DB, connStr string) *An5DbContext {
 `;
     for (const model of models) {
       const name = this.capitalize(model.name);
-      content += `\tclient${name} := NewTableClient[${model.name}](db, "${model.schemaName}.${model.tableName}", d)\n`;
+      content += `\tclient${name} := NewTableClient[${model.name}](db, "${dottedTableName(model)}", d)\n`;
       content += `\tctx.${name}s = client${name}\n`;
       content += `\tctx.${name}  = client${name}\n`;
     }

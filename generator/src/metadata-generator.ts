@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Model } from './types';
+import { Model, bracketedTableName } from './types';
 
 export class MetadataGenerator {
   constructor(
@@ -15,7 +15,7 @@ export class MetadataGenerator {
     metaContent += 'export const modelToTable: Record<string, string> = {\n';
     for (const model of models) {
       const props = this.getAllPropertyVariations(model.name);
-      const fullTableName = `[${model.schemaName}].[${model.tableName}]`;
+      const fullTableName = bracketedTableName(model);
       for (const prop of props) {
         metaContent += `  ${prop}: "${fullTableName}",\n`;
       }

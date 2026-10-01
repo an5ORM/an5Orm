@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Model, Field } from './types';
+import { Model, Field, bracketedTableName } from './types';
 
 export class RustGenerator {
   constructor(private outputDir: string) {
@@ -516,7 +516,7 @@ pub struct DateTimeFilter {
     content += `pub fn model_to_table(model: &str) -> Option<&'static str> {\n    match model {\n`;
     const seen = new Set<string>();
     for (const model of models) {
-      const full = `[${model.schemaName}].[${model.tableName}]`;
+      const full = bracketedTableName(model);
       for (const prop of this.getAllPropertyVariations(model.name)) {
         if (seen.has(prop)) continue;
         seen.add(prop);
@@ -530,7 +530,7 @@ pub struct DateTimeFilter {
     content += `pub fn model_to_table_map() -> Vec<(&'static str, &'static str)> {\n    vec![\n`;
     const seenMap = new Set<string>();
     for (const model of models) {
-      const full = `[${model.schemaName}].[${model.tableName}]`;
+      const full = bracketedTableName(model);
       for (const prop of this.getAllPropertyVariations(model.name)) {
         if (seenMap.has(prop)) continue;
         seenMap.add(prop);

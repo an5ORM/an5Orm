@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DotnetGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const types_1 = require("./types");
 class DotnetGenerator {
     constructor(outputDir) {
         this.outputDir = outputDir;
@@ -333,7 +334,7 @@ namespace An5Orm
 `;
         for (const model of models) {
             const name = this.capitalize(model.name);
-            content += `        public TableClient<${model.name}> ${name}s => new TableClient<${model.name}>(ConnectionString, "${model.schemaName}.${model.tableName}");\n`;
+            content += `        public TableClient<${model.name}> ${name}s => new TableClient<${model.name}>(ConnectionString, "${(0, types_1.dottedTableName)(model)}");\n`;
             content += `        public TableClient<${model.name}> ${name} => ${name}s;\n`;
         }
         content += `    }
