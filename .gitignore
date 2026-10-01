@@ -10,6 +10,8 @@ dist-py/
 build/
 *.tsbuildinfo
 npm-debug.log*
+# `npm pack` output, produced by prepack during a local publish
+*.tgz
 
 # Python
 __pycache__/
