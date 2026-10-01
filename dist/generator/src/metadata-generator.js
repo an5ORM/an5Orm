@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MetadataGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
+const types_1 = require("./types");
 class MetadataGenerator {
     constructor(outputPath, relationImport = 'import type { RelationDef } from "@an5/orm";') {
         this.outputPath = outputPath;
@@ -16,7 +17,7 @@ class MetadataGenerator {
         metaContent += 'export const modelToTable: Record<string, string> = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
-            const fullTableName = `[${model.schemaName}].[${model.tableName}]`;
+            const fullTableName = (0, types_1.bracketedTableName)(model);
             for (const prop of props) {
                 metaContent += `  ${prop}: "${fullTableName}",\n`;
             }

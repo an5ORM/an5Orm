@@ -120,8 +120,11 @@ export class SchemaParser {
       return;
     }
     if (line.startsWith('@@schema')) {
-      const schemaMatch = line.match(/@@schema\("(.+)"\)/);
-      if (schemaMatch) model.schemaName = schemaMatch[1];
+      // `(.*)` chứ không phải `(.+)`: `@@schema("")` là cách nói "không có
+      // schema", cần cho cơ sở dữ liệu không có khái niệm schema. Với `(.+)` thì
+      // chuỗi rỗng không khớp, lệnh bị bỏ qua âm thầm và model vẫn nhận `dbo`.
+      const schemaMatch = line.match(/@@schema\("(.*)"\)/);
+      if (schemaMatch) model.schemaName = schemaMatch[1].trim();
       return;
     }
     if (line.startsWith('@@unique')) {

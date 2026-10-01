@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Model, Field, Relation } from './types';
+import { Model, Field, Relation, dottedTableName } from './types';
 
 export class DotnetGenerator {
   constructor(private outputDir: string) {
@@ -342,7 +342,7 @@ namespace An5Orm
 
     for (const model of models) {
       const name = this.capitalize(model.name);
-      content += `        public TableClient<${model.name}> ${name}s => new TableClient<${model.name}>(ConnectionString, "${model.schemaName}.${model.tableName}");\n`;
+      content += `        public TableClient<${model.name}> ${name}s => new TableClient<${model.name}>(ConnectionString, "${dottedTableName(model)}");\n`;
       content += `        public TableClient<${model.name}> ${name} => ${name}s;\n`;
     }
 

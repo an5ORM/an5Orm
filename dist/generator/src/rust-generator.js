@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.RustGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const types_1 = require("./types");
 class RustGenerator {
     constructor(outputDir) {
         this.outputDir = outputDir;
@@ -506,7 +507,7 @@ pub struct DateTimeFilter {
         content += `pub fn model_to_table(model: &str) -> Option<&'static str> {\n    match model {\n`;
         const seen = new Set();
         for (const model of models) {
-            const full = `[${model.schemaName}].[${model.tableName}]`;
+            const full = (0, types_1.bracketedTableName)(model);
             for (const prop of this.getAllPropertyVariations(model.name)) {
                 if (seen.has(prop))
                     continue;
@@ -521,7 +522,7 @@ pub struct DateTimeFilter {
         content += `pub fn model_to_table_map() -> Vec<(&'static str, &'static str)> {\n    vec![\n`;
         const seenMap = new Set();
         for (const model of models) {
-            const full = `[${model.schemaName}].[${model.tableName}]`;
+            const full = (0, types_1.bracketedTableName)(model);
             for (const prop of this.getAllPropertyVariations(model.name)) {
                 if (seenMap.has(prop))
                     continue;

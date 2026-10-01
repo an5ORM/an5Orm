@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.GolangGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const types_1 = require("./types");
 class GolangGenerator {
     constructor(outputDir) {
         this.outputDir = outputDir;
@@ -108,7 +109,7 @@ package an5client
 var ModelToTable = map[string]string{
 `;
         for (const model of models) {
-            const fullTable = `[${model.schemaName}].[${model.tableName}]`;
+            const fullTable = (0, types_1.bracketedTableName)(model);
             for (const prop of this.getAllPropertyVariations(model.name)) {
                 content += `\t"${prop}": "${fullTable}",\n`;
             }
@@ -302,7 +303,7 @@ func NewAn5DbContextWithConnStr(db *sql.DB, connStr string) *An5DbContext {
 `;
         for (const model of models) {
             const name = this.capitalize(model.name);
-            content += `\tclient${name} := NewTableClient[${model.name}](db, "${model.schemaName}.${model.tableName}", d)\n`;
+            content += `\tclient${name} := NewTableClient[${model.name}](db, "${(0, types_1.dottedTableName)(model)}", d)\n`;
             content += `\tctx.${name}s = client${name}\n`;
             content += `\tctx.${name}  = client${name}\n`;
         }
