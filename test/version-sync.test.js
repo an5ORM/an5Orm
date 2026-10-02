@@ -17,25 +17,43 @@ const { test } = require('node:test');
 
 const root = path.join(__dirname, '..');
 
+const workspaceRoot = path.join(root, '..');
+
 function readVersion(file) {
   const match = fs.readFileSync(path.join(root, file), 'utf8').match(/^version = "(.+)"$/m);
   assert.ok(match, `Expected a version field in ${file}`);
   return match[1];
 }
 
-for (const pkg of ['an5-orm', 'an5-adapters']) {
-  test(`${pkg}: the PyPI version matches the npm version`, () => {
-    const npmVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+/**
+ * Each package that publishes to both registries.
+ *
+ * Both, not just this one: the loop used to run twice over *this* package's files,
+ * with the second package's name only in the test title, so `an5-adapters` drifting
+ * between its `package.json` and its `pyproject.toml` was never actually compared.
+ */
+const BOTH_REGISTRIES = [
+  { pypi: 'an5-orm', dir: root },
+  { pypi: 'an5-adapters', dir: path.join(workspaceRoot, 'an5Adapters') },
+];
+
+for (const { pypi, dir } of BOTH_REGISTRIES) {
+  test(`${pypi}: the PyPI version matches the npm version`, () => {
+    const npmVersion = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version;
+    const pyproject = fs.readFileSync(path.join(dir, 'pyproject.toml'), 'utf8');
+    const pyVersion = pyproject.match(/^version = "(.+)"$/m);
+    assert.ok(pyVersion, `Expected a version in ${pypi}'s pyproject.toml`);
     assert.equal(
-      readVersion('pyproject.toml'),
+      pyVersion[1],
       npmVersion,
-      'pyproject.toml and package.json disagree — bump both, or the publish ' +
-        'step will build the old version and skip it as already published',
+      `${pypi}: pyproject.toml and package.json disagree — bump both, or the ` +
+        'publish step will build the old version and skip it as already published',
     );
   });
-}
 
-test('the project name on PyPI is the one that is published there', () => {
-  const match = fs.readFileSync(path.join(root, 'pyproject.toml'), 'utf8').match(/^name = "(.+)"$/m);
-  assert.equal(match[1], 'an5-orm');
-});
+  test(`${pypi}: the project name on PyPI is the one that is published there`, () => {
+    const match = fs.readFileSync(path.join(dir, 'pyproject.toml'), 'utf8').match(/^name = "(.+)"$/m);
+    assert.ok(match, `Expected a name in ${pypi}'s pyproject.toml`);
+    assert.equal(match[1], pypi);
+  });
+}

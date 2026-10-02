@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] - 2026-10-02
 
 ### Added
 - **Field types are validated per database provider** — the provider comes from the
