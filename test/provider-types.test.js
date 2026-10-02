@@ -243,7 +243,10 @@ test('the same schema text maps to different types per provider', () => {
   assert.equal(sqlTypeToTs('INT', 'mssql'), 'number');
   assert.equal(sqlTypeToTs('BOOLEAN', 'sqlite'), 'boolean');
   assert.equal(sqlTypeToTs('BIT', 'mssql'), 'boolean');
-  assert.equal(sqlTypeToTs('BIT', 'mysql'), 'number');
+  // MySQL's BIT(n) is a flag in practice, and every other dialect's BIT is a
+  // boolean here; saying `number` made the TypeScript client disagree with the four
+  // generated ones about the same column.
+  assert.equal(sqlTypeToTs('BIT', 'mysql'), 'boolean');
   assert.equal(sqlTypeToTs('SERIAL', 'postgres'), 'number');
   assert.equal(sqlTypeToTs('BYTEA', 'postgres'), 'Buffer');
   assert.equal(sqlTypeToTs('TIMESTAMP', 'mssql'), 'Buffer');

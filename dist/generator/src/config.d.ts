@@ -151,3 +151,4 @@ export interface LoadedConfig {
  * so a project can generate without a config.
  */
 export declare function loadConfig(cwd?: string): LoadedConfig;
+//# sourceMappingURL=config.d.ts.map

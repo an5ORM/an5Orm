@@ -1,6 +1,8 @@
 import { Model } from './types';
 export declare class RustGenerator {
     private outputDir;
+    /** The database being generated for; decides types like `TIMESTAMP`. */
+    private provider;
     constructor(outputDir: string);
     generate(models: Model[]): void;
     private generateCargoToml;
@@ -21,6 +23,12 @@ export declare class RustGenerator {
      */
     private buildModelRuntimeHandle;
     private isBoolField;
+    /**
+     * The Rust type for a field.
+     *
+     * From the declared type, so `DECIMAL` is an `f64` and `BIGINT` an `i64`: both
+     * arrived as `number` and were written as `i64`.
+     */
     private mapRustType;
     private getRustFilterType;
     private getAllPropertyVariations;

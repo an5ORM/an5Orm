@@ -27,6 +27,8 @@ export { GolangGenerator } from './golang-generator';
 export { RustGenerator } from './rust-generator';
 export { detectProvider, providerFromConfig, providerForProject } from './config';
 export { dialectFor, defaultClause, sqlLiteral } from './dialect';
+export { fieldKind } from './type-kinds';
+export type { FieldKind } from './type-kinds';
 export type { ColumnSpec, PushDialect } from './dialect';
 export {
   DEFAULT_PROVIDER,

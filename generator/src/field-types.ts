@@ -192,8 +192,11 @@ export const PROVIDER_FIELD_TYPES: Record<Provider, Readonly<Record<string, TsTy
     // Boolean
     BOOLEAN: 'boolean',
     BOOL: 'boolean',
-    // `BIT(n)` is an n-bit field and reads back as a number, not a boolean.
-    BIT: 'number',
+    // `BIT(n)` is an n-bit field on MySQL, but it is a flag in practice and every
+    // other dialect's BIT is a boolean here. Mapping it to a number made the
+    // TypeScript client say `number` while the Go, Python, Rust and .NET clients
+    // said `bool` for the same column.
+    BIT: 'boolean',
     // Date and time
     DATE: 'Date',
     DATETIME: 'Date',

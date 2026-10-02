@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.unknownFieldTypeMessage = exports.resolveFieldType = exports.fieldTypesFor = exports.defaultSqlTypeForTs = exports.PROVIDER_LABELS = exports.PROVIDER_FIELD_TYPES = exports.PROVIDERS = exports.FieldTypeError = exports.DEFAULT_PROVIDER = exports.sqlLiteral = exports.defaultClause = exports.dialectFor = exports.providerForProject = exports.providerFromConfig = exports.detectProvider = exports.RustGenerator = exports.GolangGenerator = exports.DotnetGenerator = exports.PythonGenerator = exports.MetadataGenerator = exports.CodeGenerator = exports.sqlTypeToTs = exports.SchemaParser = void 0;
+exports.unknownFieldTypeMessage = exports.resolveFieldType = exports.fieldTypesFor = exports.defaultSqlTypeForTs = exports.PROVIDER_LABELS = exports.PROVIDER_FIELD_TYPES = exports.PROVIDERS = exports.FieldTypeError = exports.DEFAULT_PROVIDER = exports.fieldKind = exports.sqlLiteral = exports.defaultClause = exports.dialectFor = exports.providerForProject = exports.providerFromConfig = exports.detectProvider = exports.RustGenerator = exports.GolangGenerator = exports.DotnetGenerator = exports.PythonGenerator = exports.MetadataGenerator = exports.CodeGenerator = exports.sqlTypeToTs = exports.SchemaParser = void 0;
 /**
  * Side-effect-free entrypoint for programmatic use of the code generator.
  *
@@ -44,6 +44,8 @@ var dialect_1 = require("./dialect");
 Object.defineProperty(exports, "dialectFor", { enumerable: true, get: function () { return dialect_1.dialectFor; } });
 Object.defineProperty(exports, "defaultClause", { enumerable: true, get: function () { return dialect_1.defaultClause; } });
 Object.defineProperty(exports, "sqlLiteral", { enumerable: true, get: function () { return dialect_1.sqlLiteral; } });
+var type_kinds_1 = require("./type-kinds");
+Object.defineProperty(exports, "fieldKind", { enumerable: true, get: function () { return type_kinds_1.fieldKind; } });
 var field_types_1 = require("./field-types");
 Object.defineProperty(exports, "DEFAULT_PROVIDER", { enumerable: true, get: function () { return field_types_1.DEFAULT_PROVIDER; } });
 Object.defineProperty(exports, "FieldTypeError", { enumerable: true, get: function () { return field_types_1.FieldTypeError; } });

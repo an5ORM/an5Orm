@@ -1,8 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { Model, Field, bracketedTableName } from './types';
+import { fieldKind } from './type-kinds';
+import { Provider } from './field-types';
 
 export class RustGenerator {
+  /** The database being generated for; decides types like `TIMESTAMP`. */
+  private provider: Provider | undefined;
+
   constructor(private outputDir: string) {
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
@@ -14,6 +19,8 @@ export class RustGenerator {
   }
 
   public generate(models: Model[]) {
+    this.provider = models[0]?.provider;
+
     this.generateCargoToml();
     this.generateLibRs(models);
     this.generateFiltersRs();
@@ -374,7 +381,7 @@ pub struct DateTimeFilter {
         // when the caller never set it, so it is optional here just like in
         // CreateInput. Matches the Python generator's required-field rule.
         const isOptional = f.isOptional || f.hasDefault;
-        const rsType = this.mapRustType(f.type, isOptional);
+        const rsType = this.mapRustType(f, isOptional);
         const snake = this.toSnakeCase(f.name);
         if (f.description) {
           s.push(`    /// ${f.description}`);
@@ -442,7 +449,7 @@ pub struct DateTimeFilter {
         if (f.isId && f.hasDefault) continue;
         const snake = this.toSnakeCase(f.name);
         const isOpt = f.isOptional || f.hasDefault;
-        const rsType = this.mapRustType(f.type, isOpt);
+        const rsType = this.mapRustType(f, isOpt);
         if (isOpt) {
           s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
         }
@@ -457,7 +464,7 @@ pub struct DateTimeFilter {
       for (const f of model.fields) {
         if (f.isId) continue;
         const snake = this.toSnakeCase(f.name);
-        const rsType = this.mapRustType(f.type, true);
+        const rsType = this.mapRustType(f, true);
         s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
         s.push(`    pub ${snake}: ${rsType},`);
       }
@@ -892,29 +899,39 @@ impl SqlBuilder {
     return ['bool', 'boolean', 'bit'].includes(field.type.toLowerCase());
   }
 
-  private mapRustType(fieldType: string, isOptional: boolean): string {
-    const lower = fieldType.toLowerCase();
-    let t = 'String';
-    if (['int', 'integer', 'smallint', 'tinyint'].includes(lower)) t = 'i32';
-    else if (['bigint', 'long', 'number'].includes(lower)) t = 'i64';
-    else if (['float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower)) t = 'f64';
-    else if (['bool', 'boolean', 'bit'].includes(lower)) t = 'bool';
-    else if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset', 'timestamp', 'time'].includes(lower)) {
-      t = 'DateTime<Utc>';
-    } else if (['bytes', 'binary', 'varbinary', 'image'].includes(lower)) t = 'Vec<u8>';
+  /**
+   * The Rust type for a field.
+   *
+   * From the declared type, so `DECIMAL` is an `f64` and `BIGINT` an `i64`: both
+   * arrived as `number` and were written as `i64`.
+   */
+  private mapRustType(field: Field, isOptional: boolean): string {
+    let t: string;
+    switch (fieldKind(field, this.provider)) {
+      case 'int': t = 'i32'; break;
+      case 'bigint': t = 'i64'; break;
+      case 'float': t = 'f64'; break;
+      case 'bool': t = 'bool'; break;
+      case 'date': t = 'DateTime<Utc>'; break;
+      case 'bytes': t = 'Vec<u8>'; break;
+      case 'json': t = 'serde_json::Value'; break;
+      case 'vector': t = 'Vec<f32>'; break;
+      default: t = 'String'; break;
+    }
     if (isOptional) return `Option<${t}>`;
     return t;
   }
 
   private getRustFilterType(field: Field): string {
-    const lower = field.type.toLowerCase();
-    if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset', 'timestamp', 'time'].includes(lower)) {
-      return 'DateTimeFilter';
+    // From the declared type: both arrived as `number` and picked the integer filter.
+    switch (fieldKind(field, this.provider)) {
+      case 'date': return 'DateTimeFilter';
+      case 'bool': return 'BoolFilter';
+      case 'int':
+      case 'bigint': return 'IntFilter';
+      case 'float': return 'NumberFilter';
+      default: return 'StringFilter';
     }
-    if (['bool', 'boolean', 'bit'].includes(lower)) return 'BoolFilter';
-    if (['int', 'integer', 'smallint', 'tinyint', 'bigint', 'long', 'number'].includes(lower)) return 'IntFilter';
-    if (['float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower)) return 'NumberFilter';
-    return 'StringFilter';
   }
 
   private getAllPropertyVariations(modelName: string): string[] {

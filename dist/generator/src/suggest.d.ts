@@ -15,3 +15,4 @@ export declare function editDistance(a: string, b: string): number;
  * something unrelated just because of capitalisation.
  */
 export declare function suggest(input: string, candidates: readonly string[]): string | null;
+//# sourceMappingURL=suggest.d.ts.map

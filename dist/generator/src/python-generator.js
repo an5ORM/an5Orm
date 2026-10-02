@@ -7,6 +7,7 @@ exports.PythonGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const types_1 = require("./types");
+const type_kinds_1 = require("./type-kinds");
 class PythonGenerator {
     constructor(outputPath) {
         this.outputPath = outputPath;
@@ -23,6 +24,7 @@ class PythonGenerator {
         return path_1.default.basename(this.outputPath).replace(/\.py$/i, '');
     }
     generate(models) {
+        this.provider = models[0]?.provider;
         const outputDir = path_1.default.dirname(this.outputPath);
         if (!fs_1.default.existsSync(outputDir)) {
             fs_1.default.mkdirSync(outputDir, { recursive: true });
@@ -42,17 +44,15 @@ class PythonGenerator {
         // 6. Generate __init__.py
         this.generateInit(models, outputDir);
     }
-    getPyFilterType(fieldType) {
-        const lower = fieldType.toLowerCase();
-        if (['datetime', 'datetime2', 'date', 'smalldatetime', 'datetimeoffset', 'timestamp'].includes(lower))
-            return 'DateTimeFilter';
-        if (['bool', 'boolean', 'bit'].includes(lower))
-            return 'BoolFilter';
-        if (['int', 'integer', 'smallint', 'tinyint', 'bigint', 'number'].includes(lower))
-            return 'IntFilter';
-        if (['float', 'real', 'double', 'decimal', 'numeric', 'money'].includes(lower))
-            return 'NumberFilter';
-        return 'StringFilter';
+    getPyFilterType(field) {
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'date': return 'DateTimeFilter';
+            case 'bool': return 'BoolFilter';
+            case 'int':
+            case 'bigint': return 'IntFilter';
+            case 'float': return 'NumberFilter';
+            default: return 'StringFilter';
+        }
     }
     generateOrmTypes(models, outputDir) {
         let content = '# This file is auto-generated. Do not edit directly.\n';
@@ -78,7 +78,7 @@ class PythonGenerator {
             content += `    OR: Optional[List['${name}WhereInput']] = None\n`;
             content += `    NOT: Optional['${name}WhereInput'] = None\n`;
             for (const f of model.fields) {
-                const ft = this.getPyFilterType(f.type);
+                const ft = this.getPyFilterType(f);
                 content += `    ${this.toSnakeCase(f.name)}: Optional[${ft}] = None\n`;
             }
             content += '\n';
@@ -93,10 +93,10 @@ class PythonGenerator {
             const optionalFields = model.fields.filter(f => !f.isId && (f.isOptional || f.hasDefault));
             content += `@dataclass\nclass ${name}CreateInput:\n    """Typed data for creating a new ${name} record."""\n`;
             for (const f of requiredFields) {
-                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
             }
             for (const f of optionalFields) {
-                content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f.type)}] = None\n`;
+                content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f)}] = None\n`;
             }
             if (requiredFields.length === 0 && optionalFields.length === 0)
                 content += '    pass\n';
@@ -105,7 +105,7 @@ class PythonGenerator {
             const updateFields = model.fields.filter(f => !f.isId);
             content += `@dataclass\nclass ${name}UpdateInput:\n    """Typed data for updating an existing ${name} record."""\n`;
             for (const f of updateFields) {
-                content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f.type)}] = None\n`;
+                content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f)}] = None\n`;
             }
             if (updateFields.length === 0)
                 content += '    pass\n';
@@ -177,24 +177,24 @@ class PythonGenerator {
         pyContent += '}\n';
         fs_1.default.writeFileSync(this.outputPath, pyContent);
     }
-    mapPyType(fieldType) {
-        const lower = fieldType.toLowerCase();
-        if (['int', 'integer', 'smallint', 'tinyint', 'bigint', 'number'].includes(lower)) {
-            return 'int';
+    /**
+     * The Python type for a field.
+     *
+     * From the declared type, so `DECIMAL` is a `float` and `BIGINT` stays an `int`:
+     * both arrived as `number` before and took the integer branch.
+     */
+    mapPyType(field) {
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'int':
+            case 'bigint': return 'int';
+            case 'float': return 'float';
+            case 'bool': return 'bool';
+            case 'date': return 'datetime';
+            case 'bytes': return 'bytes';
+            case 'json': return 'Any';
+            case 'vector': return 'List[float]';
+            default: return 'str';
         }
-        if (['float', 'real', 'double', 'decimal', 'numeric', 'money'].includes(lower)) {
-            return 'float';
-        }
-        if (['bool', 'boolean', 'bit'].includes(lower)) {
-            return 'bool';
-        }
-        if (['datetime', 'datetime2', 'date', 'smalldatetime', 'datetimeoffset', 'timestamp'].includes(lower)) {
-            return 'datetime';
-        }
-        if (['bytes', 'binary', 'varbinary'].includes(lower)) {
-            return 'bytes';
-        }
-        return 'str';
     }
     generateModelFile(model, outputDir) {
         // Single-entity file like dotnet `${model.name}.cs` / typescript `${model.name}.ts`.
@@ -215,12 +215,12 @@ class PythonGenerator {
             const required = model.fields.filter(f => !f.isOptional && !f.hasDefault);
             const optionals = model.fields.filter(f => f.isOptional || f.hasDefault);
             for (const f of required) {
-                const pyType = this.mapPyType(f.type);
+                const pyType = this.mapPyType(f);
                 const snakeName = this.toSnakeCase(f.name);
                 content += `    ${snakeName}: ${pyType}\n`;
             }
             for (const f of optionals) {
-                const pyType = this.mapPyType(f.type);
+                const pyType = this.mapPyType(f);
                 const snakeName = this.toSnakeCase(f.name);
                 content += `    ${snakeName}: Optional[${pyType}] = None\n`;
             }
@@ -248,7 +248,7 @@ class PythonGenerator {
                 content += '    pass\n';
             }
             for (const f of rowRequired) {
-                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
             }
             content += `\nclass ${model.name}Row(_${model.name}Required, total=False):\n`;
             content += `    """Row shape returned for ${model.name} queries."""\n`;
@@ -256,7 +256,7 @@ class PythonGenerator {
                 content += '    pass\n';
             }
             for (const f of rowOptional) {
-                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f.type)}\n`;
+                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
             }
             for (const rel of model.relations) {
                 const relName = this.toSnakeCase(rel.name);

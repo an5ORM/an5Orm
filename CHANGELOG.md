@@ -59,6 +59,15 @@
   SQL Server. A URI scheme is case-insensitive.
 
 ### Fixed
+- **The Go client generated every numeric column as a `string`** — the generators
+  receive the TypeScript type, which is `number` for `INT`, `FLOAT` and `DECIMAL`
+  alike, and the Go type table matched none of those. A Go client could only insert
+  `"10"` into an `INT` column. The declared type now decides, through one shared
+  resolver, in all four statically typed generators: `DECIMAL` is a `float`/`decimal`
+  rather than an integer, and a `BIGINT` is 64-bit.
+- **MySQL's `BIT` was a number in the TypeScript client and a boolean in the other
+  four** — every other dialect's `BIT` is a boolean here, and `BIT` is a flag in
+  practice, so it now is one everywhere.
 - **`db:push` and `db:migrate` could name the same constraint differently** — `map:`
   on `@@unique([a, b], map: "UQ_x")` was read by `db:migrate` and ignored by `db:push`,
   which invented `UQ_<table>_compound_0`. Push created one constraint, the next
@@ -73,6 +82,9 @@
   validator then rejected.
 
 ### Changed
+- **Generated numeric types are correct now, which is breaking for Rust consumers** —
+  an `INT` column generates `i32` where it generated `i64` before, because the same
+  bug put every numeric type in the 64-bit branch. Regenerate and fix the call sites.
 - **A type the provider does not have is now an error** — this is the point of the
   change, and it is breaking for schemas that relied on the shared list. Replace
   `BOOLEAN` with `BIT` on SQL Server, `DATETIME2` with `DATETIME` on SQLite or MySQL,

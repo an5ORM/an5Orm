@@ -7,6 +7,7 @@ exports.RustGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const types_1 = require("./types");
+const type_kinds_1 = require("./type-kinds");
 class RustGenerator {
     constructor(outputDir) {
         this.outputDir = outputDir;
@@ -19,6 +20,7 @@ class RustGenerator {
         }
     }
     generate(models) {
+        this.provider = models[0]?.provider;
         this.generateCargoToml();
         this.generateLibRs(models);
         this.generateFiltersRs();
@@ -370,7 +372,7 @@ pub struct DateTimeFilter {
                 // when the caller never set it, so it is optional here just like in
                 // CreateInput. Matches the Python generator's required-field rule.
                 const isOptional = f.isOptional || f.hasDefault;
-                const rsType = this.mapRustType(f.type, isOptional);
+                const rsType = this.mapRustType(f, isOptional);
                 const snake = this.toSnakeCase(f.name);
                 if (f.description) {
                     s.push(`    /// ${f.description}`);
@@ -439,7 +441,7 @@ pub struct DateTimeFilter {
                     continue;
                 const snake = this.toSnakeCase(f.name);
                 const isOpt = f.isOptional || f.hasDefault;
-                const rsType = this.mapRustType(f.type, isOpt);
+                const rsType = this.mapRustType(f, isOpt);
                 if (isOpt) {
                     s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
                 }
@@ -454,7 +456,7 @@ pub struct DateTimeFilter {
                 if (f.isId)
                     continue;
                 const snake = this.toSnakeCase(f.name);
-                const rsType = this.mapRustType(f.type, true);
+                const rsType = this.mapRustType(f, true);
                 s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
                 s.push(`    pub ${snake}: ${rsType},`);
             }
@@ -876,38 +878,57 @@ impl SqlBuilder {
     isBoolField(field) {
         return ['bool', 'boolean', 'bit'].includes(field.type.toLowerCase());
     }
-    mapRustType(fieldType, isOptional) {
-        const lower = fieldType.toLowerCase();
-        let t = 'String';
-        if (['int', 'integer', 'smallint', 'tinyint'].includes(lower))
-            t = 'i32';
-        else if (['bigint', 'long', 'number'].includes(lower))
-            t = 'i64';
-        else if (['float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower))
-            t = 'f64';
-        else if (['bool', 'boolean', 'bit'].includes(lower))
-            t = 'bool';
-        else if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset', 'timestamp', 'time'].includes(lower)) {
-            t = 'DateTime<Utc>';
+    /**
+     * The Rust type for a field.
+     *
+     * From the declared type, so `DECIMAL` is an `f64` and `BIGINT` an `i64`: both
+     * arrived as `number` and were written as `i64`.
+     */
+    mapRustType(field, isOptional) {
+        let t;
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'int':
+                t = 'i32';
+                break;
+            case 'bigint':
+                t = 'i64';
+                break;
+            case 'float':
+                t = 'f64';
+                break;
+            case 'bool':
+                t = 'bool';
+                break;
+            case 'date':
+                t = 'DateTime<Utc>';
+                break;
+            case 'bytes':
+                t = 'Vec<u8>';
+                break;
+            case 'json':
+                t = 'serde_json::Value';
+                break;
+            case 'vector':
+                t = 'Vec<f32>';
+                break;
+            default:
+                t = 'String';
+                break;
         }
-        else if (['bytes', 'binary', 'varbinary', 'image'].includes(lower))
-            t = 'Vec<u8>';
         if (isOptional)
             return `Option<${t}>`;
         return t;
     }
     getRustFilterType(field) {
-        const lower = field.type.toLowerCase();
-        if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset', 'timestamp', 'time'].includes(lower)) {
-            return 'DateTimeFilter';
+        // From the declared type: both arrived as `number` and picked the integer filter.
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'date': return 'DateTimeFilter';
+            case 'bool': return 'BoolFilter';
+            case 'int':
+            case 'bigint': return 'IntFilter';
+            case 'float': return 'NumberFilter';
+            default: return 'StringFilter';
         }
-        if (['bool', 'boolean', 'bit'].includes(lower))
-            return 'BoolFilter';
-        if (['int', 'integer', 'smallint', 'tinyint', 'bigint', 'long', 'number'].includes(lower))
-            return 'IntFilter';
-        if (['float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower))
-            return 'NumberFilter';
-        return 'StringFilter';
     }
     getAllPropertyVariations(modelName) {
         const variations = new Set();

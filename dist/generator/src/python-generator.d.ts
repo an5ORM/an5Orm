@@ -11,10 +11,18 @@ export declare class PythonGenerator {
      * client broke on import — a failure that only showed up at runtime.
      */
     private metadataModule;
+    /** The database being generated for; decides types like `TIMESTAMP`. */
+    private provider;
     generate(models: Model[]): void;
     private getPyFilterType;
     private generateOrmTypes;
     private generateMetadata;
+    /**
+     * The Python type for a field.
+     *
+     * From the declared type, so `DECIMAL` is a `float` and `BIGINT` stays an `int`:
+     * both arrived as `number` before and took the integer branch.
+     */
     private mapPyType;
     private generateModelFile;
     private generateModelsIndex;
