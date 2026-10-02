@@ -7,6 +7,7 @@ exports.DotnetGenerator = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const types_1 = require("./types");
+const type_kinds_1 = require("./type-kinds");
 class DotnetGenerator {
     constructor(outputDir) {
         this.outputDir = outputDir;
@@ -15,6 +16,7 @@ class DotnetGenerator {
         }
     }
     generate(models) {
+        this.provider = models[0]?.provider;
         // 1. Generate individual C# entity class files
         for (const model of models) {
             this.generateEntityClass(model);
@@ -26,17 +28,17 @@ class DotnetGenerator {
         // 4. Generate configuration helper class
         this.generateConfigClass();
     }
-    getCsFilterType(fieldType, isOptional) {
-        const lower = fieldType.toLowerCase();
-        if (['datetime', 'datetime2', 'smalldatetime', 'date', 'datetimeoffset'].includes(lower))
-            return 'DateTimeFilter';
-        if (['bool', 'boolean', 'bit'].includes(lower))
-            return 'BoolFilter';
-        if (['int', 'integer', 'smallint', 'tinyint', 'number'].includes(lower))
-            return 'IntFilter';
-        if (['bigint', 'long', 'float', 'real', 'double', 'decimal', 'numeric', 'money', 'smallmoney'].includes(lower))
-            return 'NumberFilter';
-        return 'StringFilter';
+    getCsFilterType(field, isOptional) {
+        // From the declared type: a DECIMAL column took the integer filter because it
+        // arrived as `number`.
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'date': return 'DateTimeFilter';
+            case 'bool': return 'BoolFilter';
+            case 'int':
+            case 'bigint': return 'IntFilter';
+            case 'float': return 'NumberFilter';
+            default: return 'StringFilter';
+        }
     }
     generateOrmTypes(models) {
         let content = `// This file is auto-generated. Do not edit directly.
@@ -111,7 +113,7 @@ namespace An5Orm
 `;
         for (const model of models) {
             const name = this.capitalize(model.name);
-            const csType = (f) => this.mapType(f.type, f.isOptional);
+            const csType = (f) => this.mapType(f, f.isOptional);
             content += `    // ── ${name} ORM Types ──────────────────────────────────────────────────────\n\n`;
             // WhereInput
             content += `    /// <summary>Type-safe WHERE filter for ${name} queries.</summary>\n`;
@@ -120,7 +122,7 @@ namespace An5Orm
             content += `        public List<${name}WhereInput> OR { get; set; }\n`;
             content += `        public ${name}WhereInput NOT { get; set; }\n`;
             for (const f of model.fields) {
-                const ft = this.getCsFilterType(f.type, f.isOptional);
+                const ft = this.getCsFilterType(f, f.isOptional);
                 content += `        public ${ft} ${this.capitalize(f.name)} { get; set; }\n`;
             }
             content += `    }\n\n`;
@@ -136,7 +138,7 @@ namespace An5Orm
             content += `    public class ${name}CreateInput\n    {\n`;
             for (const f of model.fields) {
                 if (!f.isId) {
-                    const ct = this.mapType(f.type, f.isOptional || f.hasDefault);
+                    const ct = this.mapType(f, f.isOptional || f.hasDefault);
                     content += `        public ${ct} ${this.capitalize(f.name)} { get; set; }\n`;
                 }
             }
@@ -146,7 +148,7 @@ namespace An5Orm
             content += `    public class ${name}UpdateInput\n    {\n`;
             for (const f of model.fields) {
                 if (!f.isId) {
-                    const ut = this.mapType(f.type, true); // always nullable for update
+                    const ut = this.mapType(f, true); // always nullable for update
                     content += `        public ${ut} ${this.capitalize(f.name)} { get; set; }\n`;
                 }
             }
@@ -200,44 +202,49 @@ namespace An5Orm
 `;
         fs_1.default.writeFileSync(path_1.default.join(this.outputDir, 'An5Config.cs'), content);
     }
-    mapType(fieldType, isOptional) {
-        let csType = 'string';
-        const lowerType = fieldType.toLowerCase();
-        if (['int', 'integer', 'smallint', 'tinyint', 'number'].includes(lowerType)) {
-            csType = 'int';
-        }
-        else if (['bigint', 'long'].includes(lowerType)) {
-            csType = 'long';
-        }
-        else if (['float', 'real', 'double'].includes(lowerType)) {
-            csType = 'double';
-        }
-        else if (['decimal', 'numeric', 'money', 'smallmoney'].includes(lowerType)) {
-            csType = 'decimal';
-        }
-        else if (['bool', 'boolean', 'bit'].includes(lowerType)) {
-            csType = 'bool';
-        }
-        else if (['datetime', 'datetime2', 'smalldatetime', 'date'].includes(lowerType)) {
-            csType = 'DateTime';
-        }
-        else if (lowerType === 'datetimeoffset') {
-            csType = 'DateTimeOffset';
-        }
-        else if (lowerType === 'time') {
-            csType = 'TimeSpan';
-        }
-        else if (['guid', 'uuid', 'uniqueidentifier'].includes(lowerType)) {
-            csType = 'Guid';
-        }
-        else if (['bytes', 'binary', 'varbinary', 'image'].includes(lowerType)) {
-            csType = 'byte[]';
-        }
-        else if (['xml', 'hierarchyid', 'geography', 'geometry', 'sysname', 'sql_variant', 'sqlvariant', 'rowversion', 'variant'].includes(lowerType)) {
-            csType = 'string';
-        }
-        else if (fieldType.endsWith('[]')) {
-            csType = 'string';
+    /**
+     * The C# type for a field.
+     *
+     * Driven by the declared type, so a `DECIMAL` column is a `decimal` and a `FLOAT`
+     * one a `double`: both arrived as `number` and took the `int` branch.
+     */
+    mapType(field, isOptional) {
+        let csType;
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'int':
+                csType = 'int';
+                break;
+            case 'bigint':
+                csType = 'long';
+                break;
+            case 'float': {
+                // `DECIMAL`/`NUMERIC`/`MONEY` are exact and stay `decimal`; a floating
+                // column is a `double`. Both used to arrive as `number` and became `int`.
+                const base = (field.sqlType ?? field.type).replace(/\([^)]*\)/g, '').trim().toUpperCase();
+                csType = ['DECIMAL', 'NUMERIC', 'MONEY', 'SMALLMONEY'].includes(base) ? 'decimal' : 'double';
+                break;
+            }
+            case 'bool':
+                csType = 'bool';
+                break;
+            case 'date': {
+                const base = (field.sqlType ?? field.type).replace(/\([^)]*\)/g, '').trim().toUpperCase();
+                csType = base === 'DATETIMEOFFSET' ? 'DateTimeOffset' : base === 'TIME' ? 'TimeSpan' : 'DateTime';
+                break;
+            }
+            case 'bytes':
+                csType = 'byte[]';
+                break;
+            case 'vector':
+                csType = 'float[]';
+                break;
+            // JSON, XML, geometry and the rest stay strings: they are read as text and a
+            // Guid column is covered by the string case below via its declared name.
+            default: {
+                const base = (field.sqlType ?? field.type).replace(/\([^)]*\)/g, '').trim().toUpperCase();
+                csType = ['GUID', 'UUID', 'UNIQUEIDENTIFIER'].includes(base) ? 'Guid' : 'string';
+                break;
+            }
         }
         if (isOptional && csType !== 'string' && !csType.endsWith('[]')) {
             csType += '?';
@@ -256,7 +263,7 @@ namespace An5Orm.Entities
 `;
         // Generate fields
         for (const field of model.fields) {
-            const csType = this.mapType(field.type, field.isOptional);
+            const csType = this.mapType(field, field.isOptional);
             content += `        public ${csType} ${this.capitalize(field.name)} { get; set; }\n`;
         }
         // Generate relations
@@ -871,31 +878,44 @@ namespace An5Orm
 
         public List<T> VectorSearch(List<double> vector, int take = 10, string whereClause = null, Dictionary<string, object> parameters = null, string vectorField = "Embedding", string distanceMetric = "cosine")
         {
-            // 1. Primary path: Native database SQL vector query execution (VECTOR_DISTANCE)
+            // 1. Primary path: native vector query. SQL Server has VECTOR_DISTANCE
+            //    and Postgres has pgvector; SQLite has no vector operator, so it is
+            //    skipped outright rather than issuing SQL that can only fail and
+            //    cost a round trip before falling through.
+            if (Dialect != An5Dialect.Sqlite)
             try
             {
                 var dim = vector.Count;
                 var vecJson = JsonSerializer.Serialize(vector);
-                var sql = $"SELECT TOP ({take}) *, VECTOR_DISTANCE('{distanceMetric}', CAST([{vectorField}] AS VECTOR({dim}, float32)), CAST(@query_vector AS VECTOR({dim}, float32))) AS distance FROM {TableName} WITH (NOLOCK)";
-                // Postgres reaches this through pgvector below; SQLite has no
-                // vector operator at all, so it goes straight to the in-memory
-                // path rather than build SQL that can only fail.
+                var field = An5Provider.Quote(vectorField, Dialect);
+                string sql;
+                if (Dialect == An5Dialect.Postgres)
+                {
+                    var op = distanceMetric.Equals("cosine", StringComparison.OrdinalIgnoreCase) ? "<=>"
+                           : (distanceMetric.Equals("euclidean", StringComparison.OrdinalIgnoreCase) ? "<->" : "<#>");
+                    sql = $"SELECT *, ({field} {op} @query_vector::vector) AS distance FROM {TableName}";
+                }
+                else
+                {
+                    sql = $"SELECT TOP ({take}) *, VECTOR_DISTANCE('{distanceMetric}', CAST({field} AS VECTOR({dim}, float32)), CAST(@query_vector AS VECTOR({dim}, float32))) AS distance FROM {TableName} WITH (NOLOCK)";
+                }
 
                 var p = parameters != null ? new Dictionary<string, object>(parameters) : new Dictionary<string, object>();
                 p["query_vector"] = vecJson;
 
                 if (!string.IsNullOrWhiteSpace(whereClause))
-                    sql += $" WHERE [{vectorField}] IS NOT NULL AND ({whereClause})";
+                    sql += $" WHERE {field} IS NOT NULL AND ({whereClause})";
                 else
-                    sql += $" WHERE [{vectorField}] IS NOT NULL";
+                    sql += $" WHERE {field} IS NOT NULL";
                 sql += " ORDER BY distance ASC";
+                if (Dialect == An5Dialect.Postgres) sql += $" LIMIT {take}";
 
                 var nativeRows = QueryRaw(sql, p);
                 if (nativeRows != null) return nativeRows;
             }
             catch
             {
-                // Fallback to in-memory similarity computation if DB instance lacks native VECTOR_DISTANCE
+                // Fallback to in-memory similarity computation if the database has no native vector support
             }
 
             // 2. Secondary fallback: In-memory similarity computation
