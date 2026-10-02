@@ -1,5 +1,64 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Field types are validated per database provider** — the provider comes from the
+  connection string (`DATABASE_URL` first, then `connectionString`), the same way
+  `An5Adapter` picks its engine, and each provider has its own table of types in
+  `generator/src/field-types.ts`. One shared list used to cover every database, so a
+  type from the wrong provider passed validation and only failed at DDL time.
+- **`db:push` writes the DDL of the provider it is connected to** — SQL Server,
+  PostgreSQL, MySQL and SQLite each get their own quoting, catalog lookups, defaults
+  and identity syntax through `generator/src/dialect.ts`. Before, every provider
+  received SQL Server T-SQL and `sys.*` queries. Google Sheets reports that there is
+  no DDL to send, since a sheet is a range of cells.
+- **Every bad field type is reported at once**, with the provider and a "did you
+  mean", instead of generating code with an `any` type or turning the token into a
+  relation to a model that does not exist.
+
+### Fixed
+- **`db:push` dropped columns silently** — SQLite types such as `INTEGER`,
+  `BOOLEAN` and `BLOB` were generated into the client but not in the list
+  `db:push` checked, so the column was never created and nothing said so.
+- **`@default(autoincrement())` produced invalid SQL** — it was emitted as
+  `INT DEFAULT IDENTITY(1,1)`; identity is a property of the column type, so it is
+  now `INT IDENTITY(1,1)`. SQLite is checked up front, because it only
+  auto-increments an `INTEGER PRIMARY KEY`.
+- **`db:push` made a required column nullable** — `ALTER TABLE ... ADD` appended
+  `NULL` to a column the schema marks required; the branch meant to emit
+  `NOT NULL` sat behind an `else` that could not be reached.
+- **A defaulted column was created nullable** — the presence of a `DEFAULT` was
+  read as "nullability does not matter", so `createdAt DATETIME2 @default(now())`
+  could still be left empty.
+- **`@@schema("")` was ignored by `db:push`** — the directive exists for databases
+  with no schemas, and push dropped it. `@@schema("main")` was ignored too, so the
+  table landed in the connection's default schema while the generated client read
+  the schema the schema file named.
+- **`@@unique([a, b], map: "...")` was dropped by `db:push`** — the reader required
+  the closing parenthesis right after the bracket, so a mapped directive was ignored
+  while `db:migrate` still honoured it.
+- **`db:pull` could write a schema that could not be generated again** — `sysname`
+  and `timestamp` were not valid field types, so a column declared that way produced
+  a `.an5` file the next `generate` rejected.
+- **A relative config path lost the config** — `loadConfig('.')` found the file and
+  then required it by bare name, which Node reads as a package, so the config was
+  silently dropped.
+- **A `.sqlite3` file was treated as SQL Server by the adapter** — the ORM read the
+  provider as SQLite and wrote SQLite DDL, which the adapter then sent to SQL Server.
+  Both now accept `.sqlite3` and both compare the scheme case-insensitively.
+- **Connection strings with capitalised schemes were misread** — `MySQL://` selected
+  SQL Server. A URI scheme is case-insensitive.
+
+### Changed
+- **A type the provider does not have is now an error** — this is the point of the
+  change, and it is breaking for schemas that relied on the shared list. Replace
+  `BOOLEAN` with `BIT` on SQL Server, `DATETIME2` with `DATETIME` on SQLite or MySQL,
+  `INT` with `INTEGER` on PostgreSQL, and so on; the error names each field and the
+  provider so the whole schema can be fixed in one pass.
+- **`db:pull`, `db:migrate:*` and `db:cleanup` still require SQL Server** and now say
+  so instead of failing inside the driver. `db:push` and `db:seed` are unaffected.
+
 ## [1.0.13] - 2026-10-02
 
 ### Added

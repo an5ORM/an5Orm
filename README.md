@@ -141,6 +141,13 @@ await db.$disconnect();
 
 ## Schema Definition (`.an5`)
 
+Field types are validated against the database you are generating for. The provider
+comes from the connection string (`DATABASE_URL` first, then `connectionString` in
+`an5Orm.config.js`): `sqlserver://` (and the fallback) is SQL Server, `postgres://`
+PostgreSQL, `mysql://` MySQL, `sqlite://` SQLite, `googlesheets://` Google Sheets.
+A type the provider does not have stops generation with every offending field
+listed at once — see `PROVIDER_FIELD_TYPES` in `generator/src/field-types.ts`.
+
 ```an5
 model User {
   id        NVARCHAR(1000) @id @default(uuid())

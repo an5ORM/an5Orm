@@ -2,7 +2,8 @@ import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { An5Adapter } from "@an5/adapters";
-import { loadConfig, resolveConnectionString } from "./generator/src/config";
+import { loadConfig, providerFromConfig, resolveConnectionString } from "./generator/src/config";
+import { requireSqlServerProvider } from "./provider-support";
 
 const rootDir = process.cwd();
 const { config, outputs } = loadConfig();
@@ -22,6 +23,11 @@ function capitalize(str: string): string {
 }
 
 async function pull() {
+  // Reads sys.tables/sys.columns and writes MSSQL-shaped type names, so another
+  // provider would fail on the first catalog query with a driver error that says
+  // nothing about the connection string being wrong.
+  requireSqlServerProvider(providerFromConfig(config, process.env), "db:pull");
+
   console.log("🔍 Pulling schema from database...");
 
   const tables = await (await getDb()).$queryRawUnsafe<any>(`

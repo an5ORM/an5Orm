@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const path_1 = __importDefault(require("path"));
 const config_1 = require("./config");
+const field_types_1 = require("./field-types");
 const parser_1 = require("./parser");
 const code_generator_1 = require("./code-generator");
 const metadata_generator_1 = require("./metadata-generator");
@@ -71,6 +72,10 @@ async function main() {
     const outputRustDir = config.outputs.rustDir;
     const generateMetadata = config.config.generation.generateMetadata;
     console.log('🚀 Starting ORM generation...');
+    // The target provider comes from the connection string: both the allowed
+    // field types and the SQL follow it, instead of one shared list.
+    const provider = (0, config_1.providerFromConfig)(config.config, process.env);
+    console.log(`🗄️  Provider: ${field_types_1.PROVIDER_LABELS[provider]} (${provider})`);
     try {
         clearGeneratedFiles(outputTypesDir, '.ts');
         clearGeneratedFiles(outputDotnetDir, '.cs');
@@ -81,7 +86,7 @@ async function main() {
         if (config.config.generation.generateMetadata && fs_1.default.existsSync(outputMetadataPath)) {
             fs_1.default.unlinkSync(outputMetadataPath);
         }
-        const parser = new parser_1.SchemaParser(schemaDir);
+        const parser = new parser_1.SchemaParser(schemaDir, provider);
         const models = await parser.parse();
         console.log(`📦 Parsed ${models.length} models from schema.`);
         const codeGen = new code_generator_1.CodeGenerator(outputTypesDir);
@@ -118,6 +123,13 @@ async function main() {
         console.log('✅ ORM generation completed successfully.');
     }
     catch (error) {
+        // Print every bad field type with its provider, instead of the parser's
+        // nested error object.
+        if (error instanceof field_types_1.FieldTypeError) {
+            console.error(`❌ ${error.message}:`);
+            console.error((0, config_1.formatIssues)(error.issues));
+            process.exit(1);
+        }
         console.error('❌ ORM generation failed:', error);
         process.exit(1);
     }

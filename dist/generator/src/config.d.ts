@@ -1,3 +1,4 @@
+import { Provider } from './field-types';
 /** TypeScript client output. */
 export interface TypeScriptOutput {
     /** Directory for the generated .ts files. */
@@ -86,8 +87,52 @@ export declare function validateConfig(raw: unknown): An5OrmConfig;
  * still have a different one in a pipeline without editing the file.
  */
 export declare function resolveConnectionString(config: An5OrmConfig, env?: NodeJS.ProcessEnv, command?: string): string;
-/** Renders issues for the terminal, pointing at the config file. */
-export declare function formatIssues(issues: ConfigIssue[]): string;
+/**
+ * The provider a connection string points at.
+ *
+ * Reads the scheme exactly as `An5Adapter` does
+ * (`an5Adapters/typescript/src/an5Adapter.ts`) so the generator and the adapter
+ * always talk about the same database: the same connection string must give the
+ * same provider, otherwise validation checks the types of one database while the
+ * SQL runs on another.
+ *
+ * Falls back to SQL Server when the scheme is unknown — it is the default
+ * provider, and ADO-style strings (`Server=...;Database=...`) have no scheme to
+ * read. `sqlite://`, a bare path ending in `.sqlite`, `.sqlite3` or `.db` — the same
+ * list `An5Adapter` uses.
+ */
+export declare function detectProvider(connectionString: string | undefined | null): Provider;
+/**
+ * The provider for this run: `DATABASE_URL` first, then the connection string in
+ * the config file, then the default.
+ *
+ * Does not throw when there is no connection string — `generate` has to work
+ * with an empty config, and the default provider still validates the schema as
+ * before.
+ */
+export declare function providerFromConfig(config: An5OrmConfig, env?: NodeJS.ProcessEnv): Provider;
+/**
+ * The provider configured for a project directory.
+ *
+ * For the tools outside this package that read `.an5` files — the an5Agent
+ * schema tools, the VS Code extension — so they validate against the same
+ * database the generator does instead of silently assuming SQL Server.
+ *
+ * Never throws: no config, an unreadable one, or an invalid one all mean the
+ * default provider, which is what the parser does on its own anyway.
+ */
+export declare function providerForProject(cwd?: string, env?: NodeJS.ProcessEnv): Provider;
+/**
+ * Renders issues for the terminal, one per line, paths aligned.
+ *
+ * Takes the shape rather than `ConfigIssue` so field type errors
+ * (`FieldTypeIssue`, from `./field-types`) print through the same code — both
+ * are "a path in the file and what is wrong with it".
+ */
+export declare function formatIssues(issues: ReadonlyArray<{
+    path: string;
+    message: string;
+}>): string;
 export interface LoadedConfig {
     /** The validated config, with defaults applied. */
     config: An5OrmConfig;

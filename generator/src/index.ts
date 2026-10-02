@@ -1,5 +1,6 @@
 import path from 'path';
-import { loadConfig, ConfigError, formatIssues } from './config';
+import { loadConfig, providerFromConfig, ConfigError, formatIssues } from './config';
+import { FieldTypeError, PROVIDER_LABELS } from './field-types';
 import { SchemaParser } from './parser';
 import { CodeGenerator } from './code-generator';
 import { MetadataGenerator } from './metadata-generator';
@@ -72,6 +73,11 @@ async function main() {
 
   console.log('🚀 Starting ORM generation...');
 
+  // The target provider comes from the connection string: both the allowed
+  // field types and the SQL follow it, instead of one shared list.
+  const provider = providerFromConfig(config.config, process.env);
+  console.log(`🗄️  Provider: ${PROVIDER_LABELS[provider]} (${provider})`);
+
   try {
     clearGeneratedFiles(outputTypesDir, '.ts');
     clearGeneratedFiles(outputDotnetDir, '.cs');
@@ -83,7 +89,7 @@ async function main() {
       fs.unlinkSync(outputMetadataPath);
     }
 
-    const parser = new SchemaParser(schemaDir);
+    const parser = new SchemaParser(schemaDir, provider);
     const models = await parser.parse();
     console.log(`📦 Parsed ${models.length} models from schema.`);
 
@@ -125,6 +131,13 @@ async function main() {
 
     console.log('✅ ORM generation completed successfully.');
   } catch (error) {
+    // Print every bad field type with its provider, instead of the parser's
+    // nested error object.
+    if (error instanceof FieldTypeError) {
+      console.error(`❌ ${error.message}:`);
+      console.error(formatIssues(error.issues));
+      process.exit(1);
+    }
     console.error('❌ ORM generation failed:', error);
     process.exit(1);
   }

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { An5Adapter } from "@an5/adapters";
-import { loadConfig, resolveConnectionString } from "./generator/src/config";
+import { loadConfig, providerFromConfig, resolveConnectionString } from "./generator/src/config";
+import { requireSqlServerProvider } from "./provider-support";
 import fs from "fs";
 import path from "path";
 
@@ -18,6 +19,10 @@ async function getDb(): Promise<An5Adapter> {
 }
 
 async function cleanup() {
+  // Drops tables by comparing sys.tables with the schema files, so a non-SQL
+  // Server connection string is a mistake worth naming first.
+  requireSqlServerProvider(providerFromConfig(config, process.env), "db:cleanup");
+
   console.log("🧹 Starting database cleanup...");
 
   let schemaText = "";

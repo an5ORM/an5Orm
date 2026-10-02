@@ -14,7 +14,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { An5Adapter } from '@an5/adapters';
-import { loadConfig, resolveConnectionString } from './generator/src/config';
+import { formatIssues, loadConfig, providerFromConfig, resolveConnectionString } from './generator/src/config';
+import { FieldTypeError } from './generator/src/field-types';
+import { requireSqlServerProvider } from './provider-support';
 import {
   DbColumn,
   SchemaModel,
@@ -58,7 +60,7 @@ function parseSchema(): SchemaModel[] {
     text += fs.readFileSync(path.join(schemaDir, file), 'utf8') + '\n';
   }
 
-  return parseSchemaText(text);
+  return parseSchemaText(text, providerFromConfig(config, process.env));
 }
 
 // ─── Database Introspection ──────────────────────────────────────────────────
@@ -388,9 +390,25 @@ async function cmdStatus() {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+const MIGRATION_COMMANDS = ['diff', 'generate', 'apply', 'rollback', 'status'] as const;
+
 async function main() {
   const command = process.argv[2] || 'diff';
   const args = process.argv.slice(3);
+
+  // Checked after the subcommand is known, so a typo gets the usage line instead of
+  // a warning about the wrong database.
+  if (!MIGRATION_COMMANDS.includes(command as (typeof MIGRATION_COMMANDS)[number])) {
+    console.log('Usage: npx tsx migrate.ts [diff|generate|apply [--dry-run]|rollback [--dry-run] [steps|--to file]|status]');
+    process.exit(1);
+  }
+
+  // Every subcommand reads sys.* and writes T-SQL, so a non-SQL Server connection
+  // string is a mistake worth naming before any of it runs.
+  requireSqlServerProvider(
+    providerFromConfig(config, process.env),
+    process.argv[2] ? `db:migrate:${command}` : 'db:migrate',
+  );
 
   switch (command) {
     case 'diff': await cmdDiff(); break;
@@ -398,9 +416,6 @@ async function main() {
     case 'apply': await cmdApply(args); break;
     case 'rollback': await cmdRollback(args); break;
     case 'status': await cmdStatus(); break;
-    default:
-      console.log('Usage: npx tsx migrate.ts [diff|generate|apply [--dry-run]|rollback [--dry-run] [steps|--to file]|status]');
-      process.exit(1);
   }
 
   process.exit(0);
@@ -408,7 +423,14 @@ async function main() {
 
 if (require.main === module) {
   main().catch((err) => {
-    console.error(`❌ Migration failed: ${err instanceof Error ? err.message : err}`);
+    // A field type error carries one line per offending field; the message alone
+    // would name the provider without saying which fields to fix.
+    if (err instanceof FieldTypeError) {
+      console.error(`❌ ${err.message}:`);
+      console.error(formatIssues(err.issues));
+    } else {
+      console.error(`❌ Migration failed: ${err instanceof Error ? err.message : err}`);
+    }
     process.exit(1);
   });
 }

@@ -1,81 +1,61 @@
 import fs from 'fs';
 import path from 'path';
 import { Model, Field, Relation } from './types';
+import {
+  DEFAULT_PROVIDER,
+  FieldTypeError,
+  FieldTypeIssue,
+  Provider,
+  readFieldLineHead,
+  resolveFieldType,
+  unknownFieldTypeMessage,
+} from './field-types';
 
-// SQL Server type → TypeScript type mapping
-const AN5_TO_TS: Record<string, string> = {
-  // String types
-  'NVARCHAR': 'string',
-  'VARCHAR': 'string',
-  'CHAR': 'string',
-  'NCHAR': 'string',
-  'TEXT': 'string',
-  'NTEXT': 'string',
-  'XML': 'string',
-  // Numeric types
-  'INT': 'number',
-  'SMALLINT': 'number',
-  'TINYINT': 'number',
-  'BIGINT': 'number | bigint',
-  'FLOAT': 'number',
-  'REAL': 'number',
-  'DECIMAL': 'number',
-  'NUMERIC': 'number',
-  'MONEY': 'number',
-  'SMALLMONEY': 'number',
-  // SQLite affinity names. Thiếu mấy cái này thì `parseModelLine` rơi vào nhánh
-  // "viết hoa, không ngoặc → relation", nên một cột `INTEGER` hay `BOOLEAN` bị
-  // sinh thành quan hệ tới model tên `INTEGER`/`BOOLEAN` thay vì là cột thường.
-  'INTEGER': 'number',
-  'INT2': 'number',
-  'INT8': 'number',
-  'DOUBLE': 'number',
-  'DOUBLE PRECISION': 'number',
-  'BOOLEAN': 'boolean',
-  'BOOL': 'boolean',
-  // Boolean
-  'BIT': 'boolean',
-  // Date types
-  'DATETIME': 'Date',
-  'DATETIME2': 'Date',
-  'SMALLDATETIME': 'Date',
-  'DATE': 'Date',
-  'TIME': 'Date',
-  'DATETIMEOFFSET': 'Date',
-  // Binary types
-  'VARBINARY': 'Buffer',
-  'BINARY': 'Buffer',
-  'IMAGE': 'Buffer',
-  'BLOB': 'Buffer',
-  // Other
-  'UNIQUEIDENTIFIER': 'string',
-  'SQL_VARIANT': 'any',
-  'ROWVERSION': 'Buffer',
-  'HIERARCHYID': 'string',
-  'GEOGRAPHY': 'string',
-  'GEOMETRY': 'string',
-  'VECTOR': 'number[] | string',
-};
-
-// Parse base type from "NVARCHAR(255)" → "NVARCHAR"
-function parseSqlType(raw: string): { base: string; params: string } {
-  const match = raw.match(/^(\w+)(?:\((.+)\))?$/);
-  if (!match) return { base: raw, params: '' };
-  return { base: match[1].toUpperCase(), params: match[2] || '' };
+/**
+ * Maps a column type of a provider to its TypeScript type.
+ *
+ * `provider` defaults to SQL Server so existing callers keep their behaviour;
+ * the generator passes the provider derived from the connection string.
+ */
+export function sqlTypeToTs(sqlType: string, provider: Provider = DEFAULT_PROVIDER): string {
+  return resolveFieldType(sqlType, provider)?.ts ?? 'any';
 }
 
-// Map SQL Server type to TypeScript type
-export function sqlTypeToTs(sqlType: string): string {
-  const { base } = parseSqlType(sqlType);
-  return AN5_TO_TS[base] || 'any';
+/**
+ * A field whose type is in no table for this provider. Whether it is a relation
+ * or a typo is not known yet, so the decision waits until the whole schema has
+ * been read.
+ */
+interface PendingModelRef {
+  model: Model;
+  name: string;
+  /** The name as written in the schema, kept verbatim to compare with model names. */
+  type: string;
+  isArray: boolean;
+  isOptional: boolean;
+  /** The original line, needed to read `@relation`/`@description`. */
+  line: string;
 }
 
 export class SchemaParser {
   private schemaText: string = '';
+  private issues: FieldTypeIssue[] = [];
+  private modelRefs: PendingModelRef[] = [];
+  private models: Model[] = [];
 
-  constructor(private schemaDir: string) {}
+  /**
+   * @param schemaDir directory holding the `.an5` files
+   * @param provider target database; decides which field types are valid
+   */
+  constructor(
+    private schemaDir: string,
+    private provider: Provider = DEFAULT_PROVIDER,
+  ) {}
 
   public async parse(): Promise<Model[]> {
+    this.issues = [];
+    this.modelRefs = [];
+    this.models = [];
     this.loadSchema();
     const lines = this.schemaText.split('\n');
     const models: Model[] = [];
@@ -109,6 +89,15 @@ export class SchemaParser {
       }
     }
 
+    this.models = models;
+    this.resolveModelRefs();
+
+    // Every bad type is reported at once, so one pass over the schema is enough
+    // instead of re-running the generator after every line.
+    if (this.issues.length > 0) {
+      throw new FieldTypeError(this.provider, this.issues);
+    }
+
     this.postProcessRelations(models);
     return models;
   }
@@ -131,9 +120,10 @@ export class SchemaParser {
       return;
     }
     if (line.startsWith('@@schema')) {
-      // `(.*)` chứ không phải `(.+)`: `@@schema("")` là cách nói "không có
-      // schema", cần cho cơ sở dữ liệu không có khái niệm schema. Với `(.+)` thì
-      // chuỗi rỗng không khớp, lệnh bị bỏ qua âm thầm và model vẫn nhận `dbo`.
+      // `(.*)` rather than `(.+)`: `@@schema("")` is how a model says "no
+      // schema", needed for databases that have no schema concept. With `(.+)`
+      // the empty string does not match, the directive is silently ignored and
+      // the model keeps `dbo`.
       const schemaMatch = line.match(/@@schema\("(.*)"\)/);
       if (schemaMatch) model.schemaName = schemaMatch[1].trim();
       return;
@@ -154,58 +144,71 @@ export class SchemaParser {
     }
     if (line.startsWith('@@')) return;
 
-    const parts = line.split(/\s+/);
-    const fieldName = parts[0];
-    let fieldType = parts[1];
-    if (!fieldName || !fieldType) return;
+    const head = readFieldLineHead(line);
+    if (!head) return;
 
-    const isArray = fieldType.endsWith('[]');
-    const isOptional = fieldType.endsWith('?');
-    const cleanType = fieldType.replace('[]', '').replace('?', '');
-
-    // Parse SQL Server type (e.g., "NVARCHAR(255)" → base="NVARCHAR")
-    const { base: sqlBase } = parseSqlType(cleanType);
-
-    let tsType = 'any';
-    let isRelation = false;
-
-    // Check if it's a known SQL Server type
-    if (AN5_TO_TS[sqlBase]) {
-      tsType = sqlTypeToTs(cleanType);
-    } else if (cleanType[0] === cleanType[0].toUpperCase() && !cleanType.includes('(')) {
-      // Uppercase without parens = likely a relation to another model
-      tsType = cleanType;
-      isRelation = true;
+    // No table entry for this provider. This used to fall through to
+    // `tsType = 'any'` (or, worse, become a relation to a model that does not
+    // exist) and the client was still generated; the failure only surfaced
+    // later at the database layer, in a message unrelated to the schema.
+    const resolved = resolveFieldType(head.type, this.provider);
+    if (!resolved) {
+      this.modelRefs.push({ model, name: head.name, type: head.type, isArray: head.isArray, isOptional: head.isOptional, line });
+      return;
     }
 
-    if (isRelation) {
+    const hasDefault = line.includes('@default') || line.includes('@updatedAt') || line.includes('@id');
+    const isId = line.includes('@id');
+    let description: string | undefined;
+    const descMatch = line.match(/@description\("(.+)"\)/);
+    if (descMatch) description = descMatch[1];
+    model.fields.push({ name: head.name, type: resolved.ts, sqlType: head.type, isOptional: head.isOptional, hasDefault, isId, description });
+  }
+
+  /**
+   * Settles the fields that matched no type: a name matching a model in the
+   * schema is a relation, anything else is a bad type — reported with the
+   * provider name and a suggestion.
+   *
+   * The decision has to wait for the whole schema, because a relation may point
+   * at a model declared later. Every upper-case token used to count as a
+   * relation, so `INTEGER` written for SQL Server became a relation to a model
+   * named `INTEGER` and nothing ever complained.
+   */
+  private resolveModelRefs() {
+    const modelNames = this.models.map((model) => model.name);
+
+    for (const ref of this.modelRefs) {
+      if (!modelNames.includes(ref.type)) {
+        this.issues.push({
+          path: `${ref.model.name}.${ref.name}`,
+          message: unknownFieldTypeMessage(ref.type, this.provider, modelNames),
+        });
+        continue;
+      }
+
       let foreignKey = '', localKey = '', relationName = '';
-      const nameMatch = line.match(/@relation\("(\w+)"/);
+      const nameMatch = ref.line.match(/@relation\("(\w+)"/);
       if (nameMatch) relationName = nameMatch[1];
-      const relationMatch = line.match(/@relation\((?:.*fields:\s*\[(\w+)\],)?\s*(?:.*references:\s*\[(\w+)\],?)?.*\)/);
+      const relationMatch = ref.line.match(/@relation\((?:.*fields:\s*\[(\w+)\],)?\s*(?:.*references:\s*\[(\w+)\],?)?.*\)/);
       if (relationMatch) {
         foreignKey = relationMatch[1] || '';
         localKey = relationMatch[2] || '';
       }
-      const description = line.match(/@description\("(.+)"\)/)?.[1];
-      model.relations.push({
-        name: fieldName,
-        type: tsType,
-        isArray,
-        isOptional,
+      const description = ref.line.match(/@description\("(.+)"\)/)?.[1];
+      ref.model.relations.push({
+        name: ref.name,
+        type: ref.type,
+        isArray: ref.isArray,
+        isOptional: ref.isOptional,
         foreignKey,
         localKey,
         relationName,
         ...(description ? { description } : {}),
       });
-    } else {
-      const hasDefault = line.includes('@default') || line.includes('@updatedAt') || line.includes('@id');
-      const isId = line.includes('@id');
-      let description: string | undefined;
-      const descMatch = line.match(/@description\("(.+)"\)/);
-      if (descMatch) description = descMatch[1];
-      model.fields.push({ name: fieldName, type: tsType, sqlType: cleanType, isOptional, hasDefault, isId, description });
     }
+
+    this.modelRefs = [];
   }
 
   private postProcessRelations(models: Model[]) {

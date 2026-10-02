@@ -1,18 +1,21 @@
 /**
  * an5Orm Generator Regression Tests
  *
- * Chạy parser và generator thật (từ `dist/`) vào thư mục tạm rồi kiểm tra
- * output — khác `generator.test.js` vốn chỉ đọc file sinh sẵn của dự án anh
- * em, nên phần lớn bị skip khi không có `an5Client`.
+ * Runs the real parser and generators (from `dist/`) against a temporary
+ * directory and checks the output — unlike `generator.test.js`, which only reads
+ * the sibling project's pre-generated files and is therefore skipped whenever
+ * `an5Client` is absent.
  *
- * Mỗi test trả lời một lỗi đã gặp thật:
- *   1. `python.metadataFile` đặt tên khác `an5_metadata.py` thì client sinh ra
- *      import sai module và hỏng lúc chạy.
- *   2. `@@schema("")` bị parser bỏ qua nên model vẫn nhận `dbo`; cộng với
- *      `[${schema}].[${table}]` viết cứng ở 6 chỗ, mọi dialect đều nhận `[dbo]`
- *      và trên SQLite ra `no such table: dbo.<table>`.
- *   3. Kiểu `INTEGER`/`BOOLEAN`/`BLOB` không có trong bảng ánh xạ nên bị parse
- *      thành quan hệ tới model tên `INTEGER` thay vì thành cột thường.
+ * Each test answers a bug that actually happened:
+ *   1. A `python.metadataFile` named anything but `an5_metadata.py` made the
+ *      generated client import the wrong module and break at runtime.
+ *   2. `@@schema("")` was ignored by the parser so the model kept `dbo`; combined
+ *      with `[${schema}].[${table}]` hardcoded in six places, every dialect got
+ *      `[dbo]` and SQLite failed with `no such table: dbo.<table>`.
+ *   3. `INTEGER`/`BOOLEAN`/`BLOB` were missing from the type table and so were
+ *      parsed as a relation to a model named `INTEGER` instead of a column. The
+ *      valid types are per provider now: `SQLITE_SCHEMA` is parsed with the
+ *      `sqlite` provider, and the same schema under `mssql` has to fail.
  *
  * Run: node test/generator-regressions.test.js
  */
@@ -58,8 +61,8 @@ function writeSchema(name, body) {
   return dir;
 }
 
-/** Chèn `@@schema(...)` vào TRƯỚC mỗi `@@map` — phải global, `String.replace`
- *  chuỗi chỉ thay lần đầu nên sẽ chỉ áp cho model đầu tiên. */
+/** Inserts `@@schema(...)` before every `@@map` — the replace must be global,
+ *  a plain string `String.replace` would only patch the first model. */
 function withSchema(body, schema) {
   return body.replace(/^ {2}@@map/gm, `  @@schema("${schema}")\n  @@map`);
 }
@@ -68,8 +71,11 @@ function withEmptySchema(body) {
   return withSchema(body, '');
 }
 
-function parse(name, body) {
-  return new SchemaParser(writeSchema(name, body)).parse();
+/** The helper defaults to the `sqlite` provider because `SQLITE_SCHEMA` is a
+ *  SQLite schema — the allowed types depend on the provider, there is no shared
+ *  list any more. */
+function parse(name, body, provider = 'sqlite') {
+  return new SchemaParser(writeSchema(name, body), provider).parse();
 }
 
 const SQLITE_SCHEMA = `
@@ -94,9 +100,9 @@ model Catalog {
 
 console.log('\n─── Regressions ───');
 
-// ─── 1. Tên module metadata theo cấu hình ──────────────────────────────────────
+// ─── 1. Metadata module name follows the configuration ────────────────────────
 
-test("python client import đúng tên file metadata được cấu hình", async () => {
+test("the python client imports the configured metadata file name", async () => {
   const models = await parse('custom-name', SQLITE_SCHEMA);
   const outDir = path.join(tmpRoot, 'custom-name-out');
   new PythonGenerator(path.join(outDir, 'an5Metadata.py')).generate(models);
@@ -104,40 +110,40 @@ test("python client import đúng tên file metadata được cấu hình", asyn
   const client = fs.readFileSync(path.join(outDir, 'an5_client.py'), 'utf8');
   assert.ok(
     client.includes('from an5Metadata import MODEL_TO_TABLE'),
-    `client phải import an5Metadata, thực tế:\n${client.split('\n').slice(0, 20).join('\n')}`
+    `the client must import an5Metadata, got:\n${client.split('\n').slice(0, 20).join('\n')}`
   );
-  assert.ok(!/from\s+\.?(an5_metadata)\b/.test(client), 'không được còn tham chiếu an5_metadata');
+  assert.ok(!/from\s+\.?(an5_metadata)\b/.test(client), 'no reference to an5_metadata may remain');
 
-  // File thật phải tồn tại, nếu không import vẫn hỏng.
-  assert.ok(fs.existsSync(path.join(outDir, 'an5Metadata.py')), 'phải sinh file theo tên cấu hình');
+  // The real file has to exist, otherwise the import breaks anyway.
+  assert.ok(fs.existsSync(path.join(outDir, 'an5Metadata.py')), 'must write the file under the configured name');
 
   const init = fs.readFileSync(path.join(outDir, '__init__.py'), 'utf8');
-  assert.ok(init.includes('from .an5Metadata import'), '__init__ cũng phải theo tên cấu hình');
+  assert.ok(init.includes('from .an5Metadata import'), '__init__ must follow the configured name too');
 });
 
-test("tên metadata mặc định vẫn là an5_metadata", async () => {
+test("the default metadata name is still an5_metadata", async () => {
   const models = await parse('default-name', SQLITE_SCHEMA);
   const outDir = path.join(tmpRoot, 'default-name-out');
   new PythonGenerator(path.join(outDir, 'an5_metadata.py')).generate(models);
   const client = fs.readFileSync(path.join(outDir, 'an5_client.py'), 'utf8');
-  assert.ok(client.includes('from an5_metadata import'), 'giữ nguyên hành vi cũ khi tên là mặc định');
+  assert.ok(client.includes('from an5_metadata import'), 'the old behaviour stands when the name is the default');
 });
 
-// ─── 2. Schema rỗng thì không prefix ───────────────────────────────────────────
+// ─── 2. An empty schema gets no prefix ────────────────────────────────────────
 
-test("@@schema(\"\") sinh tên bảng không có schema prefix", async () => {
+test("@@schema(\"\") generates a table name with no schema prefix", async () => {
   const models = await parse('empty-schema', withEmptySchema(SQLITE_SCHEMA));
-  assertEq(models[0].schemaName, '', 'schema phải rỗng chứ không phải dbo');
+  assertEq(models[0].schemaName, '', 'the schema must be empty, not dbo');
 
   const outDir = path.join(tmpRoot, 'empty-schema-out');
   new PythonGenerator(path.join(outDir, 'an5_metadata.py')).generate(models);
   const meta = fs.readFileSync(path.join(outDir, 'an5_metadata.py'), 'utf8');
   assertIncludes(meta, '"[CatalogType]"');
-  assert.ok(!meta.includes('[dbo]'), `không được còn [dbo]:\n${meta.split('\n').slice(0, 10).join('\n')}`);
-  assert.ok(!meta.includes('[].'), 'không được sinh [].[table]');
+  assert.ok(!meta.includes('[dbo]'), `no [dbo] may remain:\n${meta.split('\n').slice(0, 10).join('\n')}`);
+  assert.ok(!meta.includes('[].'), 'must not generate [].[table]');
 });
 
-test("bỏ @@schema thì vẫn mặc định dbo (không phá người dùng hiện có)", async () => {
+test("without @@schema the default stays dbo, so existing schemas are unaffected", async () => {
   const models = await parse('default-schema', SQLITE_SCHEMA);
   assertEq(models[0].schemaName, 'dbo');
   assertEq(models[0].tableName, 'CatalogType');
@@ -145,53 +151,71 @@ test("bỏ @@schema thì vẫn mặc định dbo (không phá người dùng hi�
   assertEq(dottedTableName(models[0]), 'dbo.CatalogType');
 });
 
-test("@@schema(\"main\") vẫn giữ prefix", async () => {
+test("@@schema(\"main\") still keeps the prefix", async () => {
   const models = await parse('named-schema', withSchema(SQLITE_SCHEMA, 'main'));
   assertEq(models[0].schemaName, 'main');
   assertEq(bracketedTableName(models[0]), '[main].[CatalogType]');
   assertEq(dottedTableName(models[0]), 'main.CatalogType');
 });
 
-test("bracketedTableName/dottedTableName bỏ prefix khi schema rỗng", async () => {
+test("bracketedTableName/dottedTableName drop the prefix when the schema is empty", async () => {
   const model = { name: 'T', tableName: 'ts', schemaName: '', fields: [], relations: [] };
   assertEq(bracketedTableName(model), '[ts]');
   assertEq(dottedTableName(model), 'ts');
 });
 
-test("metadata TypeScript cũng không còn [dbo] khi schema rỗng", async () => {
+test("the TypeScript metadata has no [dbo] left when the schema is empty", async () => {
   const models = await parse('ts-empty-schema', withEmptySchema(SQLITE_SCHEMA));
   const outFile = path.join(tmpRoot, 'ts-out', 'an5Metadata.ts');
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   new MetadataGenerator(outFile, '').generate(models);
   const meta = fs.readFileSync(outFile, 'utf8');
-  assert.ok(!meta.includes('[dbo]'), 'metadata TS không được còn [dbo]');
+  assert.ok(!meta.includes('[dbo]'), 'the TS metadata must not keep [dbo]');
   assertIncludes(meta, '"[CatalogType]"');
 });
 
-// ─── 3. Kiểu SQLite không bị parse nhầm thành relation ─────────────────────────
+// ─── 3. SQLite types are not parsed as relations ───────────────────────────────
 
-test("INTEGER/BOOLEAN/BLOB là cột thường, không phải relation", async () => {
+test("INTEGER/BOOLEAN/BLOB are plain columns, not relations", async () => {
   const models = await parse('sqlite-types', SQLITE_SCHEMA);
   const catalog = models.find((m) => m.name === 'Catalog');
 
-  assertEq(catalog.relations.length, 1, 'chỉ `type` mới là relation');
+  assertEq(catalog.relations.length, 1, 'only `type` is a relation');
   assertEq(catalog.relations[0].name, 'type');
 
   const byName = Object.fromEntries(catalog.fields.map((f) => [f.name, f]));
   for (const name of ['position', 'enabled', 'payload']) {
-    assert.ok(byName[name], `${name} phải là field, không phải relation`);
+    assert.ok(byName[name], `${name} must be a field, not a relation`);
   }
   assertEq(byName.position.type, 'number');
   assertEq(byName.enabled.type, 'boolean');
   assertEq(byName.payload.type, 'Buffer');
 });
 
-test("tên model viết hoa vẫn là relation, không bị ảnh hưởng", async () => {
+test("an upper-case model name is still a relation and is unaffected", async () => {
   const models = await parse('still-relation', SQLITE_SCHEMA);
   const catalog = models.find((m) => m.name === 'Catalog');
   assertEq(catalog.relations[0].type, 'CatalogType');
   assertEq(catalog.relations[0].foreignKey, 'catalogTypeId');
   assertEq(catalog.relations[0].localKey, 'id');
+});
+
+test("a type from another provider is reported instead of silently generating code", async () => {
+  let error;
+  try {
+    await parse('wrong-provider', SQLITE_SCHEMA, 'mssql');
+  } catch (err) {
+    error = err;
+  }
+  assertEq(error.name, 'FieldTypeError');
+  assertEq(error.provider, 'mssql');
+  // `position`, `enabled` and `payload` use types that only SQLite has.
+  assertEq(error.issues.length, 3, `every bad field must be reported: ${JSON.stringify(error.issues)}`);
+  assert.deepStrictEqual(
+    error.issues.map((issue) => issue.path),
+    ['Catalog.position', 'Catalog.enabled', 'Catalog.payload']
+  );
+  assertIncludes(error.issues[0].message, 'unknown type "INTEGER" for SQL Server');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

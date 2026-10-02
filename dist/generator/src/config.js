@@ -7,6 +7,9 @@ exports.ConfigError = exports.DEFAULT_CONFIG = void 0;
 exports.resolveOutputs = resolveOutputs;
 exports.validateConfig = validateConfig;
 exports.resolveConnectionString = resolveConnectionString;
+exports.detectProvider = detectProvider;
+exports.providerFromConfig = providerFromConfig;
+exports.providerForProject = providerForProject;
 exports.formatIssues = formatIssues;
 exports.loadConfig = loadConfig;
 /**
@@ -24,6 +27,8 @@ exports.loadConfig = loadConfig;
  */
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const field_types_1 = require("./field-types");
+const suggest_1 = require("./suggest");
 exports.DEFAULT_CONFIG = {
     schemaDir: 'an5Schema',
     outputs: {
@@ -63,34 +68,6 @@ class ConfigError extends Error {
     }
 }
 exports.ConfigError = ConfigError;
-/** Levenshtein distance, for "did you mean" on a mistyped key. */
-function editDistance(a, b) {
-    const rows = [];
-    for (let i = 0; i <= a.length; i++)
-        rows.push([i, ...new Array(b.length).fill(0)]);
-    for (let j = 0; j <= b.length; j++)
-        rows[0][j] = j;
-    for (let i = 1; i <= a.length; i++) {
-        for (let j = 1; j <= b.length; j++) {
-            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-            rows[i][j] = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + cost);
-        }
-    }
-    return rows[a.length][b.length];
-}
-function suggest(key, allowed) {
-    let best = null;
-    let bestDistance = Infinity;
-    for (const candidate of allowed) {
-        const distance = editDistance(key.toLowerCase(), candidate.toLowerCase());
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            best = candidate;
-        }
-    }
-    // Only suggest when it is close enough to be a plausible typo.
-    return best !== null && bestDistance <= Math.max(2, Math.floor(key.length / 3)) ? best : null;
-}
 function typeName(value) {
     if (value === null)
         return 'null';
@@ -109,7 +86,7 @@ function checkObject(raw, spec, at, issues) {
     const accepted = {};
     for (const key of Object.keys(source)) {
         if (!(key in spec)) {
-            const hint = suggest(key, Object.keys(spec));
+            const hint = (0, suggest_1.suggest)(key, Object.keys(spec));
             issues.push({
                 path: at ? `${at}.${key}` : key,
                 message: hint
@@ -258,7 +235,77 @@ function resolveConnectionString(config, env = process.env, command = 'this comm
         },
     ]);
 }
-/** Renders issues for the terminal, pointing at the config file. */
+/**
+ * The provider a connection string points at.
+ *
+ * Reads the scheme exactly as `An5Adapter` does
+ * (`an5Adapters/typescript/src/an5Adapter.ts`) so the generator and the adapter
+ * always talk about the same database: the same connection string must give the
+ * same provider, otherwise validation checks the types of one database while the
+ * SQL runs on another.
+ *
+ * Falls back to SQL Server when the scheme is unknown — it is the default
+ * provider, and ADO-style strings (`Server=...;Database=...`) have no scheme to
+ * read. `sqlite://`, a bare path ending in `.sqlite`, `.sqlite3` or `.db` — the same
+ * list `An5Adapter` uses.
+ */
+function detectProvider(connectionString) {
+    // Lower-cased: a URI scheme is case-insensitive, so `MySQL://` is the same
+    // connection as `mysql://`. `an5Adapters/typescript/src/an5Adapter.ts` compares
+    // the same way, and the two have to agree or this picks a provider whose DDL the
+    // adapter never runs.
+    const cs = (connectionString ?? '').trim().toLowerCase();
+    if (cs === '')
+        return field_types_1.DEFAULT_PROVIDER;
+    if (cs.startsWith('googlesheets://'))
+        return 'googlesheets';
+    if (cs.startsWith('postgres://') || cs.startsWith('postgresql://'))
+        return 'postgres';
+    if (cs.startsWith('mysql://') || cs.startsWith('mariadb://'))
+        return 'mysql';
+    if (SQLITE_FILE_SUFFIXES.some((suffix) => cs.endsWith(suffix)))
+        return 'sqlite';
+    return field_types_1.DEFAULT_PROVIDER;
+}
+/** File extensions that mean SQLite when there is no scheme to read. */
+const SQLITE_FILE_SUFFIXES = ['.sqlite', '.sqlite3', '.db'];
+/**
+ * The provider for this run: `DATABASE_URL` first, then the connection string in
+ * the config file, then the default.
+ *
+ * Does not throw when there is no connection string — `generate` has to work
+ * with an empty config, and the default provider still validates the schema as
+ * before.
+ */
+function providerFromConfig(config, env = process.env) {
+    const fromEnv = typeof env.DATABASE_URL === 'string' && env.DATABASE_URL.trim() !== '' ? env.DATABASE_URL : undefined;
+    return detectProvider(fromEnv ?? config.connectionString);
+}
+/**
+ * The provider configured for a project directory.
+ *
+ * For the tools outside this package that read `.an5` files — the an5Agent
+ * schema tools, the VS Code extension — so they validate against the same
+ * database the generator does instead of silently assuming SQL Server.
+ *
+ * Never throws: no config, an unreadable one, or an invalid one all mean the
+ * default provider, which is what the parser does on its own anyway.
+ */
+function providerForProject(cwd = process.cwd(), env = process.env) {
+    try {
+        return providerFromConfig(loadConfig(cwd).config, env);
+    }
+    catch {
+        return field_types_1.DEFAULT_PROVIDER;
+    }
+}
+/**
+ * Renders issues for the terminal, one per line, paths aligned.
+ *
+ * Takes the shape rather than `ConfigIssue` so field type errors
+ * (`FieldTypeIssue`, from `./field-types`) print through the same code — both
+ * are "a path in the file and what is wrong with it".
+ */
 function formatIssues(issues) {
     const width = Math.max(...issues.map((issue) => issue.path.length));
     return issues
@@ -273,19 +320,25 @@ function formatIssues(issues) {
  * so a project can generate without a config.
  */
 function loadConfig(cwd = process.cwd()) {
+    // Resolved before the search because `require` treats a bare specifier as a
+    // package name: with a relative `cwd` the file is found (`existsSync` is
+    // relative to the process directory) but `require('./an5Orm.config.js')` is
+    // really `require('an5Orm.config.js')`, which throws MODULE_NOT_FOUND and
+    // loses the config without saying so.
+    const startDir = path_1.default.resolve(cwd);
     const candidates = [
-        path_1.default.join(cwd, 'an5Orm.config.js'),
-        path_1.default.join(cwd, 'an5Orm.config.cjs'),
-        path_1.default.join(cwd, '..', 'an5Orm.config.js'),
-        path_1.default.join(cwd, '..', 'an5Orm.config.cjs'),
+        path_1.default.join(startDir, 'an5Orm.config.js'),
+        path_1.default.join(startDir, 'an5Orm.config.cjs'),
+        path_1.default.join(startDir, '..', 'an5Orm.config.js'),
+        path_1.default.join(startDir, '..', 'an5Orm.config.cjs'),
     ];
     const configPath = candidates.find((candidate) => fs_1.default.existsSync(candidate)) ?? null;
     if (configPath === null) {
         // A schema directory one level up is the common monorepo layout; without a
         // config the paths would otherwise point at a directory that does not exist.
-        const rootDir = fs_1.default.existsSync(path_1.default.join(cwd, '..', 'an5Schema'))
-            ? path_1.default.resolve(cwd, '..')
-            : cwd;
+        const rootDir = fs_1.default.existsSync(path_1.default.join(startDir, '..', 'an5Schema'))
+            ? path_1.default.resolve(startDir, '..')
+            : startDir;
         return {
             config: exports.DEFAULT_CONFIG,
             rootDir,

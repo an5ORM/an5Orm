@@ -31,13 +31,14 @@ export interface Model {
 }
 
 /**
- * Tên bảng đã bọc ngoặc, dùng cho MSSQL và các client khác.
+ * The bracketed table name, for MSSQL and the other clients.
  *
- * `dbo` chỉ là schema mặc định của SQL Server. Khi `@@schema("")` — tức schema
- * rỗng, dành cho cơ sở dữ liệu không có khái niệm schema (SQLite, MySQL) — thì
- * phải bỏ hẳn tiền tố, vì `[].[users]` là SQL không hợp lệ. Trước đây công thức
- * `[${schemaName}].[${tableName}]` bị viết lặp ở 6 chỗ nên dialect nào cũng nhận
- * `[dbo]`, và trên SQLite mọi truy vấn hỏng với `no such table: dbo.<table>`.
+ * `dbo` is only SQL Server's default schema. With `@@schema("")` — an empty
+ * schema, meant for databases that have no schema concept (SQLite, MySQL) — the
+ * prefix has to go, because `[].[users]` is not valid SQL. The
+ * `[${schemaName}].[${tableName}]` formula used to be written out in six places,
+ * so every dialect got `[dbo]` and on SQLite every query failed with
+ * `no such table: dbo.<table>`.
  */
 export function bracketedTableName(model: Model): string {
   return model.schemaName
@@ -45,7 +46,7 @@ export function bracketedTableName(model: Model): string {
     : `[${model.tableName}]`;
 }
 
-/** Tên bảng dạng `schema.table`, cho các client truyền chuỗi thay vì SQL. */
+/** The table name as `schema.table`, for clients that pass a string instead of SQL. */
 export function dottedTableName(model: Model): string {
   return model.schemaName
     ? `${model.schemaName}.${model.tableName}`

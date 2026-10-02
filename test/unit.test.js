@@ -480,6 +480,10 @@ console.log('\nmigration-core:');
 
 test('parseSchemaText keeps SQL fields and skips relation fields', () => {
   const models = parseSchemaText(`
+    model Order {
+      id NVARCHAR(64) @id
+    }
+
     model User {
       id        NVARCHAR(64) @id
       email     NVARCHAR(255) @unique
@@ -491,12 +495,12 @@ test('parseSchemaText keeps SQL fields and skips relation fields', () => {
     }
   `);
 
-  assertEq(models.length, 1);
-  assertEq(models[0].tableName, 'app_users');
-  assert.deepStrictEqual(models[0].fields.map((field) => field.name), ['id', 'email', 'age']);
-  assert.deepStrictEqual(models[0].compoundUniques, [{ fields: ['email', 'age'] }]);
-  assert.deepStrictEqual(models[0].indexes, [{ fields: ['age'] }]);
-  assert.strictEqual(models[0].fields[2].isOptional, true);
+  assertEq(models.length, 2);
+  assertEq(models[1].tableName, 'app_users');
+  assert.deepStrictEqual(models[1].fields.map((field) => field.name), ['id', 'email', 'age']);
+  assert.deepStrictEqual(models[1].compoundUniques, [{ fields: ['email', 'age'] }]);
+  assert.deepStrictEqual(models[1].indexes, [{ fields: ['age'] }]);
+  assert.strictEqual(models[1].fields[2].isOptional, true);
 });
 
 test('parseSchemaText keeps mapped index and unique artifact names', () => {

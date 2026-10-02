@@ -1,3 +1,13 @@
+import {
+  DEFAULT_PROVIDER,
+  FieldTypeError,
+  FieldTypeIssue,
+  Provider,
+  readFieldLineHead,
+  resolveFieldType,
+  unknownFieldTypeMessage,
+} from './generator/src/field-types';
+
 export interface SchemaField {
   name: string;
   sqlType: string;
@@ -68,16 +78,6 @@ export interface MigrationCommandOptions {
   dryRun: boolean;
   rest: string[];
 }
-
-const AN5_TYPES = new Set([
-  'NVARCHAR', 'VARCHAR', 'CHAR', 'NCHAR', 'TEXT', 'NTEXT', 'XML',
-  'INT', 'SMALLINT', 'TINYINT', 'BIGINT', 'FLOAT', 'REAL', 'DECIMAL', 'NUMERIC',
-  'MONEY', 'SMALLMONEY', 'BIT',
-  'DATETIME', 'DATETIME2', 'SMALLDATETIME', 'DATE', 'TIME', 'DATETIMEOFFSET',
-  'VARBINARY', 'BINARY', 'IMAGE',
-  'UNIQUEIDENTIFIER', 'SQL_VARIANT', 'ROWVERSION',
-  'HIERARCHYID', 'GEOGRAPHY', 'GEOMETRY', 'VECTOR',
-]);
 
 export function parseSqlType(raw: string): string {
   const match = raw.match(/^(\w+)/);
@@ -347,8 +347,19 @@ export function buildUniqueConstraintPreflightSql(tableName: string, fields: str
   THROW 51000, 'an5 migration preflight failed: ${escapeSqlString(label)} has duplicate values for a UNIQUE constraint.', 1`];
 }
 
-export function parseSchemaText(text: string): SchemaModel[] {
+/**
+ * Reads a `.an5` schema into models to compare against the database.
+ *
+ * `provider` decides what counts as a column and what counts as a relation; it
+ * defaults to SQL Server. A type the provider does not have is reported rather
+ * than skipped — skipping it means the migration silently never mentions that
+ * column. A token matching a model in the schema is a relation, so that
+ * comparison waits until the whole schema has been read.
+ */
+export function parseSchemaText(text: string, provider: Provider = DEFAULT_PROVIDER): SchemaModel[] {
   const models: SchemaModel[] = [];
+  const typeIssues: FieldTypeIssue[] = [];
+  const modelRefs: Array<{ model: string; field: string; type: string }> = [];
   const lines = text.split('\n');
   let current: SchemaModel | null = null;
 
@@ -393,25 +404,39 @@ export function parseSchemaText(text: string): SchemaModel[] {
     }
     if (line.startsWith('@@')) continue;
 
-    const parts = line.split(/\s+/);
-    const fieldName = parts[0];
-    const fieldType = parts[1];
-    if (!fieldName || !fieldType) continue;
+    const head = readFieldLineHead(line);
+    if (!head) continue;
 
-    const cleanType = fieldType.replace('[]', '').replace('?', '');
-    const sqlBase = parseSqlType(cleanType);
-    if (!AN5_TYPES.has(sqlBase)) continue;
+    if (!resolveFieldType(head.type, provider)) {
+      modelRefs.push({ model: current.name, field: head.name, type: head.type });
+      continue;
+    }
 
     current.fields.push({
-      name: fieldName,
-      sqlType: cleanType.toUpperCase(),
-      isOptional: fieldType.endsWith('?'),
+      name: head.name,
+      sqlType: head.type.toUpperCase(),
+      isOptional: head.isOptional,
       isId: line.includes('@id'),
       isUnique: line.includes('@unique'),
       uniqueName: line.match(/@unique\([^)]*\bmap\s*:\s*"([^"]+)"/)?.[1],
-      defaultValue: line.match(/@default\((.*)\)/)?.[1],
+      // `@updatedAt` is `now()` under another name, and db:push treats it as such.
+      // Without this here a stamp column looked like it had no default and every
+      // diff wanted to add one.
+      defaultValue: line.match(/@default\((.*)\)/)?.[1]
+        ?? (line.includes('@updatedAt') ? 'now()' : undefined),
     });
   }
+
+  const modelNames = models.map((model) => model.name);
+  for (const ref of modelRefs) {
+    if (!modelNames.includes(ref.type)) {
+      typeIssues.push({
+        path: `${ref.model}.${ref.field}`,
+        message: unknownFieldTypeMessage(ref.type, provider, modelNames),
+      });
+    }
+  }
+  if (typeIssues.length > 0) throw new FieldTypeError(provider, typeIssues);
 
   return models;
 }

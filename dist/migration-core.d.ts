@@ -1,3 +1,4 @@
+import { Provider } from './generator/src/field-types';
 export interface SchemaField {
     name: string;
     sqlType: string;
@@ -70,7 +71,16 @@ export declare function buildAlterColumnWarnings(previousSqlType: string, nextSq
 export declare function buildAlterColumnPreflightSql(tableName: string, columnName: string, previousSqlType: string, nextSqlType: string, previousNullable: boolean, nextNullable: boolean): string[];
 export declare function buildAddColumnPreflightSql(tableName: string, field: SchemaField): string[];
 export declare function buildUniqueConstraintPreflightSql(tableName: string, fields: string[]): string[];
-export declare function parseSchemaText(text: string): SchemaModel[];
+/**
+ * Reads a `.an5` schema into models to compare against the database.
+ *
+ * `provider` decides what counts as a column and what counts as a relation; it
+ * defaults to SQL Server. A type the provider does not have is reported rather
+ * than skipped — skipping it means the migration silently never mentions that
+ * column. A token matching a model in the schema is a relation, so that
+ * comparison waits until the whole schema has been read.
+ */
+export declare function parseSchemaText(text: string, provider?: Provider): SchemaModel[];
 export declare function buildCreateTableSql(model: SchemaModel): string;
 export declare function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, ops: MigrationOp[]): void;
 export declare function generateColumnDiff(model: SchemaModel, dbColumns: DbColumn[], ops: MigrationOp[]): void;
