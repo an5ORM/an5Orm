@@ -33,7 +33,7 @@ const {
 const { SchemaParser, sqlTypeToTs } = require(path.join(distSrc, 'parser.js'));
 const { detectProvider, providerFromConfig, providerForProject } = require(path.join(distSrc, 'config.js'));
 const { parseSchemaText } = require(path.join(__dirname, '..', 'dist', 'migration-core.js'));
-const { SQL_SERVER_ONLY_COMMANDS } = require(path.join(__dirname, '..', 'dist', 'provider-support.js'));
+const { SQL_SERVER_ONLY_COMMANDS, sqlServerOnlyError } = require(path.join(__dirname, '..', 'dist', 'provider-support.js'));
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-field-types-'));
 let dirCounter = 0;
@@ -430,6 +430,20 @@ test('every command that issues SQL itself is listed as SQL Server only', () => 
   assert.ok('db:seed' in scripts, 'db:seed should still exist');
   assert.equal(SQL_SERVER_ONLY_COMMANDS['db:seed'], undefined, 'db:seed must not be blocked');
   assert.equal(SQL_SERVER_ONLY_COMMANDS['db:push'], undefined, 'db:push is provider aware now');
+});
+
+test('the refusal says which command, which provider and what to do', () => {
+  // A plain function, so the message it exists to deliver can finally be asserted.
+  assert.equal(sqlServerOnlyError('mssql', 'db:push'), null, 'SQL Server is allowed');
+
+  const message = sqlServerOnlyError('postgres', 'db:migrate:apply');
+  assert.match(message, /db:migrate:apply only supports SQL Server/);
+  assert.match(message, /the connection string selects PostgreSQL/);
+  assert.match(message, /apply pending migrations/, 'says what the command was going to do');
+  assert.match(message, /Use a SQL Server connection string/, 'says what to do instead');
+
+  // An unknown command still reads as a sentence rather than falling apart.
+  assert.match(sqlServerOnlyError('sqlite', 'db:whatever'), /db:whatever run using sys\.\*/);
 });
 
 test('the detected provider decides what the schema is checked against', async () => {

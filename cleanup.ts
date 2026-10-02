@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { An5Adapter } from "@an5/adapters";
 import { loadConfig, providerFromConfig, resolveConnectionString } from "./generator/src/config";
-import { requireSqlServerProvider } from "./provider-support";
+import { Provider } from "./generator/src/field-types";
+import { sqlServerOnlyError } from "./provider-support";
 import fs from "fs";
 import path from "path";
 
@@ -18,10 +19,24 @@ async function getDb(): Promise<An5Adapter> {
   return _adapter;
 }
 
+/**
+ * Prints why a command cannot run against this provider and exits.
+ *
+ * The decision and the wording live in `./provider-support`, which stays free of Node
+ * globals so it can be imported and tested anywhere; only the command files, which
+ * are Node programs, do the exiting.
+ */
+function refuseIfNotSqlServer(provider: Provider, command: string): void {
+  const message = sqlServerOnlyError(provider, command);
+  if (message === null) return;
+  console.error(message);
+  process.exit(1);
+}
+
 async function cleanup() {
   // Drops tables by comparing sys.tables with the schema files, so a non-SQL
   // Server connection string is a mistake worth naming first.
-  requireSqlServerProvider(providerFromConfig(config, process.env), "db:cleanup");
+  refuseIfNotSqlServer(providerFromConfig(config, process.env), "db:cleanup");
 
   console.log("🧹 Starting database cleanup...");
 

@@ -16,7 +16,8 @@ import path from 'path';
 import { An5Adapter } from '@an5/adapters';
 import { formatIssues, loadConfig, providerFromConfig, resolveConnectionString } from './generator/src/config';
 import { FieldTypeError } from './generator/src/field-types';
-import { requireSqlServerProvider } from './provider-support';
+import { Provider } from './generator/src/field-types';
+import { sqlServerOnlyError } from './provider-support';
 import {
   DbColumn,
   SchemaModel,
@@ -390,6 +391,20 @@ async function cmdStatus() {
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
+/**
+ * Prints why a command cannot run against this provider and exits.
+ *
+ * The decision and the wording live in `./provider-support`, which stays free of Node
+ * globals so it can be imported and tested anywhere; only the command files, which
+ * are Node programs, do the exiting.
+ */
+function refuseIfNotSqlServer(provider: Provider, command: string): void {
+  const message = sqlServerOnlyError(provider, command);
+  if (message === null) return;
+  console.error(message);
+  process.exit(1);
+}
+
 const MIGRATION_COMMANDS = ['diff', 'generate', 'apply', 'rollback', 'status'] as const;
 
 async function main() {
@@ -405,7 +420,7 @@ async function main() {
 
   // Every subcommand reads sys.* and writes T-SQL, so a non-SQL Server connection
   // string is a mistake worth naming before any of it runs.
-  requireSqlServerProvider(
+  refuseIfNotSqlServer(
     providerFromConfig(config, process.env),
     process.argv[2] ? `db:migrate:${command}` : 'db:migrate',
   );

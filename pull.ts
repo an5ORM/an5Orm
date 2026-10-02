@@ -3,7 +3,8 @@ import fs from "fs";
 import path from "path";
 import { An5Adapter } from "@an5/adapters";
 import { loadConfig, providerFromConfig, resolveConnectionString } from "./generator/src/config";
-import { requireSqlServerProvider } from "./provider-support";
+import { Provider } from "./generator/src/field-types";
+import { sqlServerOnlyError } from "./provider-support";
 
 const rootDir = process.cwd();
 const { config, outputs } = loadConfig();
@@ -18,6 +19,20 @@ async function getDb(): Promise<An5Adapter> {
   return _adapter;
 }
 
+/**
+ * Prints why a command cannot run against this provider and exits.
+ *
+ * The decision and the wording live in `./provider-support`, which stays free of Node
+ * globals so it can be imported and tested anywhere; only the command files, which
+ * are Node programs, do the exiting.
+ */
+function refuseIfNotSqlServer(provider: Provider, command: string): void {
+  const message = sqlServerOnlyError(provider, command);
+  if (message === null) return;
+  console.error(message);
+  process.exit(1);
+}
+
 function capitalize(str: string): string {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
@@ -26,7 +41,7 @@ async function pull() {
   // Reads sys.tables/sys.columns and writes MSSQL-shaped type names, so another
   // provider would fail on the first catalog query with a driver error that says
   // nothing about the connection string being wrong.
-  requireSqlServerProvider(providerFromConfig(config, process.env), "db:pull");
+  refuseIfNotSqlServer(providerFromConfig(config, process.env), "db:pull");
 
   console.log("🔍 Pulling schema from database...");
 

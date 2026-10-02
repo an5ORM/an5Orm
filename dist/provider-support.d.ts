@@ -16,11 +16,12 @@ import { Provider } from './generator/src/field-types';
  */
 export declare const SQL_SERVER_ONLY_COMMANDS: Record<string, string>;
 /**
- * Stops a command that only speaks SQL Server when it has been pointed at
- * another provider.
+ * Why a command cannot run against this provider, or null when it can.
  *
- * Exits rather than throws: these run from `package.json` scripts, where an
- * unreadable stack trace is worse than one sentence naming the mismatch.
+ * Returns the message instead of printing it and exiting, so this stays a plain
+ * function: it is shared by four command files, and a module that calls
+ * `process.exit` cannot be imported outside a Node CLI — nor unit tested for the
+ * thing it exists to say.
  */
-export declare function requireSqlServerProvider(provider: Provider, command: string): void;
+export declare function sqlServerOnlyError(provider: Provider, command: string): string | null;
 //# sourceMappingURL=provider-support.d.ts.map

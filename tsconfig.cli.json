@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["push.ts", "pull.ts", "migrate.ts", "cleanup.ts", "generator/src/**/*.ts"]
+  "include": ["push.ts", "pull.ts", "migrate.ts", "cleanup.ts", "provider-support.ts", "generator/src/**/*.ts"]
 }

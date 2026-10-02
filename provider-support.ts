@@ -27,22 +27,22 @@ export const SQL_SERVER_ONLY_COMMANDS: Record<string, string> = {
 };
 
 /**
- * Stops a command that only speaks SQL Server when it has been pointed at
- * another provider.
+ * Why a command cannot run against this provider, or null when it can.
  *
- * Exits rather than throws: these run from `package.json` scripts, where an
- * unreadable stack trace is worse than one sentence naming the mismatch.
+ * Returns the message instead of printing it and exiting, so this stays a plain
+ * function: it is shared by four command files, and a module that calls
+ * `process.exit` cannot be imported outside a Node CLI — nor unit tested for the
+ * thing it exists to say.
  */
-export function requireSqlServerProvider(provider: Provider, command: string): void {
-  if (provider === 'mssql') return;
+export function sqlServerOnlyError(provider: Provider, command: string): string | null {
+  if (provider === 'mssql') return null;
   const what = SQL_SERVER_ONLY_COMMANDS[command] ?? 'run';
-  console.error(
+  return (
     `❌ ${command} only supports SQL Server, but the connection string selects ` +
-      `${PROVIDER_LABELS[provider]}.\n` +
-      `   ${command} ${what} using sys.* catalog views and T-SQL, so pointing it at ` +
-      `${PROVIDER_LABELS[provider]} would run the wrong SQL.\n` +
-      '   Use a SQL Server connection string, or generate and apply the schema with ' +
-      `${PROVIDER_LABELS[provider]}'s own tooling.`,
+    `${PROVIDER_LABELS[provider]}.\n` +
+    `   ${command} ${what} using sys.* catalog views and T-SQL, so pointing it at ` +
+    `${PROVIDER_LABELS[provider]} would run the wrong SQL.\n` +
+    '   Use a SQL Server connection string, or generate and apply the schema with ' +
+    `${PROVIDER_LABELS[provider]}'s own tooling.`
   );
-  process.exit(1);
 }
