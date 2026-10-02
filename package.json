@@ -1,6 +1,6 @@
 {
   "name": "@an5/orm",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, .NET (C#), Go, and Rust.",
   "license": "MIT",
   "main": "dist/index.js",
@@ -47,7 +47,7 @@
     "db:migrate:status": "npx tsx migrate.ts status",
     "release:cli": "npx tsx scripts/release-cli.ts",
     "release": "node scripts/release.js",
-    "test": "npm run typecheck:cli && node test/smoke.test.js && node test/unit.test.js && node test/generator-regressions.test.js && node --test test/config.test.js",
+    "test": "npm run typecheck:cli && node test/smoke.test.js && node test/unit.test.js && node test/generator-regressions.test.js && node --test test/config.test.js && node --test test/version-sync.test.js",
     "test:unit": "node test/unit.test.js",
     "test:generator": "npm run generate && node test/generator.test.js",
     "test:generator:regressions": "node test/generator-regressions.test.js",

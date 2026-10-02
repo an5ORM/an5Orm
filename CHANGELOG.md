@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.12] - 2026-10-01
+## [1.0.13] - 2026-10-02
 
 ### Added
 - **`connectionString` in an5Orm.config.js** — db:push, db:pull, db:migrate:* and
@@ -24,6 +24,12 @@
   prefix is stripped for SQLite, which has no schemas.
 
 ### Fixed
+- **The PyPI version had drifted from the npm version** — `pyproject.toml`
+  carried its own `version`, and nothing compared it to `package.json`. PyPI
+  still held 1.0.9 while npm had reached 1.0.12, so the publish job built the
+  old version and skipped it as already published: PyPI had not received a new
+  release through this pipeline at all. Both are at 1.0.12 now, and
+  `test/version-sync.test.js` fails the build if they disagree again.
 - **The CLI commands are type-checked** — `tsconfig.json` excludes push, pull,
   migrate and cleanup because they run through tsx, so no compiler ever looked at
   them. A call to a function deleted from another file reached the live-DB job
