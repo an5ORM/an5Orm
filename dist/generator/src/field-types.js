@@ -431,4 +431,3 @@ function readFieldLineHead(line) {
         isOptional: rawType.endsWith('?'),
     };
 }
-//# sourceMappingURL=field-types.js.map

@@ -120,6 +120,16 @@ export function resolveOutputs(config: An5OrmConfig, rootDir: string): ResolvedO
   };
 }
 
+/**
+ * The environment variables a caller can pass in.
+ *
+ * Spelled structurally rather than as `NodeJS.ProcessEnv`: that type is a Node
+ * global, and a parameter type ends up in the emitted `.d.ts`, so any consumer
+ * without `@types/node` would fail to compile against this package. `process.env` is
+ * assignable to it, and so is a plain `{}` in a test.
+ */
+export type EnvLike = Record<string, string | undefined>;
+
 /** One problem found in the config file. */
 export interface ConfigIssue {
   /** Dotted path, e.g. `outputs.typescript.outputDir`. */
@@ -329,7 +339,7 @@ export function validateConfig(raw: unknown): An5OrmConfig {
  */
 export function resolveConnectionString(
   config: An5OrmConfig,
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvLike = process.env,
   command = 'this command',
 ): string {
   const fromEnv = env.DATABASE_URL;
@@ -389,7 +399,7 @@ const SQLITE_FILE_SUFFIXES = ['.sqlite', '.sqlite3', '.db'];
  */
 export function providerFromConfig(
   config: An5OrmConfig,
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvLike = process.env,
 ): Provider {
   const fromEnv = typeof env.DATABASE_URL === 'string' && env.DATABASE_URL.trim() !== '' ? env.DATABASE_URL : undefined;
   return detectProvider(fromEnv ?? config.connectionString);
@@ -407,7 +417,7 @@ export function providerFromConfig(
  */
 export function providerForProject(
   cwd: string = process.cwd(),
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvLike = process.env,
 ): Provider {
   try {
     return providerFromConfig(loadConfig(cwd).config, env);

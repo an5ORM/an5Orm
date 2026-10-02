@@ -43,4 +43,3 @@ function suggest(input, candidates) {
     }
     return best !== null && bestDistance <= Math.max(2, Math.floor(input.length / 3)) ? best : null;
 }
-//# sourceMappingURL=suggest.js.map

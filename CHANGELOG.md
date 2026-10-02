@@ -59,6 +59,11 @@
   SQL Server. A URI scheme is case-insensitive.
 
 ### Fixed
+- **The published types required `@types/node`** — three exported functions took
+  `NodeJS.ProcessEnv`, and a parameter type lands verbatim in the emitted `.d.ts`, so
+  anything compiling against this package without `@types/node` was told to install
+  it. They take a plain `Record<string, string | undefined>` now, and a test fails the
+  build if a Node type reaches a declaration again.
 - **The Go client generated every numeric column as a `string`** — the generators
   receive the TypeScript type, which is `number` for `INT`, `FLOAT` and `DECIMAL`
   alike, and the Go type table matched none of those. A Go client could only insert

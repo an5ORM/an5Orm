@@ -352,4 +352,3 @@ function loadConfig(cwd = process.cwd()) {
     const config = validateConfig(raw);
     return { config, rootDir, outputs: resolveOutputs(config, rootDir), configPath };
 }
-//# sourceMappingURL=config.js.map

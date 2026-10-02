@@ -64,6 +64,15 @@ export interface ResolvedOutputs {
     rustDir: string;
 }
 export declare function resolveOutputs(config: An5OrmConfig, rootDir: string): ResolvedOutputs;
+/**
+ * The environment variables a caller can pass in.
+ *
+ * Spelled structurally rather than as `NodeJS.ProcessEnv`: that type is a Node
+ * global, and a parameter type ends up in the emitted `.d.ts`, so any consumer
+ * without `@types/node` would fail to compile against this package. `process.env` is
+ * assignable to it, and so is a plain `{}` in a test.
+ */
+export type EnvLike = Record<string, string | undefined>;
 /** One problem found in the config file. */
 export interface ConfigIssue {
     /** Dotted path, e.g. `outputs.typescript.outputDir`. */
@@ -86,7 +95,7 @@ export declare function validateConfig(raw: unknown): An5OrmConfig;
  * one CI sets. A project may therefore commit a development connection and
  * still have a different one in a pipeline without editing the file.
  */
-export declare function resolveConnectionString(config: An5OrmConfig, env?: NodeJS.ProcessEnv, command?: string): string;
+export declare function resolveConnectionString(config: An5OrmConfig, env?: EnvLike, command?: string): string;
 /**
  * The provider a connection string points at.
  *
@@ -110,7 +119,7 @@ export declare function detectProvider(connectionString: string | undefined | nu
  * with an empty config, and the default provider still validates the schema as
  * before.
  */
-export declare function providerFromConfig(config: An5OrmConfig, env?: NodeJS.ProcessEnv): Provider;
+export declare function providerFromConfig(config: An5OrmConfig, env?: EnvLike): Provider;
 /**
  * The provider configured for a project directory.
  *
@@ -121,7 +130,7 @@ export declare function providerFromConfig(config: An5OrmConfig, env?: NodeJS.Pr
  * Never throws: no config, an unreadable one, or an invalid one all mean the
  * default provider, which is what the parser does on its own anyway.
  */
-export declare function providerForProject(cwd?: string, env?: NodeJS.ProcessEnv): Provider;
+export declare function providerForProject(cwd?: string, env?: EnvLike): Provider;
 /**
  * Renders issues for the terminal, one per line, paths aligned.
  *
@@ -151,4 +160,3 @@ export interface LoadedConfig {
  * so a project can generate without a config.
  */
 export declare function loadConfig(cwd?: string): LoadedConfig;
-//# sourceMappingURL=config.d.ts.map
