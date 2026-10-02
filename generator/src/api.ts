@@ -34,6 +34,7 @@ export {
   PROVIDERS,
   PROVIDER_FIELD_TYPES,
   PROVIDER_LABELS,
+  defaultSqlTypeForTs,
   fieldTypesFor,
   resolveFieldType,
   unknownFieldTypeMessage,

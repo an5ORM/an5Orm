@@ -22,6 +22,13 @@ export type TsType = 'string' | 'number' | 'number | bigint' | 'boolean' | 'Date
 export declare const PROVIDER_FIELD_TYPES: Record<Provider, Readonly<Record<string, TsType>>>;
 /** The type table of one provider. */
 export declare function fieldTypesFor(provider: Provider): Readonly<Record<string, TsType>>;
+/**
+ * A column type for a TypeScript type, valid on `provider`.
+ *
+ * Unknown TypeScript types fall back to that provider's string type, which is the
+ * only choice that can hold any value.
+ */
+export declare function defaultSqlTypeForTs(tsType: string, provider?: Provider): string;
 /** One bad field type, with everything needed to print it. */
 export interface FieldTypeIssue {
     /** `Model.field`, or just the field name when there is no model. */

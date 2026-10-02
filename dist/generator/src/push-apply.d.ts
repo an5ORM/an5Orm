@@ -19,14 +19,6 @@ export interface PushDatabase {
     /** Progress, so the CLI prints what it is doing. */
     log(message: string): void;
 }
-/**
- * An identifier for a generated name: letters, digits and underscores only.
- *
- * The name goes into DDL as an identifier, so anything else is replaced rather
- * than quoted — `@@map("catalog entries")` must not produce a name the provider
- * then rejects.
- */
-export declare function safeIdentifierName(raw: string): string;
 export interface ApplyResult {
     /** How many tables were created, and how many altered. */
     tablesCreated: number;

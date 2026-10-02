@@ -312,6 +312,46 @@ export function fieldTypesFor(provider: Provider): Readonly<Record<string, TsTyp
   return PROVIDER_FIELD_TYPES[provider];
 }
 
+/**
+ * The column type to use when only the TypeScript type is known.
+ *
+ * For tooling that has to invent a type name — the agent reading a client generated
+ * before the metadata carried `sql` — and the table is per provider on purpose:
+ * `NVARCHAR` exists only on SQL Server and `TIMESTAMP` is a rowversion there, so
+ * naming a type from the wrong provider produces SQL the database rejects.
+ */
+const DEFAULT_TYPE_FOR_TS: Record<Provider, Record<string, string>> = {
+  mssql: { string: 'NVARCHAR(255)', number: 'INT', bigint: 'BIGINT', boolean: 'BIT', Date: 'DATETIME2', Buffer: 'VARBINARY(MAX)', any: 'NVARCHAR(MAX)', vector: 'VECTOR' },
+  postgres: { string: 'VARCHAR(255)', number: 'INTEGER', bigint: 'BIGINT', boolean: 'BOOLEAN', Date: 'TIMESTAMPTZ', Buffer: 'BYTEA', any: 'JSONB', vector: 'VECTOR' },
+  mysql: { string: 'VARCHAR(255)', number: 'INT', bigint: 'BIGINT', boolean: 'BOOLEAN', Date: 'DATETIME', Buffer: 'BLOB', any: 'JSON', vector: 'JSON' },
+  // SQLite stores what it is given: dates as text, which is what the adapter reads
+  // back and converts, and numbers as a real.
+  sqlite: { string: 'TEXT', number: 'REAL', bigint: 'INTEGER', boolean: 'BOOLEAN', Date: 'TEXT', Buffer: 'BLOB', any: 'TEXT', vector: 'TEXT' },
+  googlesheets: { string: 'TEXT', number: 'INTEGER', bigint: 'INTEGER', boolean: 'BOOLEAN', Date: 'TEXT', Buffer: 'BYTES', any: 'TEXT', vector: 'TEXT' },
+};
+
+/**
+ * A column type for a TypeScript type, valid on `provider`.
+ *
+ * Unknown TypeScript types fall back to that provider's string type, which is the
+ * only choice that can hold any value.
+ */
+export function defaultSqlTypeForTs(tsType: string, provider: Provider = DEFAULT_PROVIDER): string {
+  const byProvider = DEFAULT_TYPE_FOR_TS[provider];
+  const raw = tsType.trim();
+  // A `[]` means the vector type, which the generators spell `number[] | string`; it
+  // has to be recognised before the brackets are stripped, or it reads as a number.
+  if (raw.includes('[]')) return byProvider.vector!;
+  const key = raw.replace(/[?\]]/g, '').trim();
+  if (byProvider[key]) return byProvider[key];
+  if (key.startsWith('number')) return byProvider.bigint!;
+  if (key.startsWith('Date')) return byProvider.Date!;
+  if (key.startsWith('boolean') || key.startsWith('bool')) return byProvider.boolean!;
+  if (key.startsWith('Buffer')) return byProvider.Buffer!;
+  if (key === 'any') return byProvider.any!;
+  return byProvider.string!;
+}
+
 /** One bad field type, with everything needed to print it. */
 export interface FieldTypeIssue {
   /** `Model.field`, or just the field name when there is no model. */

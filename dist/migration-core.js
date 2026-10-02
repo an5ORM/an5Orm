@@ -269,6 +269,8 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
     const models = [];
     const typeIssues = [];
     const modelRefs = [];
+    /** `@@schema` per model, applied after the model is read rather than mid-loop. */
+    const schemas = new Map();
     const lines = text.split('\n');
     let current = null;
     for (let line of lines) {
@@ -295,26 +297,23 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
         if (!current)
             continue;
         if (line.startsWith('@@map')) {
+            // Just the table name. A schema comes from `@@schema` alone, because a mapped
+            // name may legitimately contain a dot: `@@map("reports.daily")` is one table
+            // whose name has a dot in it, not a table called `daily` in a schema called
+            // `reports`.
             const m = line.match(/@@map\("(.+)"\)/);
-            if (m?.[1]) {
-                // Re-apply the schema: `@@map` may come after `@@schema`, and a mapped name
-                // in another schema still belongs to it.
-                const schema = current.tableName.includes('.')
-                    ? current.tableName.slice(0, current.tableName.indexOf('.'))
-                    : null;
-                current.tableName = schema ? `${schema}.${m[1]}` : m[1];
-            }
+            if (m?.[1])
+                current.tableName = m[1];
             continue;
         }
         if (line.startsWith('@@schema')) {
             // The directive used to be dropped here while `db:push` and the generators
             // honoured it, so a migration created the table in the connection's default
-            // schema and the client then read the one the schema file named. `dbo` is left
-            // implicit, which is what an unqualified model has always produced.
+            // schema and the client then read the one the schema file named. Composed in
+            // once the whole model has been read, below.
             const m = line.match(/@@schema\("(.*)"\)/);
-            const schema = m?.[1]?.trim() ?? '';
-            if (schema && schema !== 'dbo')
-                current.tableName = `${schema}.${current.tableName}`;
+            if (m !== null)
+                schemas.set(current, m[1]?.trim() ?? '');
             continue;
         }
         if (line.startsWith('@@unique')) {
@@ -351,6 +350,13 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
             defaultValue: line.match(/@default\((.*)\)/)?.[1]
                 ?? (line.includes('@updatedAt') ? 'now()' : undefined),
         });
+    }
+    // `dbo` stays implicit: an unqualified model produces the SQL it always has, and a
+    // named one is qualified with the schema the schema file asked for.
+    for (const model of models) {
+        const schema = schemas.get(model) ?? '';
+        if (schema && schema !== 'dbo')
+            model.tableName = `${schema}.${model.tableName}`;
     }
     const modelNames = models.map((model) => model.name);
     for (const ref of modelRefs) {

@@ -9,7 +9,7 @@
  * and keeps the driver out of the decision making.
  */
 import { PushDialect } from './dialect';
-import { PushModel, qualifiedTableName } from './push-schema';
+import { PushIndex, PushModel, directiveName, qualifiedTableName, safeIdentifierName } from './push-schema';
 
 /** The two things this needs from a database connection. */
 export interface PushDatabase {
@@ -19,17 +19,6 @@ export interface PushDatabase {
   execute(sql: string): Promise<void>;
   /** Progress, so the CLI prints what it is doing. */
   log(message: string): void;
-}
-
-/**
- * An identifier for a generated name: letters, digits and underscores only.
- *
- * The name goes into DDL as an identifier, so anything else is replaced rather
- * than quoted — `@@map("catalog entries")` must not produce a name the provider
- * then rejects.
- */
-export function safeIdentifierName(raw: string): string {
-  return raw.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
 }
 
 export interface ApplyResult {
@@ -71,9 +60,10 @@ export async function applySchema(
     // SQLite has no named unique constraints — a UNIQUE there becomes an index the
     // engine names itself — so the unique index carries our name instead, and that
     // name is what the existence check can look for.
-    const compoundUniques = model.compoundUniques.map((fields, idx) => ({
-      name: `UQ_${safeName}_compound_${idx}`,
-      fields,
+    const compoundUniques = model.compoundUniques.map((directive, idx) => ({
+      name: directiveName(directive, model.tableName, 'compound', idx),
+      fields: directive.fields,
+      directive,
     }));
 
     const tableExists = (await db.query(dialect.tableExists(tableName))).length > 0;
@@ -127,12 +117,12 @@ export async function applySchema(
       result.uniqueConstraintsAdded += 1;
     }
 
-    for (const [idx, fields] of model.indexes.entries()) {
-      const name = `IX_${safeName}_${fields.join('_')}`;
+    for (const [idx, directive] of model.indexes.entries()) {
+      const name = directiveName(directive, model.tableName, 'index', idx);
       if ((await db.query(dialect.indexExists(tableName, name))).length > 0) continue;
       const quoted = dialect.quote(name);
       db.log(`Creating index ${quoted} on table ${sqlTableName}...`);
-      await db.execute(dialect.createIndex(quoted, sqlTableName, quoteFields(fields)));
+      await db.execute(dialect.createIndex(quoted, sqlTableName, quoteFields(directive.fields)));
       result.indexesCreated += 1;
     }
   }

@@ -1,7 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.defaultSchemaFor = defaultSchemaFor;
+exports.directiveName = directiveName;
 exports.parsePushSchema = parsePushSchema;
+exports.safeIdentifierName = safeIdentifierName;
 exports.qualifiedTableName = qualifiedTableName;
 /**
  * Reading `.an5` files for `db:push`.
@@ -25,15 +27,36 @@ const field_types_1 = require("./field-types");
 function defaultSchemaFor(_provider) {
     return '';
 }
+/** The field list of `@@unique([a, b], …)`, plus whatever options follow it. */
+const DIRECTIVE = /^@@(?:unique|index)\(\s*\[([\w\s,]+)\]([^)]*)\)/;
+function parseDirective(line, fields) {
+    const options = line.match(DIRECTIVE)?.[2] ?? '';
+    const name = options.match(/\bmap\s*:\s*"([^"]+)"/)?.[1];
+    const include = options.match(/\binclude\s*:\s*\[([\w,\s]+)\]/)?.[1];
+    const filter = options.match(/\bfilter\s*:\s*"([^"]+)"/)?.[1];
+    const opts = options.match(/\boptions\s*:\s*"([^"]+)"/)?.[1];
+    return {
+        fields: fields.split(',').map((field) => field.trim()).filter(Boolean),
+        ...(name ? { name } : {}),
+        ...(include ? { includeFields: include.split(',').map((field) => field.trim()).filter(Boolean) } : {}),
+        ...(filter ? { filter } : {}),
+        ...(opts ? { options: opts } : {}),
+    };
+}
 /**
- * `@@unique([a, b])` and `@@index([a, b])`, tolerating the trailing options
- * `@@unique([a, b], map: "UQ_x")` carries.
+ * The name a `@@unique` or `@@index` artifact gets.
  *
- * Anchored on the closing bracket rather than the closing paren: requiring `)` right
- * after `]` silently dropped every mapped directive here while `db:migrate` still
- * honoured it, so a schema with a mapped unique got no unique pushed at all.
+ * `map:` wins; otherwise the name is derived from the table and fields, which is what
+ * both commands have always done for an unnamed directive.
  */
-const FIELD_LIST = /^@@(?:unique|index)\(\s*\[([\w\s,]+)\]/;
+function directiveName(directive, table, kind, position) {
+    if (directive.name)
+        return safeIdentifierName(directive.name);
+    const base = safeIdentifierName(table);
+    return kind === 'compound'
+        ? `UQ_${base}_compound_${position}`
+        : `IX_${base}_${directive.fields.join('_')}`;
+}
 /**
  * Reads schema text for push, validating every field type against the provider.
  *
@@ -88,13 +111,13 @@ function parsePushSchema(text, provider) {
             continue;
         }
         if (line.startsWith('@@unique') || line.startsWith('@@index')) {
-            const match = line.match(FIELD_LIST);
+            const match = line.match(DIRECTIVE);
             if (match) {
-                const fields = match[1].split(',').map((field) => field.trim()).filter(Boolean);
+                const definition = parseDirective(line, match[1] ?? '');
                 if (line.startsWith('@@unique'))
-                    current.compoundUniques.push(fields);
+                    current.compoundUniques.push(definition);
                 else
-                    current.indexes.push(fields);
+                    current.indexes.push(definition);
             }
             continue;
         }
@@ -152,6 +175,15 @@ function parsePushSchema(text, provider) {
  * An empty schema has to stay empty: `[].[widgets]` is not valid SQL, which is the
  * whole reason `@@schema("")` exists.
  */
+/**
+ * An identifier for a generated artifact name: letters, digits and underscores only.
+ *
+ * The name goes into DDL as an identifier, so anything else is replaced rather than
+ * quoted — `@@map("catalog entries")` must not produce a name the provider rejects.
+ */
+function safeIdentifierName(raw) {
+    return raw.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
 function qualifiedTableName(model) {
     return model.schema ? `${model.schema}.${model.tableName}` : model.tableName;
 }

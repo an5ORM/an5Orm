@@ -35,9 +35,9 @@ export interface PushModel {
   declaredSchema?: string | undefined;
   fields: PushField[];
   /** `@@unique([a, b])`, as field lists. */
-  compoundUniques: string[][];
+  compoundUniques: PushIndex[];
   /** `@@index([a, b])`, as field lists. */
-  indexes: string[][];
+  indexes: PushIndex[];
 }
 
 /**
@@ -53,21 +53,64 @@ export function defaultSchemaFor(_provider: Provider): string {
   return '';
 }
 
+/**
+ * One `@@unique` or `@@index`, with the options `db:migrate` already understands.
+ *
+ * `name` matters as much as the fields: `map:` is how a schema asks for a specific
+ * artifact name, and if push invented its own the two commands would create two
+ * different constraints for the same directive — and the next migration would keep
+ * trying to add the one push never made.
+ */
+export interface PushIndex {
+  fields: string[];
+  name?: string | undefined;
+  includeFields?: string[] | undefined;
+  filter?: string | undefined;
+  options?: string | undefined;
+}
+
 export interface PushSchema {
   models: PushModel[];
   /** Field types the provider does not have; empty when the schema is valid. */
   issues: FieldTypeIssue[];
 }
 
+/** The field list of `@@unique([a, b], …)`, plus whatever options follow it. */
+const DIRECTIVE = /^@@(?:unique|index)\(\s*\[([\w\s,]+)\]([^)]*)\)/;
+
+function parseDirective(line: string, fields: string): PushIndex {
+  const options = line.match(DIRECTIVE)?.[2] ?? '';
+  const name = options.match(/\bmap\s*:\s*"([^"]+)"/)?.[1];
+  const include = options.match(/\binclude\s*:\s*\[([\w,\s]+)\]/)?.[1];
+  const filter = options.match(/\bfilter\s*:\s*"([^"]+)"/)?.[1];
+  const opts = options.match(/\boptions\s*:\s*"([^"]+)"/)?.[1];
+  return {
+    fields: fields.split(',').map((field) => field.trim()).filter(Boolean),
+    ...(name ? { name } : {}),
+    ...(include ? { includeFields: include.split(',').map((field) => field.trim()).filter(Boolean) } : {}),
+    ...(filter ? { filter } : {}),
+    ...(opts ? { options: opts } : {}),
+  };
+}
+
 /**
- * `@@unique([a, b])` and `@@index([a, b])`, tolerating the trailing options
- * `@@unique([a, b], map: "UQ_x")` carries.
+ * The name a `@@unique` or `@@index` artifact gets.
  *
- * Anchored on the closing bracket rather than the closing paren: requiring `)` right
- * after `]` silently dropped every mapped directive here while `db:migrate` still
- * honoured it, so a schema with a mapped unique got no unique pushed at all.
+ * `map:` wins; otherwise the name is derived from the table and fields, which is what
+ * both commands have always done for an unnamed directive.
  */
-const FIELD_LIST = /^@@(?:unique|index)\(\s*\[([\w\s,]+)\]/;
+export function directiveName(
+  directive: PushIndex,
+  table: string,
+  kind: 'compound' | 'index',
+  position: number,
+): string {
+  if (directive.name) return safeIdentifierName(directive.name);
+  const base = safeIdentifierName(table);
+  return kind === 'compound'
+    ? `UQ_${base}_compound_${position}`
+    : `IX_${base}_${directive.fields.join('_')}`;
+}
 
 /**
  * Reads schema text for push, validating every field type against the provider.
@@ -124,11 +167,11 @@ export function parsePushSchema(text: string, provider: Provider): PushSchema {
       continue;
     }
     if (line.startsWith('@@unique') || line.startsWith('@@index')) {
-      const match = line.match(FIELD_LIST);
+      const match = line.match(DIRECTIVE);
       if (match) {
-        const fields = match[1].split(',').map((field) => field.trim()).filter(Boolean);
-        if (line.startsWith('@@unique')) current.compoundUniques.push(fields);
-        else current.indexes.push(fields);
+        const definition = parseDirective(line, match[1] ?? '');
+        if (line.startsWith('@@unique')) current.compoundUniques.push(definition);
+        else current.indexes.push(definition);
       }
       continue;
     }
@@ -192,6 +235,16 @@ export function parsePushSchema(text: string, provider: Provider): PushSchema {
  * An empty schema has to stay empty: `[].[widgets]` is not valid SQL, which is the
  * whole reason `@@schema("")` exists.
  */
+/**
+ * An identifier for a generated artifact name: letters, digits and underscores only.
+ *
+ * The name goes into DDL as an identifier, so anything else is replaced rather than
+ * quoted — `@@map("catalog entries")` must not produce a name the provider rejects.
+ */
+export function safeIdentifierName(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
+
 export function qualifiedTableName(model: PushModel): string {
   return model.schema ? `${model.schema}.${model.tableName}` : model.tableName;
 }

@@ -527,6 +527,15 @@ test('parseSchemaText honours @@schema, which db:push and the generators read', 
   // No directive at all: unchanged.
   const [plain] = parseSchemaText('model Report {\n  id NVARCHAR(64) @id\n}');
   assertEq(plain.tableName, 'reports');
+
+  // Either order works, because the schema is composed once the model is read.
+  const [mappedFirst] = parseSchemaText('model Report {\n  @@map("daily")\n  @@schema("analytics")\n  id NVARCHAR(64) @id\n}');
+  assertEq(mappedFirst.tableName, 'analytics.daily');
+
+  // A dot in the mapped name is part of the name, not a schema: `@@map` only ever
+  // sets the table, and the schema comes from `@@schema` alone.
+  const [dotted] = parseSchemaText('model Report {\n  @@map("reports.daily")\n  id NVARCHAR(64) @id\n}');
+  assertEq(dotted.tableName, 'reports.daily');
 });
 
 test('parseSchemaText keeps mapped index and unique artifact names', () => {

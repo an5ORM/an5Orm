@@ -357,8 +357,39 @@ test('a mapped @@unique or @@index is not silently dropped', () => {
     'mssql',
   );
   assert.deepEqual(issues, []);
-  assert.deepEqual(models[0].compoundUniques, [['tenantId', 'email']]);
-  assert.deepEqual(models[0].indexes, [['age']]);
+  assert.deepEqual(models[0].compoundUniques.map((d) => d.fields), [['tenantId', 'email']]);
+  assert.deepEqual(models[0].indexes.map((d) => d.fields), [['age']]);
+});
+
+test('db:push and db:migrate name an artifact the same way', () => {
+  // If the two invented different names for the same directive, push would create
+  // one constraint and the next migration would keep trying to add the other.
+  const { parsePushSchema, directiveName } = require(path.join(distSrc, 'push-schema.js'));
+  const { parseSchemaText } = require(path.join(__dirname, '..', 'dist', 'migration-core.js'));
+  const schema = `model Widget {
+     id       VARCHAR(8)  @id
+     tenantId VARCHAR(8)
+     email    VARCHAR(255)
+     age      INT
+     @@unique([tenantId, email], map: "UQ_widgets_tenant_email")
+     @@index([age], map: "IX_widgets_age")
+     @@index([tenantId])
+   }`;
+
+  const push = parsePushSchema(schema, 'mssql').models[0];
+  const migrate = parseSchemaText(schema, 'mssql')[0];
+
+  assert.deepEqual(
+    push.compoundUniques.map((d, i) => directiveName(d, 'widgets', 'compound', i)),
+    migrate.compoundUniques.map((c) => c.name),
+  );
+  // The unnamed index gets the derived name in both, so push's artifact is the one
+  // the diff recognises as managed.
+  assert.deepEqual(
+    push.indexes.map((d, i) => directiveName(d, 'widgets', 'index', i)),
+    ['IX_widgets_age', 'IX_widgets_tenantId'],
+  );
+  assert.equal(migrate.indexes[1].name, undefined, 'unnamed in the schema, derived by both');
 });
 
 test('SQL Server push still looks for an unqualified table, as before', () => {

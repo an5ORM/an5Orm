@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.unknownFieldTypeMessage = exports.resolveFieldType = exports.fieldTypesFor = exports.PROVIDER_LABELS = exports.PROVIDER_FIELD_TYPES = exports.PROVIDERS = exports.FieldTypeError = exports.DEFAULT_PROVIDER = exports.sqlLiteral = exports.defaultClause = exports.dialectFor = exports.providerForProject = exports.providerFromConfig = exports.detectProvider = exports.RustGenerator = exports.GolangGenerator = exports.DotnetGenerator = exports.PythonGenerator = exports.MetadataGenerator = exports.CodeGenerator = exports.sqlTypeToTs = exports.SchemaParser = void 0;
+exports.unknownFieldTypeMessage = exports.resolveFieldType = exports.fieldTypesFor = exports.defaultSqlTypeForTs = exports.PROVIDER_LABELS = exports.PROVIDER_FIELD_TYPES = exports.PROVIDERS = exports.FieldTypeError = exports.DEFAULT_PROVIDER = exports.sqlLiteral = exports.defaultClause = exports.dialectFor = exports.providerForProject = exports.providerFromConfig = exports.detectProvider = exports.RustGenerator = exports.GolangGenerator = exports.DotnetGenerator = exports.PythonGenerator = exports.MetadataGenerator = exports.CodeGenerator = exports.sqlTypeToTs = exports.SchemaParser = void 0;
 /**
  * Side-effect-free entrypoint for programmatic use of the code generator.
  *
@@ -50,6 +50,7 @@ Object.defineProperty(exports, "FieldTypeError", { enumerable: true, get: functi
 Object.defineProperty(exports, "PROVIDERS", { enumerable: true, get: function () { return field_types_1.PROVIDERS; } });
 Object.defineProperty(exports, "PROVIDER_FIELD_TYPES", { enumerable: true, get: function () { return field_types_1.PROVIDER_FIELD_TYPES; } });
 Object.defineProperty(exports, "PROVIDER_LABELS", { enumerable: true, get: function () { return field_types_1.PROVIDER_LABELS; } });
+Object.defineProperty(exports, "defaultSqlTypeForTs", { enumerable: true, get: function () { return field_types_1.defaultSqlTypeForTs; } });
 Object.defineProperty(exports, "fieldTypesFor", { enumerable: true, get: function () { return field_types_1.fieldTypesFor; } });
 Object.defineProperty(exports, "resolveFieldType", { enumerable: true, get: function () { return field_types_1.resolveFieldType; } });
 Object.defineProperty(exports, "unknownFieldTypeMessage", { enumerable: true, get: function () { return field_types_1.unknownFieldTypeMessage; } });

@@ -290,6 +290,39 @@ test('DATABASE_URL wins over the connection string in the config', () => {
   assert.equal(providerFromConfig(config, { DATABASE_URL: '' }), 'mssql');
 });
 
+// ─── Inventing a type when only the TypeScript type is known ──────────────────
+
+test('a tool inventing a column type gets one that provider has', () => {
+  const { defaultSqlTypeForTs } = require(path.join(distSrc, 'field-types.js'));
+  // The agent reads a client generated before the metadata carried `sql`, and used
+  // to name SQL Server types whatever the project's database was.
+  const expected = {
+    mssql: { string: 'NVARCHAR(255)', number: 'INT', boolean: 'BIT', Date: 'DATETIME2', Buffer: 'VARBINARY(MAX)', 'number | bigint': 'BIGINT', 'number[] | string': 'VECTOR' },
+    postgres: { string: 'VARCHAR(255)', number: 'INTEGER', boolean: 'BOOLEAN', Date: 'TIMESTAMPTZ', Buffer: 'BYTEA', 'number | bigint': 'BIGINT', 'number[] | string': 'VECTOR' },
+    mysql: { string: 'VARCHAR(255)', number: 'INT', boolean: 'BOOLEAN', Date: 'DATETIME', Buffer: 'BLOB', 'number | bigint': 'BIGINT', 'number[] | string': 'JSON' },
+    // SQLite stores a date as text, which is what the adapter reads back.
+    sqlite: { string: 'TEXT', number: 'REAL', boolean: 'BOOLEAN', Date: 'TEXT', Buffer: 'BLOB', 'number | bigint': 'INTEGER' },
+    googlesheets: { string: 'TEXT', number: 'INTEGER', boolean: 'BOOLEAN', Date: 'TEXT', Buffer: 'BYTES' },
+  };
+  for (const [provider, cases] of Object.entries(expected)) {
+    for (const [ts, want] of Object.entries(cases)) {
+      assert.equal(defaultSqlTypeForTs(ts, provider), want, `${provider} ${ts}`);
+    }
+  }
+});
+
+test('every type it invents passes that provider\'s own validation', () => {
+  const { defaultSqlTypeForTs } = require(path.join(distSrc, 'field-types.js'));
+  // The point of the mapping: the tool's output must not be what the validator rejects.
+  for (const provider of PROVIDERS) {
+    for (const ts of ['string', 'number', 'boolean', 'Date', 'Buffer', 'any', 'number | bigint', 'number[] | string', 'SomethingElse']) {
+      const sql = defaultSqlTypeForTs(ts, provider);
+      assert.ok(resolveFieldType(sql, provider), `${sql} (for ${ts}) must be a ${provider} type`);
+    }
+  }
+  assert.equal(defaultSqlTypeForTs('string?', 'sqlite'), 'TEXT', 'a nullable marker changes nothing');
+});
+
 // ─── providerForProject, for the tools that read schemas from outside ─────────
 
 test('providerForProject reads the provider from the project config', () => {

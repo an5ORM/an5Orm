@@ -58,6 +58,20 @@
 - **Connection strings with capitalised schemes were misread** — `MySQL://` selected
   SQL Server. A URI scheme is case-insensitive.
 
+### Fixed
+- **`db:push` and `db:migrate` could name the same constraint differently** — `map:`
+  on `@@unique([a, b], map: "UQ_x")` was read by `db:migrate` and ignored by `db:push`,
+  which invented `UQ_<table>_compound_0`. Push created one constraint, the next
+  migration kept trying to add the other. Both now use the mapped name, and the
+  unnamed form still derives the same one in each.
+- **A mapped table name containing a dot was read as a schema** — `@@map("reports.daily")`
+  became `reports.daily` and so `[reports].[daily]`. The schema now comes from
+  `@@schema` alone, composed once the model has been read, in either directive order.
+- **A tool inventing a type named SQL Server types for any database** — the ORM exposes
+  `defaultSqlTypeForTs`, so a project on another provider gets `VARCHAR(255)`,
+  `TIMESTAMPTZ` or `TEXT` rather than `NVARCHAR(255)` and `BIT`, which the ORM's own
+  validator then rejected.
+
 ### Changed
 - **A type the provider does not have is now an error** — this is the point of the
   change, and it is breaking for schemas that relied on the shared list. Replace

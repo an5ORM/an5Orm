@@ -27,9 +27,9 @@ export interface PushModel {
     declaredSchema?: string | undefined;
     fields: PushField[];
     /** `@@unique([a, b])`, as field lists. */
-    compoundUniques: string[][];
+    compoundUniques: PushIndex[];
     /** `@@index([a, b])`, as field lists. */
-    indexes: string[][];
+    indexes: PushIndex[];
 }
 /**
  * The schema a model lands in when the schema file does not say: none, for every
@@ -41,11 +41,33 @@ export interface PushModel {
  * had created, and then fail with "there is already an object named ...".
  */
 export declare function defaultSchemaFor(_provider: Provider): string;
+/**
+ * One `@@unique` or `@@index`, with the options `db:migrate` already understands.
+ *
+ * `name` matters as much as the fields: `map:` is how a schema asks for a specific
+ * artifact name, and if push invented its own the two commands would create two
+ * different constraints for the same directive — and the next migration would keep
+ * trying to add the one push never made.
+ */
+export interface PushIndex {
+    fields: string[];
+    name?: string | undefined;
+    includeFields?: string[] | undefined;
+    filter?: string | undefined;
+    options?: string | undefined;
+}
 export interface PushSchema {
     models: PushModel[];
     /** Field types the provider does not have; empty when the schema is valid. */
     issues: FieldTypeIssue[];
 }
+/**
+ * The name a `@@unique` or `@@index` artifact gets.
+ *
+ * `map:` wins; otherwise the name is derived from the table and fields, which is what
+ * both commands have always done for an unnamed directive.
+ */
+export declare function directiveName(directive: PushIndex, table: string, kind: 'compound' | 'index', position: number): string;
 /**
  * Reads schema text for push, validating every field type against the provider.
  *
@@ -61,4 +83,11 @@ export declare function parsePushSchema(text: string, provider: Provider): PushS
  * An empty schema has to stay empty: `[].[widgets]` is not valid SQL, which is the
  * whole reason `@@schema("")` exists.
  */
+/**
+ * An identifier for a generated artifact name: letters, digits and underscores only.
+ *
+ * The name goes into DDL as an identifier, so anything else is replaced rather than
+ * quoted — `@@map("catalog entries")` must not produce a name the provider rejects.
+ */
+export declare function safeIdentifierName(raw: string): string;
 export declare function qualifiedTableName(model: PushModel): string;
