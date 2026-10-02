@@ -63,7 +63,7 @@ async function cleanup() {
   
   console.log("Valid tables from schema:", Array.from(validTables));
 
-  const dbTables = await (await getDb()).$queryRawUnsafe<any[]>(`
+  const dbTables = await (await getDb()).$queryRawUnsafe<any>(`
     SELECT name FROM sys.tables WHERE is_ms_shipped = 0
   `);
 
@@ -90,7 +90,7 @@ async function cleanup() {
       console.error(`❌ Failed to drop [${table}]: ${err.message}`);
       if (err.message.includes("FOREIGN KEY constraint")) {
           console.log(`Attempting to find and drop constraints for [${table}]...`);
-          const constraints = await (await getDb()).$queryRawUnsafe<any[]>(`
+          const constraints = await (await getDb()).$queryRawUnsafe<any>(`
             SELECT fk.name AS constraint_name, OBJECT_NAME(fk.parent_object_id) AS table_name
             FROM sys.foreign_keys AS fk
             WHERE OBJECT_NAME(fk.referenced_object_id) = @p_0 OR OBJECT_NAME(fk.parent_object_id) = @p_0

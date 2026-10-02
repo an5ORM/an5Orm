@@ -24,6 +24,16 @@
   prefix is stripped for SQLite, which has no schemas.
 
 ### Fixed
+- **The CLI commands are type-checked** — `tsconfig.json` excludes push, pull,
+  migrate and cleanup because they run through tsx, so no compiler ever looked at
+  them. A call to a function deleted from another file reached the live-DB job
+  and failed there with `requireDatabaseUrl is not defined`, long after the
+  change that removed it. `tsconfig.cli.json` checks them, and `test` runs it
+  first.
+- **`$queryRawUnsafe<any[]>` in db:pull and db:cleanup** — the generic argument
+  is the row type, so this typed every row as an array and made `row.tableName`
+  an error the compiler never saw. Both files also dereferenced `DATABASE_URL`
+  with no check, so an unset variable crashed inside the adapter.
 - **`generation.generateMetadata` is now read** — it was documented and defaulted
   but nothing consulted it. `generation.generateComments` is removed instead of
   left in place: no generator emitted comments, so the option promised something

@@ -30,6 +30,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc -p generator/tsconfig.json && node scripts/normalize-eol.js",
+    "typecheck:cli": "tsc -p tsconfig.cli.json",
     "pretest": "npm run build",
     "prepack": "npm run build && npm run verify:pack",
     "prepublishOnly": "npm run verify:pack",
@@ -46,7 +47,7 @@
     "db:migrate:status": "npx tsx migrate.ts status",
     "release:cli": "npx tsx scripts/release-cli.ts",
     "release": "node scripts/release.js",
-    "test": "node test/smoke.test.js && node test/unit.test.js && node test/generator-regressions.test.js && node --test test/config.test.js",
+    "test": "npm run typecheck:cli && node test/smoke.test.js && node test/unit.test.js && node test/generator-regressions.test.js && node --test test/config.test.js",
     "test:unit": "node test/unit.test.js",
     "test:generator": "npm run generate && node test/generator.test.js",
     "test:generator:regressions": "node test/generator-regressions.test.js",

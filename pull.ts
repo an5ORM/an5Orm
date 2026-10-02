@@ -24,7 +24,7 @@ function capitalize(str: string): string {
 async function pull() {
   console.log("🔍 Pulling schema from database...");
 
-  const tables = await (await getDb()).$queryRawUnsafe<any[]>(`
+  const tables = await (await getDb()).$queryRawUnsafe<any>(`
     SELECT s.name AS schemaName, t.name AS tableName
     FROM sys.tables t
     JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -82,7 +82,7 @@ async function pull() {
     console.log(`Introspecting table [${tableName}]...`);
 
     // Get columns
-    const columns = await (await getDb()).$queryRawUnsafe<any[]>(`
+    const columns = await (await getDb()).$queryRawUnsafe<any>(`
       SELECT 
           c.name AS columnName,
           ty.name AS dataType,
@@ -107,7 +107,7 @@ async function pull() {
     `, tableName);
 
     // Get indexes
-    const indexes = await (await getDb()).$queryRawUnsafe<any[]>(`
+    const indexes = await (await getDb()).$queryRawUnsafe<any>(`
       SELECT 
           i.name AS indexName,
           i.is_unique AS isUnique,

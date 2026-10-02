@@ -59,7 +59,6 @@ function safeIdentifierName(raw: string): string {
 }
 
 async function push() {
-  requireDatabaseUrl();
 
   let schemaText = "";
   if (fs.existsSync(schemaDir)) {

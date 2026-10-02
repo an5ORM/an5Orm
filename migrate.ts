@@ -192,7 +192,6 @@ async function introspectTableArtifacts(tableName: string): Promise<TableArtifac
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 async function cmdDiff() {
-  requireDatabaseUrl();
   console.log('\n🔍 Comparing schema with database...\n');
 
   const schemaModels = parseSchema();
@@ -217,7 +216,6 @@ async function cmdDiff() {
 }
 
 async function cmdGenerate() {
-  requireDatabaseUrl();
   console.log('\n📝 Generating migration file...\n');
 
   const schemaModels = parseSchema();
@@ -242,7 +240,6 @@ async function cmdGenerate() {
 }
 
 async function cmdApply(args: string[] = []) {
-  requireDatabaseUrl();
   const options = parseMigrationCommandOptions(args);
   console.log(options.dryRun ? '\n👀 Previewing pending migrations...\n' : '\n🚀 Applying migrations...\n');
 
@@ -330,7 +327,6 @@ function readRollbackSql(migration: { id: string; checksum: string }): string {
 }
 
 async function cmdRollback(args: string[] = []) {
-  requireDatabaseUrl();
   const options = parseMigrationCommandOptions(args);
 
   const db = await getDb();
@@ -358,7 +354,6 @@ async function cmdRollback(args: string[] = []) {
 }
 
 async function cmdStatus() {
-  requireDatabaseUrl();
   console.log('\n📊 Migration Status\n');
 
   const schemaModels = parseSchema();

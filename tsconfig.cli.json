@@ -1,0 +1,14 @@
+{
+  "//": "The CLI commands are run through tsx, so tsconfig.json excludes them. That meant no compiler ever looked at push.ts, pull.ts, migrate.ts or cleanup.ts — a call to a function deleted from another file shipped green until the live-DB job ran it. This project type-checks them without emitting.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["push.ts", "pull.ts", "migrate.ts", "cleanup.ts", "generator/src/**/*.ts"]
+}
