@@ -71,7 +71,12 @@ export class SchemaParser {
         currentModel = {
           name: modelName,
           tableName: modelName.toLowerCase() + 's',
-          schemaName: 'dbo',
+          // SQL Server's default schema, and only SQL Server's. For SQLite or MySQL
+          // an unqualified name is what the connection resolves, and for PostgreSQL
+          // it follows `search_path` — the same rule `db:push` now uses, so the
+          // generated client and the pushed table cannot drift apart.
+          schemaName: this.provider === 'mssql' ? 'dbo' : '',
+          provider: this.provider,
           fields: [],
           relations: []
         };

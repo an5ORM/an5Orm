@@ -503,6 +503,32 @@ test('parseSchemaText keeps SQL fields and skips relation fields', () => {
   assert.strictEqual(models[1].fields[2].isOptional, true);
 });
 
+test('parseSchemaText honours @@schema, which db:push and the generators read', () => {
+  const [qualified] = parseSchemaText(`
+    model Report {
+      @@schema("analytics")
+      @@map("daily_report")
+      id NVARCHAR(64) @id
+    }
+  `);
+  assertEq(qualified.tableName, 'analytics.daily_report');
+  assertIncludes(buildCreateTableSql(qualified), 'CREATE TABLE [analytics].[daily_report]');
+
+  // `dbo` stays implicit, so an unqualified model produces the SQL it always has.
+  const [implicit] = parseSchemaText(`
+    model Report {
+      @@schema("dbo")
+      id NVARCHAR(64) @id
+    }
+  `);
+  assertEq(implicit.tableName, 'reports');
+  assertIncludes(buildCreateTableSql(implicit), 'CREATE TABLE [reports]');
+
+  // No directive at all: unchanged.
+  const [plain] = parseSchemaText('model Report {\n  id NVARCHAR(64) @id\n}');
+  assertEq(plain.tableName, 'reports');
+});
+
 test('parseSchemaText keeps mapped index and unique artifact names', () => {
   const [model] = parseSchemaText(`
     model User {

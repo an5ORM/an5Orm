@@ -98,6 +98,18 @@ model Catalog {
 }
 `;
 
+/**
+ * A schema whose types every provider here accepts, for the table-name assertions —
+ * SQLITE_SCHEMA uses INTEGER/BOOLEAN/BLOB, which SQL Server does not have.
+ */
+const PORTABLE_SCHEMA = `
+model CatalogType {
+  id   VARCHAR(64)  @id
+  name VARCHAR(255)
+  @@map("CatalogType")
+}
+`;
+
 console.log('\n─── Regressions ───');
 
 // ─── 1. Metadata module name follows the configuration ────────────────────────
@@ -138,24 +150,46 @@ test("@@schema(\"\") generates a table name with no schema prefix", async () => 
   const outDir = path.join(tmpRoot, 'empty-schema-out');
   new PythonGenerator(path.join(outDir, 'an5_metadata.py')).generate(models);
   const meta = fs.readFileSync(path.join(outDir, 'an5_metadata.py'), 'utf8');
-  assertIncludes(meta, '"[CatalogType]"');
+  // A SQLite project gets the bare name: the adapters quote it per dialect, and the
+  // brackets are SQL Server syntax.
+  assertIncludes(meta, '"CatalogType"');
   assert.ok(!meta.includes('[dbo]'), `no [dbo] may remain:\n${meta.split('\n').slice(0, 10).join('\n')}`);
   assert.ok(!meta.includes('[].'), 'must not generate [].[table]');
 });
 
-test("without @@schema the default stays dbo, so existing schemas are unaffected", async () => {
-  const models = await parse('default-schema', SQLITE_SCHEMA);
-  assertEq(models[0].schemaName, 'dbo');
-  assertEq(models[0].tableName, 'CatalogType');
-  assertEq(bracketedTableName(models[0]), '[dbo].[CatalogType]');
-  assertEq(dottedTableName(models[0]), 'dbo.CatalogType');
+test("@@schema(\"\") drops the prefix on SQL Server too", async () => {
+  const models = await parse('empty-schema-mssql', withEmptySchema(PORTABLE_SCHEMA), 'mssql');
+  assertEq(models[0].schemaName, '');
+  assertEq(bracketedTableName(models[0]), '[CatalogType]');
+});
+
+test("the default schema is SQL Server's alone", async () => {
+  // An existing SQL Server schema must generate byte-identical output.
+  const mssql = await parse('default-schema', PORTABLE_SCHEMA, 'mssql');
+  assertEq(mssql[0].schemaName, 'dbo');
+  assertEq(mssql[0].tableName, 'CatalogType');
+  assertEq(bracketedTableName(mssql[0]), '[dbo].[CatalogType]');
+  assertEq(dottedTableName(mssql[0]), 'dbo.CatalogType');
+
+  // SQLite has no schemas, so it never invents one. This was the "no such table:
+  // dbo.<table>" that made every SQLite query fail until the adapters learned to
+  // strip the prefix.
+  const sqlite = await parse('default-schema-sqlite', SQLITE_SCHEMA, 'sqlite');
+  assertEq(sqlite[0].schemaName, '');
+  assertEq(bracketedTableName(sqlite[0]), 'CatalogType');
+  assertEq(dottedTableName(sqlite[0]), 'CatalogType');
 });
 
 test("@@schema(\"main\") still keeps the prefix", async () => {
-  const models = await parse('named-schema', withSchema(SQLITE_SCHEMA, 'main'));
-  assertEq(models[0].schemaName, 'main');
-  assertEq(bracketedTableName(models[0]), '[main].[CatalogType]');
-  assertEq(dottedTableName(models[0]), 'main.CatalogType');
+  const mssql = await parse('named-schema', withSchema(PORTABLE_SCHEMA, 'main'), 'mssql');
+  assertEq(mssql[0].schemaName, 'main');
+  assertEq(bracketedTableName(mssql[0]), '[main].[CatalogType]');
+  assertEq(dottedTableName(mssql[0]), 'main.CatalogType');
+
+  // Elsewhere the schema is a plain prefix on the name, which the adapters quote.
+  const sqlite = await parse('named-schema-sqlite', withSchema(PORTABLE_SCHEMA, 'main'), 'sqlite');
+  assertEq(bracketedTableName(sqlite[0]), 'main.CatalogType');
+  assertEq(dottedTableName(sqlite[0]), 'main.CatalogType');
 });
 
 test("bracketedTableName/dottedTableName drop the prefix when the schema is empty", async () => {
@@ -171,7 +205,7 @@ test("the TypeScript metadata has no [dbo] left when the schema is empty", async
   new MetadataGenerator(outFile, '').generate(models);
   const meta = fs.readFileSync(outFile, 'utf8');
   assert.ok(!meta.includes('[dbo]'), 'the TS metadata must not keep [dbo]');
-  assertIncludes(meta, '"[CatalogType]"');
+  assertIncludes(meta, '"CatalogType"');
 });
 
 // ─── 3. SQLite types are not parsed as relations ───────────────────────────────

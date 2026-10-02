@@ -296,8 +296,25 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
             continue;
         if (line.startsWith('@@map')) {
             const m = line.match(/@@map\("(.+)"\)/);
-            if (m?.[1])
-                current.tableName = m[1];
+            if (m?.[1]) {
+                // Re-apply the schema: `@@map` may come after `@@schema`, and a mapped name
+                // in another schema still belongs to it.
+                const schema = current.tableName.includes('.')
+                    ? current.tableName.slice(0, current.tableName.indexOf('.'))
+                    : null;
+                current.tableName = schema ? `${schema}.${m[1]}` : m[1];
+            }
+            continue;
+        }
+        if (line.startsWith('@@schema')) {
+            // The directive used to be dropped here while `db:push` and the generators
+            // honoured it, so a migration created the table in the connection's default
+            // schema and the client then read the one the schema file named. `dbo` is left
+            // implicit, which is what an unqualified model has always produced.
+            const m = line.match(/@@schema\("(.*)"\)/);
+            const schema = m?.[1]?.trim() ?? '';
+            if (schema && schema !== 'dbo')
+                current.tableName = `${schema}.${current.tableName}`;
             continue;
         }
         if (line.startsWith('@@unique')) {

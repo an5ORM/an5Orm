@@ -18,6 +18,14 @@
   relation to a model that does not exist.
 
 ### Fixed
+- **A schema for another database generated `dbo` table names** — the default schema
+  was SQL Server's for every provider, so a SQLite or PostgreSQL project generated
+  `[dbo].[users]` and every query failed (`no such table: dbo.users`, or invalid SQL on
+  PostgreSQL). Those providers now get the bare name and let the adapter quote it per
+  dialect, which all five clients already do. SQL Server output is unchanged.
+- **`db:migrate` ignored `@@schema`** — the directive was dropped here while `db:push`
+  and the generators honoured it, so a migration created the table in the connection's
+  default schema and the client then read the one the schema file named.
 - **`db:push` dropped columns silently** — SQLite types such as `INTEGER`,
   `BOOLEAN` and `BLOB` were generated into the client but not in the list
   `db:push` checked, so the column was never created and nothing said so.

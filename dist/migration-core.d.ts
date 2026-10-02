@@ -17,6 +17,11 @@ export interface SchemaIndexDefinition {
 }
 export interface SchemaModel {
     name: string;
+    /**
+     * The table to create, schema-qualified when the model named a schema other than
+     * `dbo`. `dbo` stays implicit so an unqualified model produces the same SQL it
+     * always has.
+     */
     tableName: string;
     fields: SchemaField[];
     compoundUniques: Array<string[] | SchemaIndexDefinition>;
