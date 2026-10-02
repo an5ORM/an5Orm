@@ -418,12 +418,25 @@ test('index.ts exists with metadata and adapter exports', () => {
   assertIncludes(content, 'An5Adapter');
 });
 
-test('push.ts exists with push function', () => {
+test('push.ts exists and applies the schema through the dialect layer', () => {
   const pushPath = path.join(__dirname, '..', 'push.ts');
   assertExists(pushPath);
   const content = fs.readFileSync(pushPath, 'utf8');
   assertIncludes(content, 'async function push');
+  // The SQL moved into generator/src/dialect.ts when push became provider aware.
+  // Asserting the statement here kept failing long after the code was correct, and
+  // this file gates the publish job through `npm run test:full`.
+  assertIncludes(content, 'applySchema');
+  assertIncludes(content, 'dialectFor');
+});
+
+test('the dialect layer is where the table is created', () => {
+  const dialectPath = path.join(__dirname, '..', 'generator', 'src', 'dialect.ts');
+  assertExists(dialectPath);
+  const content = fs.readFileSync(dialectPath, 'utf8');
   assertIncludes(content, 'CREATE TABLE');
+  assertIncludes(content, 'CREATE INDEX');
+  assertIncludes(content, 'ALTER TABLE');
 });
 
 test('pull.ts exists with pull function', () => {
