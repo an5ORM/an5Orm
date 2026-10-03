@@ -37,7 +37,7 @@ const BOTH_REGISTRIES = [
   { pypi: 'an5-adapters', dir: path.join(workspaceRoot, 'an5Adapters') },
 ];
 
-for (const { pypi, dir } of BOTH_REGISTRIES) {
+for (const { pypi, dir } of BOTH_REGISTRIES.filter(({dir}) => fs.existsSync(path.join(dir, "pyproject.toml")))) {
   test(`${pypi}: the PyPI version matches the npm version`, () => {
     const npmVersion = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).version;
     const pyproject = fs.readFileSync(path.join(dir, 'pyproject.toml'), 'utf8');

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.1] - 2026-10-03
+
+- Correct empty and NOT filter branches and align built generator artifacts.
+
 ## [Unreleased]
 
 ### Fixed
