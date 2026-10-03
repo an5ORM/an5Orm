@@ -289,7 +289,7 @@ func detectDialect(connStr string) Dialect {
 \tif strings.HasPrefix(l, "postgres://") || strings.HasPrefix(l, "postgresql://") || strings.Contains(l, "port=5432") {
 \t\treturn DialectPostgres
 \t}
-\tif strings.HasPrefix(l, "sqlite://") || strings.HasPrefix(l, "sqlite:") || strings.HasPrefix(l, "file:") || strings.HasSuffix(l, ".db") || strings.HasSuffix(l, ".sqlite") || strings.HasSuffix(l, ".sqlite3") || l == ":memory:" {
+\tif l == "sqlite" || strings.HasPrefix(l, "sqlite://") || strings.HasPrefix(l, "sqlite:") || strings.HasPrefix(l, "file:") || strings.HasSuffix(l, ".db") || strings.HasSuffix(l, ".sqlite") || strings.HasSuffix(l, ".sqlite3") || l == ":memory:" {
 \t\treturn DialectSqlite
 \t}
 \treturn DialectMssql
@@ -363,6 +363,7 @@ func (c *TableClient[T]) quoteName(name string) string {
 // quoteTable quotes a schema.table name for the dialect.
 func (c *TableClient[T]) quoteTable() string {
 \tparts := strings.Split(c.TableName, ".")
+\tif c.Dialect == DialectSqlite && len(parts) == 2 && strings.EqualFold(parts[0], "dbo") { parts = parts[1:] }
 \tquoted := make([]string, len(parts))
 \tfor i, p := range parts {
 \t\tquoted[i] = c.quoteName(p)
@@ -898,14 +899,14 @@ func (c *TableClient[T]) buildWhereFromStruct(v reflect.Value, argOffset int) (s
 \t\t\tvar subParts []string
 \t\t\tfor j := 0; j < fv.Len(); j++ {
 \t\t\t\tsub, subArgs := c.buildWhereFromStruct(fv.Index(j), argOffset+len(args))
-\t\t\t\tif sub != "" { subParts = append(subParts, sub); args = append(args, subArgs...) }
+\t\t\t\tif sub == "" { sub = "1=1" }; subParts = append(subParts, sub); args = append(args, subArgs...)
 \t\t\t}
-\t\t\tif len(subParts) > 0 { parts = append(parts, "("+strings.Join(subParts, " OR ")+")") }
+\t\t\tif len(subParts) > 0 { parts = append(parts, "("+strings.Join(subParts, " OR ")+")") } else { parts = append(parts, "1=0") }
 \t\t\tcontinue
 \t\t}
 \t\tif name == "NOT" && fv.Kind() == reflect.Ptr && !fv.IsNil() {
 \t\t\tsub, subArgs := c.buildWhereFromStruct(fv.Elem(), argOffset+len(args))
-\t\t\tif sub != "" { parts = append(parts, "NOT ("+sub+")"); args = append(args, subArgs...) }
+\t\t\tif sub == "" { sub = "1=1" }; parts = append(parts, "NOT ("+sub+")"); args = append(args, subArgs...)
 \t\t\tcontinue
 \t\t}
 

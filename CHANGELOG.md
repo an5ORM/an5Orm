@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Empty and `undefined` branches of a filter were dropped instead of being honoured** —
+  `parseWhere` now treats `OR: []` as matching no rows, an empty branch inside an `OR` as
+  matching every row, and `NOT` over an array as `NOT (a OR b)` rather than `NOT (a AND b)`.
+  A filter value of `undefined` is skipped instead of producing a broken clause.
+
+  **This changes results.** Code relying on `OR: []` returning every row, or on `NOT`
+  over an array only excluding rows that fail *all* conditions, will see different rows.
+- **A generated Go client treated SQLite as SQL Server** — the bare connection string
+  `"sqlite"` now selects the SQLite dialect instead of falling through to SQL Server and
+  emitting SQL Server syntax against a SQLite file.
+- **Generated Go clients kept the `dbo.` schema under SQLite** — the prefix is stripped
+  for SQLite, which has no `dbo` schema. Other schemas are untouched.
+
+### Changed
+- The generated Go client uses the same empty-branch and `NOT` semantics as `parseWhere`,
+  so a schema produces consistent queries in both runtimes.
+- `dist/` is regenerated to match the sources.
+
+### Added
+- `test/query-semantics.test.js` runs the six behaviours above against a real SQLite
+  database, so they are asserted on SQL that actually executes.
+
 ## [1.1.0] - 2026-10-02
 
 ### Added

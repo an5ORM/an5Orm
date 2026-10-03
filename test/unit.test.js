@@ -328,7 +328,7 @@ test('NOT negates a where object', () => {
 test('NOT accepts a where array', () => {
   const params = {};
   const sql = parseWhere('user', { NOT: [{ name: 'John' }, { age: { lt: 18 } }] }, params);
-  assertEq(sql, 'NOT ([name] = @not_0_name AND [age] < @not_1_age_lt)');
+  assertEq(sql, 'NOT ([name] = @not_0_name OR [age] < @not_1_age_lt)');
 });
 
 test('multiple conditions combined', () => {

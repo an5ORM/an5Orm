@@ -119,11 +119,16 @@ function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
         }
     }
     for (const [key, value] of Object.entries(cleanWhere)) {
+        if (value === undefined)
+            continue;
         if (key === "OR" && Array.isArray(value)) {
-            const orConditions = value.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}or_${idx}_`, ctx));
+            const orConditions = value.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}or_${idx}_`, ctx) || "1=1");
             const filtered = orConditions.filter(Boolean);
             if (filtered.length > 0) {
                 conditions.push(`(${filtered.join(" OR ")})`);
+            }
+            else {
+                conditions.push("1=0");
             }
         }
         else if (key === "AND") {
@@ -136,10 +141,10 @@ function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
         }
         else if (key === "NOT") {
             const notItems = Array.isArray(value) ? value : [value];
-            const notConditions = notItems.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}not_${idx}_`, ctx));
+            const notConditions = notItems.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}not_${idx}_`, ctx) || "1=1");
             const filtered = notConditions.filter(Boolean);
             if (filtered.length > 0) {
-                conditions.push(`NOT (${filtered.join(" AND ")})`);
+                conditions.push(`NOT (${filtered.join(" OR ")})`);
             }
         }
         else {
