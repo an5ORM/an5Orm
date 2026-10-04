@@ -172,3 +172,7 @@ model Order {
 ## License
 
 MIT
+
+## Schema-grounded code requests
+
+The `@an5/orm/generator` export `prepareCodeRequest({ request, projectRoot, schemaPath, language: 'auto' })` returns `context_ready` with schema models and real generated API references for the caller's AI model. It generates reference files in temporary storage and cleans them afterward. `detectCodeLanguage` reads language manifests in the selected project directory and rejects ambiguous or missing markers. This API does not call an LLM, execute queries, or write application code.

@@ -1,6 +1,6 @@
 {
   "name": "@an5/orm",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "The lightweight ORM for SQL Server with support for TypeScript, Python, .NET (C#), Go, and Rust.",
   "license": "MIT",
   "main": "dist/index.js",

@@ -31,7 +31,7 @@ class MetadataGenerator {
             }
         }
         metaContent += '};\n\n';
-        metaContent += 'export const modelFields: Record<string, Record<string, { ts: string; sql: string; description?: string }>> = {\n';
+        metaContent += 'export const modelFields: Record<string, Record<string, { ts: string; sql: string; isId?: boolean; description?: string }>> = {\n';
         for (const model of models) {
             const props = this.getAllPropertyVariations(model.name);
             const fieldsStr = `{ ${model.fields.map(f => `${f.name}: ${this.formatFieldMetadata(f)}`).join(', ')} }`;
@@ -91,6 +91,8 @@ class MetadataGenerator {
             `ts: ${JSON.stringify(`${field.type}${field.isOptional ? '?' : ''}`)}`,
             `sql: ${JSON.stringify(field.sqlType)}`,
         ];
+        if (field.isId)
+            entries.push('isId: true');
         if (field.description) {
             entries.push(`description: ${JSON.stringify(field.description)}`);
         }

@@ -63,7 +63,7 @@ export interface AppliedMigrationRef {
     id: string;
 }
 export interface MigrationCommandOptions {
-    dryRun: boolean;
+    preview: boolean;
     rest: string[];
 }
 export declare function parseSqlType(raw: string): string;

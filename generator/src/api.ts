@@ -28,6 +28,8 @@ export { RustGenerator } from './rust-generator';
 export { detectProvider, providerFromConfig, providerForProject } from './config';
 export { dialectFor, defaultClause, sqlLiteral } from './dialect';
 export { fieldKind } from './type-kinds';
+export { CODE_LANGUAGES, detectCodeLanguage, prepareCodeRequest } from './code-request';
+export type { CodeLanguage, CodeRequest } from './code-request';
 export type { FieldKind } from './type-kinds';
 export type { ColumnSpec, PushDialect } from './dialect';
 export {

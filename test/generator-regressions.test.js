@@ -198,6 +198,20 @@ test("bracketedTableName/dottedTableName drop the prefix when the schema is empt
   assertEq(dottedTableName(model), 'ts');
 });
 
+test("TypeScript metadata preserves a custom primary key separately from foreign keys", async () => {
+  const dir = writeSchema('custom-primary-key', `model Item {
+  ownerId TEXT
+  key TEXT @id @default(uuid())
+  @@schema("")
+}`);
+  const models = await new SchemaParser(dir, 'sqlite').parse();
+  const outFile = path.join(dir, 'metadata.ts');
+  new MetadataGenerator(outFile, '').generate(models);
+  const content = fs.readFileSync(outFile, 'utf8');
+  assert.ok(/key: \{[^}]*isId: true/.test(content), 'custom primary key is identified');
+  assert.ok(!/ownerId: \{[^}]*isId: true/.test(content), 'foreign key is not identified as primary');
+});
+
 test("the TypeScript metadata has no [dbo] left when the schema is empty", async () => {
   const models = await parse('ts-empty-schema', withEmptySchema(SQLITE_SCHEMA));
   const outFile = path.join(tmpRoot, 'ts-out', 'an5Metadata.ts');

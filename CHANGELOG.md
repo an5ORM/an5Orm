@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0] - 2026-10-04
+
+### Added
+- Export prepareCodeRequest and detectCodeLanguage to prepare schema-grounded application code context for TypeScript, Python, .NET, Go and Rust, with explicit language ambiguity errors.
+- Emit isId primary-key markers in generated TypeScript metadata.
+### Changed
+- Rename migration/release preview flags to --preview and migration option fields to preview. The old flag and option are removed; update scripts and MCP callers before upgrading.
+- Reject unsupported migration flags before opening a database connection.
+
 ## [1.1.1] - 2026-10-03
 
 - Correct empty and NOT filter branches and align built generator artifacts.
@@ -207,4 +216,3 @@
 ## [1.0.1] - 2026-07-05
 
 - chore(readme): simplify and condense content
-

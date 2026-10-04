@@ -80,7 +80,7 @@ export interface AppliedMigrationRef {
 }
 
 export interface MigrationCommandOptions {
-  dryRun: boolean;
+  preview: boolean;
   rest: string[];
 }
 
@@ -838,15 +838,16 @@ export function parseRollbackSelection(args: string[], applied: AppliedMigration
 
 export function parseMigrationCommandOptions(args: string[]): MigrationCommandOptions {
   const rest: string[] = [];
-  let dryRun = false;
+  let preview = false;
 
   for (const arg of args) {
-    if (arg === '--dry-run') {
-      dryRun = true;
+    if (arg === '--preview') {
+      preview = true;
     } else {
+      if (arg.startsWith('-') && arg !== '--to') throw new Error(`Unknown migration option: ${arg}; use --preview to inspect SQL`);
       rest.push(arg);
     }
   }
 
-  return { dryRun, rest };
+  return { preview, rest };
 }

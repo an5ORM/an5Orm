@@ -4,14 +4,17 @@
  *
  * Usage:
  *   node scripts/release.js [patch|minor|major]
- *   node scripts/release.js --dry-run
+ *   node scripts/release.js --preview
  */
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const args = process.argv.slice(2);
-const dryRun = args.includes('--dry-run');
+for (const arg of args) {
+  if (arg.startsWith('--') && !['--preview'].includes(arg)) throw new Error(`Unknown option: ${arg}; use --preview to inspect without changes`);
+}
+const preview = args.includes('--preview');
 const bumpType = args.find(a => ['patch', 'minor', 'major'].includes(a)) || 'patch';
 
 const packages = [
@@ -22,7 +25,7 @@ const packages = [
 
 function run(cmd, cwd) {
   console.log(`  $ ${cmd}`);
-  if (!dryRun) {
+  if (!preview) {
     execSync(cmd, { cwd, stdio: 'inherit' });
   }
 }
@@ -42,7 +45,7 @@ function bumpVersion(version, type) {
 
 console.log('\n=== an5Orm Release ===\n');
 console.log(`Bump type: ${bumpType}`);
-console.log(`Dry run: ${dryRun}\n`);
+console.log(`Preview: ${preview}\n`);
 
 for (const pkg of packages) {
   if (!fs.existsSync(path.join(pkg.path, 'package.json'))) {
@@ -59,7 +62,7 @@ for (const pkg of packages) {
   const pkgJsonPath = path.join(pkg.path, 'package.json');
   const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
   pkgJson.version = newVersion;
-  if (!dryRun) {
+  if (!preview) {
     fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2) + '\n');
   }
 

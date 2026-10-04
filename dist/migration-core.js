@@ -717,15 +717,17 @@ function parseRollbackSelection(args, applied) {
 }
 function parseMigrationCommandOptions(args) {
     const rest = [];
-    let dryRun = false;
+    let preview = false;
     for (const arg of args) {
-        if (arg === '--dry-run') {
-            dryRun = true;
+        if (arg === '--preview') {
+            preview = true;
         }
         else {
+            if (arg.startsWith('-') && arg !== '--to')
+                throw new Error(`Unknown migration option: ${arg}; use --preview to inspect SQL`);
             rest.push(arg);
         }
     }
-    return { dryRun, rest };
+    return { preview, rest };
 }
 //# sourceMappingURL=migration-core.js.map

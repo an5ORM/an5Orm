@@ -1040,13 +1040,15 @@ test('parseRollbackSelection rejects invalid target and steps', () => {
   assert.throws(() => parseRollbackSelection(['--to', 'missing.sql'], [{ id: '001.sql' }]), /not applied/);
 });
 
-test('parseMigrationCommandOptions extracts dry-run flag', () => {
-  assert.deepStrictEqual(parseMigrationCommandOptions(['--dry-run', '2']), {
-    dryRun: true,
+test('parseMigrationCommandOptions extracts preview flag', () => {
+  assert.throws(() => parseMigrationCommandOptions(['--dry-run']), /Unknown migration option/);
+  assert.throws(() => parseMigrationCommandOptions(['--unknown-option']), /Unknown migration option/);
+  assert.deepStrictEqual(parseMigrationCommandOptions(['--preview', '2']), {
+    preview: true,
     rest: ['2'],
   });
   assert.deepStrictEqual(parseMigrationCommandOptions(['--to', '001.sql']), {
-    dryRun: false,
+    preview: false,
     rest: ['--to', '001.sql'],
   });
 });

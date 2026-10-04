@@ -281,12 +281,12 @@ async function main() {
 
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTable}', 'U') IS NOT NULL DROP TABLE ${migrationTableSql}`);
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTableB}', 'U') IS NOT NULL DROP TABLE ${migrationTableBSql}`);
-    runMigrationCli(migrationWorkspace, ['apply', '--dry-run']);
+    runMigrationCli(migrationWorkspace, ['apply', '--preview']);
     assert.strictEqual(await tableExists(setup, migrationTable), false);
     runMigrationCli(migrationWorkspace, 'apply');
     assert.strictEqual(await tableExists(setup, migrationTable), true);
     assert.strictEqual(await tableExists(setup, migrationTableB), true);
-    runMigrationCli(migrationWorkspace, ['rollback', '--dry-run', '2']);
+    runMigrationCli(migrationWorkspace, ['rollback', '--preview', '2']);
     assert.strictEqual(await tableExists(setup, migrationTable), true);
     runMigrationCli(migrationWorkspace, ['rollback', '2']);
     assert.strictEqual(await tableExists(setup, migrationTable), false);

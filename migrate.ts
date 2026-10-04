@@ -244,7 +244,7 @@ async function cmdGenerate() {
 
 async function cmdApply(args: string[] = []) {
   const options = parseMigrationCommandOptions(args);
-  console.log(options.dryRun ? '\n👀 Previewing pending migrations...\n' : '\n🚀 Applying migrations...\n');
+  console.log(options.preview ? '\n👀 Previewing pending migrations...\n' : '\n🚀 Applying migrations...\n');
 
   const db = await getDb();
   const applied = new Map((await getAppliedMigrations({ ensure: true })).map(row => [row.id, row.checksum]));
@@ -266,7 +266,7 @@ async function cmdApply(args: string[] = []) {
       throw new Error(`Migration ${file} has no up SQL to apply.`);
     }
 
-    if (options.dryRun) {
+    if (options.preview) {
       if (splitSqlBatches(sections.preflight).length > 0) {
         printBatches(`-- ${file} preflight`, sections.preflight);
       }
@@ -341,14 +341,14 @@ async function cmdRollback(args: string[] = []) {
 
   const selection = parseRollbackSelection(options.rest, applied);
   const targets = applied.slice(Math.max(0, applied.length - selection.count)).reverse();
-  console.log(options.dryRun ? `\n👀 Previewing rollback ${selection.label}...\n` : `\n↩️ Rolling back ${selection.label}...\n`);
+  console.log(options.preview ? `\n👀 Previewing rollback ${selection.label}...\n` : `\n↩️ Rolling back ${selection.label}...\n`);
 
   if (targets.length < selection.count) {
     console.log(`Only ${targets.length} applied migration${targets.length === 1 ? '' : 's'} available.`);
   }
 
   for (const migration of targets) {
-    if (options.dryRun) {
+    if (options.preview) {
       printBatches(`-- ${migration.id} down`, readRollbackSql(migration));
     } else {
       await rollbackOne(db, migration);
@@ -414,7 +414,7 @@ async function main() {
   // Checked after the subcommand is known, so a typo gets the usage line instead of
   // a warning about the wrong database.
   if (!MIGRATION_COMMANDS.includes(command as (typeof MIGRATION_COMMANDS)[number])) {
-    console.log('Usage: npx tsx migrate.ts [diff|generate|apply [--dry-run]|rollback [--dry-run] [steps|--to file]|status]');
+    console.log('Usage: npx tsx migrate.ts [diff|generate|apply [--preview]|rollback [--preview] [steps|--to file]|status]');
     process.exit(1);
   }
 
