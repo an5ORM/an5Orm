@@ -8,6 +8,9 @@ import { PythonGenerator } from './python-generator';
 import { DotnetGenerator } from './dotnet-generator';
 import { GolangGenerator } from './golang-generator';
 import { RustGenerator } from './rust-generator';
+import { JavaGenerator } from './java-generator';
+import { KotlinGenerator } from './kotlin-generator';
+import { SwiftGenerator } from './swift-generator';
 
 import fs from 'fs';
 
@@ -69,6 +72,9 @@ async function main() {
   const outputDotnetDir = config.outputs.dotnetDir;
   const outputGolangDir = config.outputs.golangDir;
   const outputRustDir = config.outputs.rustDir;
+  const outputJavaDir = config.outputs.javaDir;
+  const outputKotlinDir = config.outputs.kotlinDir;
+  const outputSwiftDir = config.outputs.swiftDir;
   const generateMetadata = config.config.generation.generateMetadata;
 
   console.log('🚀 Starting ORM generation...');
@@ -83,6 +89,9 @@ async function main() {
     clearGeneratedFiles(outputDotnetDir, '.cs');
     clearGeneratedFiles(outputGolangDir, '.go');
     clearGeneratedFiles(path.join(outputRustDir, 'src'), '.rs');
+    clearGeneratedFiles(outputJavaDir, '.java');
+    clearGeneratedFiles(outputKotlinDir, '.kt');
+    clearGeneratedFiles(path.join(outputSwiftDir, 'Sources'), '.swift');
     const pythonDirEarly = path.dirname(outputPythonMetadataPath);
     clearGeneratedPythonFiles(pythonDirEarly);
     if (config.config.generation.generateMetadata && fs.existsSync(outputMetadataPath)) {
@@ -128,6 +137,18 @@ async function main() {
     const rustGen = new RustGenerator(outputRustDir);
     rustGen.generate(models);
     console.log(`✨ Generated Rust client in ${outputRustDir}`);
+
+    const javaGen = new JavaGenerator(outputJavaDir);
+    javaGen.generate(models);
+    console.log(`✨ Generated Java client in ${outputJavaDir}`);
+
+    const kotlinGen = new KotlinGenerator(outputKotlinDir);
+    kotlinGen.generate(models);
+    console.log(`✨ Generated Kotlin client in ${outputKotlinDir}`);
+
+    const swiftGen = new SwiftGenerator(outputSwiftDir);
+    swiftGen.generate(models);
+    console.log(`✨ Generated Swift client in ${outputSwiftDir}`);
 
     console.log('✅ ORM generation completed successfully.');
   } catch (error) {

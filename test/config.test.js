@@ -221,4 +221,7 @@ test('resolveOutputs resolves every path against the config directory', () => {
   assert.equal(outputs.schemaDir, path.resolve('/project', 'an5Schema'));
   assert.equal(outputs.typescriptDir, path.resolve('/project', 'an5Client/typescript'));
   assert.equal(outputs.rustDir, path.resolve('/project', 'an5Client/rust'));
+  assert.equal(outputs.javaDir, path.resolve('/project', 'an5Client/java'));
+  assert.equal(outputs.kotlinDir, path.resolve('/project', 'an5Client/kotlin'));
+  assert.equal(outputs.swiftDir, path.resolve('/project', 'an5Client/swift'));
 });

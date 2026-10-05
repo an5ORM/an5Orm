@@ -40,6 +40,9 @@ exports.DEFAULT_CONFIG = {
         dotnet: { outputDir: 'an5Client/dotnet' },
         golang: { outputDir: 'an5Client/golang' },
         rust: { outputDir: 'an5Client/rust' },
+        java: { outputDir: 'an5Client/java' },
+        kotlin: { outputDir: 'an5Client/kotlin' },
+        swift: { outputDir: 'an5Client/swift' },
     },
     pull: {
         exclude: ['^__', '^sys\\.', '^igrations'],
@@ -59,6 +62,9 @@ function resolveOutputs(config, rootDir) {
         dotnetDir: resolve(config.outputs.dotnet.outputDir),
         golangDir: resolve(config.outputs.golang.outputDir),
         rustDir: resolve(config.outputs.rust.outputDir),
+        javaDir: resolve(config.outputs.java.outputDir),
+        kotlinDir: resolve(config.outputs.kotlin.outputDir),
+        swiftDir: resolve(config.outputs.swift.outputDir),
     };
 }
 class ConfigError extends Error {
@@ -136,6 +142,9 @@ const OUTPUT_SPEC = {
     dotnet: 'object',
     golang: 'object',
     rust: 'object',
+    java: 'object',
+    kotlin: 'object',
+    swift: 'object',
 };
 const OUTPUT_SECTION_SPEC = {
     typescript: { outputDir: 'string', metadataFile: 'string' },
@@ -143,6 +152,9 @@ const OUTPUT_SECTION_SPEC = {
     dotnet: { outputDir: 'string' },
     golang: { outputDir: 'string' },
     rust: { outputDir: 'string' },
+    java: { outputDir: 'string' },
+    kotlin: { outputDir: 'string' },
+    swift: { outputDir: 'string' },
 };
 const TOP_LEVEL_SPEC = {
     connectionString: 'string',
@@ -202,6 +214,18 @@ function validateConfig(raw) {
             rust: {
                 outputDir: outputs.rust?.outputDir ??
                     exports.DEFAULT_CONFIG.outputs.rust.outputDir,
+            },
+            java: {
+                outputDir: outputs.java?.outputDir ??
+                    exports.DEFAULT_CONFIG.outputs.java.outputDir,
+            },
+            kotlin: {
+                outputDir: outputs.kotlin?.outputDir ??
+                    exports.DEFAULT_CONFIG.outputs.kotlin.outputDir,
+            },
+            swift: {
+                outputDir: outputs.swift?.outputDir ??
+                    exports.DEFAULT_CONFIG.outputs.swift.outputDir,
             },
         },
         pull: {

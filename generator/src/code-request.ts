@@ -8,9 +8,12 @@ import { PythonGenerator } from './python-generator';
 import { DotnetGenerator } from './dotnet-generator';
 import { GolangGenerator } from './golang-generator';
 import { RustGenerator } from './rust-generator';
+import { JavaGenerator } from './java-generator';
+import { KotlinGenerator } from './kotlin-generator';
+import { SwiftGenerator } from './swift-generator';
 import type { Provider } from './field-types';
 
-export const CODE_LANGUAGES = ['typescript', 'python', 'dotnet', 'golang', 'rust'] as const;
+export const CODE_LANGUAGES = ['typescript', 'python', 'dotnet', 'golang', 'rust', 'java', 'kotlin', 'swift'] as const;
 export type CodeLanguage = typeof CODE_LANGUAGES[number];
 export interface CodeRequest {
   request: string;
@@ -31,6 +34,14 @@ export function detectCodeLanguage(root: string): CodeLanguage {
   if (names.some(name => /\.(csproj|sln|slnx)$/.test(name))) candidates.push('dotnet');
   if (has('go.mod')) candidates.push('golang');
   if (has('Cargo.toml')) candidates.push('rust');
+  // Java and Kotlin are told apart by their build file, not by a directory name: a Gradle
+  // project has both a build.gradle and a pom.xml, and only one says which language it is.
+  const hasJavaBuild = has('pom.xml') || has('build.gradle') || has('build.gradle.kts');
+  if (hasJavaBuild) {
+    const kotlinMarker = names.some((name) => /\.(kt|kts)$/.test(name)) || has('settings.gradle.kts');
+    candidates.push(kotlinMarker ? 'kotlin' : 'java');
+  }
+  if (has('Package.swift')) candidates.push('swift');
   if (candidates.length !== 1) throw new Error(`Cannot select one project language (${candidates.join(', ') || 'none'}). Specify language explicitly or select the application directory.`);
   return candidates[0]!;
 }
@@ -42,7 +53,7 @@ export async function prepareCodeRequest(input: CodeRequest) {
   if (!CODE_LANGUAGES.includes(language)) throw new Error(`Unsupported language: ${language}`);
   const loaded = loadConfig(input.projectRoot);
   const output = loaded.outputs;
-  const clientOutput = { typescript: output.typescriptDir, python: path.dirname(output.pythonMetadataFile), dotnet: output.dotnetDir, golang: output.golangDir, rust: output.rustDir }[language];
+  const clientOutput = { typescript: output.typescriptDir, python: path.dirname(output.pythonMetadataFile), dotnet: output.dotnetDir, golang: output.golangDir, rust: output.rustDir, java: output.javaDir, kotlin: output.kotlinDir, swift: output.swiftDir }[language];
   const schemaPath = path.resolve(input.projectRoot, input.schemaPath);
   const schemaDir = fs.statSync(schemaPath).isDirectory() ? schemaPath : path.dirname(schemaPath);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-code-request-'));
@@ -62,13 +73,16 @@ export async function prepareCodeRequest(input: CodeRequest) {
       case 'dotnet': new DotnetGenerator(scratch).generate(models); break;
       case 'golang': new GolangGenerator(scratch).generate(models); break;
       case 'rust': new RustGenerator(scratch).generate(models); break;
+      case 'java': new JavaGenerator(scratch).generate(models); break;
+      case 'kotlin': new KotlinGenerator(scratch).generate(models); break;
+      case 'swift': new SwiftGenerator(scratch).generate(models); break;
     }
     const files: { path: string; content: string }[] = [];
     function collect(dir: string) {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) collect(full);
-        else if (/\.(ts|py|cs|go|rs|mod|toml)$/.test(entry.name)) files.push({ path: path.relative(scratch, full), content: fs.readFileSync(full, 'utf8') });
+        else if (/\.(ts|py|cs|go|rs|mod|toml|java|kt|swift)$/.test(entry.name)) files.push({ path: path.relative(scratch, full), content: fs.readFileSync(full, 'utf8') });
       }
     }
     collect(scratch);

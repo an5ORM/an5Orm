@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.unknownFieldTypeMessage = exports.resolveFieldType = exports.fieldTypesFor = exports.defaultSqlTypeForTs = exports.PROVIDER_LABELS = exports.PROVIDER_FIELD_TYPES = exports.PROVIDERS = exports.FieldTypeError = exports.DEFAULT_PROVIDER = exports.prepareCodeRequest = exports.detectCodeLanguage = exports.CODE_LANGUAGES = exports.fieldKind = exports.sqlLiteral = exports.defaultClause = exports.dialectFor = exports.providerForProject = exports.providerFromConfig = exports.detectProvider = exports.RustGenerator = exports.GolangGenerator = exports.DotnetGenerator = exports.PythonGenerator = exports.MetadataGenerator = exports.CodeGenerator = exports.sqlTypeToTs = exports.SchemaParser = void 0;
+exports.unknownFieldTypeMessage = exports.resolveFieldType = exports.fieldTypesFor = exports.defaultSqlTypeForTs = exports.PROVIDER_LABELS = exports.PROVIDER_FIELD_TYPES = exports.PROVIDERS = exports.FieldTypeError = exports.DEFAULT_PROVIDER = exports.prepareCodeRequest = exports.detectCodeLanguage = exports.CODE_LANGUAGES = exports.fieldKind = exports.sqlLiteral = exports.defaultClause = exports.dialectFor = exports.providerForProject = exports.providerFromConfig = exports.detectProvider = exports.SwiftGenerator = exports.KotlinGenerator = exports.JavaGenerator = exports.RustGenerator = exports.GolangGenerator = exports.DotnetGenerator = exports.PythonGenerator = exports.MetadataGenerator = exports.CodeGenerator = exports.sqlTypeToTs = exports.SchemaParser = void 0;
 /**
  * Side-effect-free entrypoint for programmatic use of the code generator.
  *
@@ -36,6 +36,12 @@ var golang_generator_1 = require("./golang-generator");
 Object.defineProperty(exports, "GolangGenerator", { enumerable: true, get: function () { return golang_generator_1.GolangGenerator; } });
 var rust_generator_1 = require("./rust-generator");
 Object.defineProperty(exports, "RustGenerator", { enumerable: true, get: function () { return rust_generator_1.RustGenerator; } });
+var java_generator_1 = require("./java-generator");
+Object.defineProperty(exports, "JavaGenerator", { enumerable: true, get: function () { return java_generator_1.JavaGenerator; } });
+var kotlin_generator_1 = require("./kotlin-generator");
+Object.defineProperty(exports, "KotlinGenerator", { enumerable: true, get: function () { return kotlin_generator_1.KotlinGenerator; } });
+var swift_generator_1 = require("./swift-generator");
+Object.defineProperty(exports, "SwiftGenerator", { enumerable: true, get: function () { return swift_generator_1.SwiftGenerator; } });
 var config_1 = require("./config");
 Object.defineProperty(exports, "detectProvider", { enumerable: true, get: function () { return config_1.detectProvider; } });
 Object.defineProperty(exports, "providerFromConfig", { enumerable: true, get: function () { return config_1.providerFromConfig; } });

@@ -41,6 +41,21 @@ export interface RustOutput {
   outputDir: string;
 }
 
+/** Java client output. */
+export interface JavaOutput {
+  outputDir: string;
+}
+
+/** Kotlin client output. */
+export interface KotlinOutput {
+  outputDir: string;
+}
+
+/** Swift client output. */
+export interface SwiftOutput {
+  outputDir: string;
+}
+
 export interface An5OrmConfig {
   /**
    * Database connection for the commands that need one — db:push, db:pull,
@@ -62,6 +77,9 @@ export interface An5OrmConfig {
     dotnet: DotnetOutput;
     golang: GolangOutput;
     rust: RustOutput;
+    java: JavaOutput;
+    kotlin: KotlinOutput;
+    swift: SwiftOutput;
   };
   pull: {
     /** Regex patterns; tables matching any of them are skipped by db:pull. */
@@ -86,6 +104,9 @@ export const DEFAULT_CONFIG: An5OrmConfig = {
     dotnet: { outputDir: 'an5Client/dotnet' },
     golang: { outputDir: 'an5Client/golang' },
     rust: { outputDir: 'an5Client/rust' },
+    java: { outputDir: 'an5Client/java' },
+    kotlin: { outputDir: 'an5Client/kotlin' },
+    swift: { outputDir: 'an5Client/swift' },
   },
   pull: {
     exclude: ['^__', '^sys\\.', '^igrations'],
@@ -105,6 +126,9 @@ export interface ResolvedOutputs {
   dotnetDir: string;
   golangDir: string;
   rustDir: string;
+  javaDir: string;
+  kotlinDir: string;
+  swiftDir: string;
 }
 
 export function resolveOutputs(config: An5OrmConfig, rootDir: string): ResolvedOutputs {
@@ -117,6 +141,9 @@ export function resolveOutputs(config: An5OrmConfig, rootDir: string): ResolvedO
     dotnetDir: resolve(config.outputs.dotnet.outputDir),
     golangDir: resolve(config.outputs.golang.outputDir),
     rustDir: resolve(config.outputs.rust.outputDir),
+    javaDir: resolve(config.outputs.java.outputDir),
+    kotlinDir: resolve(config.outputs.kotlin.outputDir),
+    swiftDir: resolve(config.outputs.swift.outputDir),
   };
 }
 
@@ -232,6 +259,9 @@ const OUTPUT_SPEC: Record<string, FieldSpec> = {
   dotnet: 'object',
   golang: 'object',
   rust: 'object',
+  java: 'object',
+  kotlin: 'object',
+  swift: 'object',
 };
 
 const OUTPUT_SECTION_SPEC: Record<string, Record<string, FieldSpec>> = {
@@ -240,6 +270,9 @@ const OUTPUT_SECTION_SPEC: Record<string, Record<string, FieldSpec>> = {
   dotnet: { outputDir: 'string' },
   golang: { outputDir: 'string' },
   rust: { outputDir: 'string' },
+  java: { outputDir: 'string' },
+  kotlin: { outputDir: 'string' },
+  swift: { outputDir: 'string' },
 };
 
 const TOP_LEVEL_SPEC: Record<string, FieldSpec> = {
@@ -316,6 +349,21 @@ export function validateConfig(raw: unknown): An5OrmConfig {
         outputDir:
           (outputs.rust as Record<string, unknown> | undefined)?.outputDir as string ??
           DEFAULT_CONFIG.outputs.rust.outputDir,
+      },
+      java: {
+        outputDir:
+          (outputs.java as Record<string, unknown> | undefined)?.outputDir as string ??
+          DEFAULT_CONFIG.outputs.java.outputDir,
+      },
+      kotlin: {
+        outputDir:
+          (outputs.kotlin as Record<string, unknown> | undefined)?.outputDir as string ??
+          DEFAULT_CONFIG.outputs.kotlin.outputDir,
+      },
+      swift: {
+        outputDir:
+          (outputs.swift as Record<string, unknown> | undefined)?.outputDir as string ??
+          DEFAULT_CONFIG.outputs.swift.outputDir,
       },
     },
     pull: {

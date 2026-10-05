@@ -13,6 +13,9 @@ const python_generator_1 = require("./python-generator");
 const dotnet_generator_1 = require("./dotnet-generator");
 const golang_generator_1 = require("./golang-generator");
 const rust_generator_1 = require("./rust-generator");
+const java_generator_1 = require("./java-generator");
+const kotlin_generator_1 = require("./kotlin-generator");
+const swift_generator_1 = require("./swift-generator");
 const fs_1 = __importDefault(require("fs"));
 function clearGeneratedFiles(outputDir, extension) {
     if (!fs_1.default.existsSync(outputDir)) {
@@ -70,6 +73,9 @@ async function main() {
     const outputDotnetDir = config.outputs.dotnetDir;
     const outputGolangDir = config.outputs.golangDir;
     const outputRustDir = config.outputs.rustDir;
+    const outputJavaDir = config.outputs.javaDir;
+    const outputKotlinDir = config.outputs.kotlinDir;
+    const outputSwiftDir = config.outputs.swiftDir;
     const generateMetadata = config.config.generation.generateMetadata;
     console.log('🚀 Starting ORM generation...');
     // The target provider comes from the connection string: both the allowed
@@ -81,6 +87,9 @@ async function main() {
         clearGeneratedFiles(outputDotnetDir, '.cs');
         clearGeneratedFiles(outputGolangDir, '.go');
         clearGeneratedFiles(path_1.default.join(outputRustDir, 'src'), '.rs');
+        clearGeneratedFiles(outputJavaDir, '.java');
+        clearGeneratedFiles(outputKotlinDir, '.kt');
+        clearGeneratedFiles(path_1.default.join(outputSwiftDir, 'Sources'), '.swift');
         const pythonDirEarly = path_1.default.dirname(outputPythonMetadataPath);
         clearGeneratedPythonFiles(pythonDirEarly);
         if (config.config.generation.generateMetadata && fs_1.default.existsSync(outputMetadataPath)) {
@@ -120,6 +129,15 @@ async function main() {
         const rustGen = new rust_generator_1.RustGenerator(outputRustDir);
         rustGen.generate(models);
         console.log(`✨ Generated Rust client in ${outputRustDir}`);
+        const javaGen = new java_generator_1.JavaGenerator(outputJavaDir);
+        javaGen.generate(models);
+        console.log(`✨ Generated Java client in ${outputJavaDir}`);
+        const kotlinGen = new kotlin_generator_1.KotlinGenerator(outputKotlinDir);
+        kotlinGen.generate(models);
+        console.log(`✨ Generated Kotlin client in ${outputKotlinDir}`);
+        const swiftGen = new swift_generator_1.SwiftGenerator(outputSwiftDir);
+        swiftGen.generate(models);
+        console.log(`✨ Generated Swift client in ${outputSwiftDir}`);
         console.log('✅ ORM generation completed successfully.');
     }
     catch (error) {

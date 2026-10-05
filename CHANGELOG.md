@@ -3,11 +3,27 @@
 ## [1.2.0] - 2026-10-04
 
 ### Added
+- Add JavaGenerator, KotlinGenerator and SwiftGenerator, with java, kotlin and swift output targets in an5Orm.config.js, `prepareCodeRequest` language detection, and MCP/agent tool support.
 - Export prepareCodeRequest and detectCodeLanguage to prepare schema-grounded application code context for TypeScript, Python, .NET, Go and Rust, with explicit language ambiguity errors.
 - Emit isId primary-key markers in generated TypeScript metadata.
 ### Changed
 - Rename migration/release preview flags to --preview and migration option fields to preview. The old flag and option are removed; update scripts and MCP callers before upgrading.
 - Reject unsupported migration flags before opening a database connection.
+
+### Fixed
+- **Generated Java `*Where.toMap()` dropped nested `AND`/`OR` conditions** — nested clauses
+  went into the filter as objects, which the JDBC builder reads as an empty clause, so the
+  query matched every row instead of the requested ones. Nested clauses are converted to
+  maps, as the comment on `toMapValue` already said they had to be.
+- **Generated Swift models did not compile** — relations were declared in an `extension`,
+  and Swift forbids stored properties there. They are stored properties on the struct now,
+  assigned in `init(row:)`.
+- **Eager-loaded relations were missing from the generated Java, Kotlin and Swift models** —
+  `fromRow` and `init(row:)` never read the relation key, so an `include` arrived as absent
+  data. Included relations are now mapped onto the model.
+- **Generated Swift `*Where` column filters never reached the adapter** — the filter tree
+  carried only `AND`/`OR`/`NOT`, so a condition assigned to a column was dropped and the
+  query matched every row. `build()` now merges every set column condition into the tree.
 
 ## [1.1.1] - 2026-10-03
 

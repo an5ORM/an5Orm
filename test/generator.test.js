@@ -133,6 +133,12 @@ test('rust-generator.ts exists', () => {
   assertExists(rustPath);
 });
 
+for (const language of ['java', 'kotlin', 'swift']) {
+  test(`${language}-generator.ts exists`, () => {
+    assertExists(path.join(__dirname, '..', 'generator', 'src', `${language}-generator.ts`));
+  });
+}
+
 test('api.ts exposes the generators without running the CLI', () => {
   const apiPath = path.join(__dirname, '..', 'generator', 'src', 'api.ts');
   assertExists(apiPath);
@@ -145,6 +151,9 @@ test('api.ts exposes the generators without running the CLI', () => {
     'DotnetGenerator',
     'GolangGenerator',
     'RustGenerator',
+    'JavaGenerator',
+    'KotlinGenerator',
+    'SwiftGenerator',
   ]) {
     assertIncludes(content, exported);
   }

@@ -19,6 +19,18 @@ export interface GolangOutput {
 export interface RustOutput {
     outputDir: string;
 }
+/** Java client output. */
+export interface JavaOutput {
+    outputDir: string;
+}
+/** Kotlin client output. */
+export interface KotlinOutput {
+    outputDir: string;
+}
+/** Swift client output. */
+export interface SwiftOutput {
+    outputDir: string;
+}
 export interface An5OrmConfig {
     /**
      * Database connection for the commands that need one — db:push, db:pull,
@@ -40,6 +52,9 @@ export interface An5OrmConfig {
         dotnet: DotnetOutput;
         golang: GolangOutput;
         rust: RustOutput;
+        java: JavaOutput;
+        kotlin: KotlinOutput;
+        swift: SwiftOutput;
     };
     pull: {
         /** Regex patterns; tables matching any of them are skipped by db:pull. */
@@ -62,6 +77,9 @@ export interface ResolvedOutputs {
     dotnetDir: string;
     golangDir: string;
     rustDir: string;
+    javaDir: string;
+    kotlinDir: string;
+    swiftDir: string;
 }
 export declare function resolveOutputs(config: An5OrmConfig, rootDir: string): ResolvedOutputs;
 /**
