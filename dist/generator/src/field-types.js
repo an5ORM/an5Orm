@@ -255,6 +255,9 @@ exports.PROVIDER_FIELD_TYPES = {
         // Everything else
         JSON: 'any',
         UUID: 'string',
+        // Stored as a BLOB of little-endian float32: a third of the JSON text it replaces,
+        // and what the adapters' in-database distance functions read. A column already
+        // holding JSON text keeps working, because the adapters decode both.
         VECTOR: 'number[] | string',
     },
     // ─── Google Sheets ─────────────────────────────────────────────────────────

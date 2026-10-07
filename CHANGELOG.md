@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Emit `vector_search` and `<Model>VectorSearchArgs` in the generated Rust client, matching
+  the other seven clients. Python already exposed it through `AdapterTableClient`.
+
+### Changed
+- A SQLite `VECTOR(n)` column is written as a BLOB of little-endian float32 and ranked inside
+  the database, and a column that already holds JSON text is still read correctly, so an
+  existing database needs no migration. The declared column type is unchanged: the storage is
+  the runtime's decision, because SQLite stores the value the adapter binds whatever the DDL
+  says. See the adapter changelog for the four ranking strategies.
+
 ## [1.2.0] - 2026-10-04
 
 ### Added

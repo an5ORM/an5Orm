@@ -369,6 +369,7 @@ testIf(hasAn5Client, 'an5Client/rust crate exists with models and client builder
   assertIncludes(modelsContent, 'UserWhereInput');
   assertIncludes(modelsContent, 'UserFindManyArgs');
   assertIncludes(modelsContent, 'UserUpdateArgs');
+  assertIncludes(modelsContent, 'UserVectorSearchArgs');
 
   // Typed, executing handles replace the old SQL-only builders.
   const clientContent = fs.readFileSync(path.join(rustDir, 'src', 'client.rs'), 'utf8');
@@ -378,6 +379,7 @@ testIf(hasAn5Client, 'an5Client/rust crate exists with models and client builder
   assertIncludes(clientContent, 'pub fn user(&self) -> UserTable');
   assertIncludes(clientContent, 'pub struct UserTable');
   assertIncludes(clientContent, 'pub async fn find_many(&self, args: &UserFindManyArgs)');
+  assertIncludes(clientContent, 'pub async fn vector_search(&self, args: &UserVectorSearchArgs)');
   assertIncludes(clientContent, 'pub async fn create(&self, data: &UserCreateInput)');
   assertIncludes(clientContent, '.table("User")');
   assertIncludes(clientContent, 'pub fn table(&self, name: &str) -> TableClient');

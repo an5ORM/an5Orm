@@ -502,6 +502,21 @@ pub struct DateTimeFilter {
       s.push(`    pub where_: Option<${name}WhereInput>,`);
       s.push(`}\n`);
 
+      // VectorSearchArgs mirrors the runtime's, so a caller can narrow the search.
+      s.push(`/// ORM-style args for ${name}.vector_search().`);
+      s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+      s.push(`pub struct ${name}VectorSearchArgs {`);
+      s.push(`    pub vector: Vec<f32>,`);
+      s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub take: Option<i64>,`);
+      s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub where_: Option<${name}WhereInput>,`);
+      s.push(`    #[serde(default)]`);
+      s.push(`    pub vector_field: String,`);
+      s.push(`    #[serde(default)]`);
+      s.push(`    pub distance_metric: String,`);
+      s.push(`}\n`);
+
       // UpdateArgs carries the typed input alongside the where clause.
       s.push(`/// ORM-style args for ${name}.update().`);
       s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
@@ -602,7 +617,7 @@ pub struct DateTimeFilter {
 
 use an5_adapters::{
     AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, RowMap, TableClient,
-    UpdateArgs,
+    UpdateArgs, VectorSearchArgs,
 };
 use serde::de::DeserializeOwned;
 
@@ -819,6 +834,23 @@ impl SqlBuilder {
     lines.push(`                take: args.take.unwrap_or(0),`);
     lines.push(`                skip: args.skip,`);
     lines.push(`                select: args.select.as_ref().map(|s| serde_json::json!(s)),`);
+    lines.push(`                ..Default::default()`);
+    lines.push(`            })`);
+    lines.push(`            .await?;`);
+    lines.push(`        deserialize_rows(rows)`);
+    lines.push(`    }`);
+    lines.push(``);
+    lines.push(`    /// The rows nearest \`vector\`, each carrying a \`distance\`.`);
+    lines.push(`    pub async fn vector_search(&self, args: &${name}VectorSearchArgs) -> Result<Vec<${name}>> {`);
+    lines.push(`        let rows = self`);
+    lines.push(`            .db`);
+    lines.push(`            .table("${model.name}")`);
+    lines.push(`            .vector_search(&VectorSearchArgs {`);
+    lines.push(`                vector: args.vector.iter().map(|v| *v as f64).collect(),`);
+    lines.push(`                take: args.take.unwrap_or(0),`);
+    lines.push(`                r#where: to_value(&args.where_)?,`);
+    lines.push(`                vector_field: args.vector_field.clone(),`);
+    lines.push(`                distance_metric: args.distance_metric.clone(),`);
     lines.push(`                ..Default::default()`);
     lines.push(`            })`);
     lines.push(`            .await?;`);
