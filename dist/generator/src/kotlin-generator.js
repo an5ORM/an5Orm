@@ -143,6 +143,8 @@ class KotlinGenerator {
                 return 'localDateTimeOrNull';
             case 'bytes':
                 return 'bytesOrNull';
+            case 'vector':
+                return 'vectorOrNull';
             default:
                 return ['GUID', 'UUID', 'UNIQUEIDENTIFIER'].includes(base) ? 'uuidOrNull' : 'stringOrNull';
         }

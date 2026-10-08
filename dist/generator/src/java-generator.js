@@ -509,27 +509,13 @@ public final class An5Values {
   /**
    * A stored vector as a double array.
    *
-   * <p>All three vector stores hand the column back as text — SQL Server's \`VECTOR\`,
-   * PostgreSQL's \`vector\`, and a JSON blob — so the same \`[0.1, 0.2]\` form is parsed here.
+   * <p>Delegates to the runtime codec rather than parsing text here: SQLite stores a
+   * {@code VECTOR(n)} column as float32 bytes, while SQL Server's {@code VECTOR} and
+   * PostgreSQL's {@code vector} hand back text, and a column written before the byte
+   * encoding holds JSON. The runtime already reads all three.
    */
   public static double[] asVector(Object value) {
-    String text = asString(value);
-    if (text == null) return null;
-    int open = text.indexOf('[');
-    int close = text.lastIndexOf(']');
-    if (open < 0 || close <= open) return null;
-    String body = text.substring(open + 1, close).trim();
-    if (body.isEmpty()) return null;
-    String[] parts = body.split(",");
-    double[] parsed = new double[parts.length];
-    for (int i = 0; i < parts.length; i++) {
-      try {
-        parsed[i] = Double.parseDouble(parts[i].trim());
-      } catch (NumberFormatException error) {
-        return null;
-      }
-    }
-    return parsed;
+    return an5.adapters.base.SqliteVectors.decodeVector(value, 0);
   }
 
   /** Renders a vector the way the vector stores expect it, as \`[0.1, 0.2]\`. */

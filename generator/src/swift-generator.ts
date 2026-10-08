@@ -161,7 +161,7 @@ let package = Package(
 
   private mapOptionalType(field: Field): string {
     const mapped = this.mapType(field);
-    return mapped.startsWith('[') ? mapped : `${mapped}?`;
+    return `${mapped}?`;
   }
 
   /** How a column is read out of a row, as a Swift expression. */
@@ -183,7 +183,9 @@ let package = Package(
       case 'bytes':
         return `row.data("${field.name}")`;
       case 'vector':
-        return `An5Values.vector(row["${field.name}"]) ?? []`;
+        // A `VECTOR(n)` column is nullable like any other column, so the generated
+        // property is `[Double]?` and a row without one reads as `nil`.
+        return `row.vector("${field.name}")`;
       default:
         return `row.string("${field.name}")`;
     }

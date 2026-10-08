@@ -40,6 +40,18 @@ function loadSqlite() {
 const SQLite = loadSqlite();
 const maybe = SQLite ? test : test.skip;
 
+maybe('VECTOR declarations create BLOB columns in SQLite', async () => {
+  const { models, issues } = parsePushSchema('model Document {\n id TEXT @id\n embedding VECTOR(3)\n @@map("documents")\n}', 'sqlite');
+  assert.deepEqual(issues, []);
+  const db = new SQLite(':memory:');
+  try {
+    await push(db, models);
+    assert.equal(db.prepare("SELECT type FROM pragma_table_info('documents') WHERE name = 'embedding'").get().type, 'BLOB');
+  } finally {
+    db.close();
+  }
+});
+
 const SCHEMA = `
 model Widget {
   id        INTEGER       @id @default(autoincrement())

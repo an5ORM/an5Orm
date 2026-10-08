@@ -2,6 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { Model, Field, Relation } from './types';
 
+/**
+ * Types `resolveFieldType` can return that the SQL keyword table in
+ * `normalizeType` does not cover. Kept explicit so a new resolver output is a
+ * deliberate addition rather than silently becoming `any`.
+ */
+const RESOLVED_TS_TYPES = new Set(['Buffer', 'number | bigint', 'number[] | string']);
+
 export class CodeGenerator {
   constructor(private outputDir: string) {
     if (!fs.existsSync(this.outputDir)) {
@@ -249,7 +256,12 @@ export interface TableClient<T, WhereInput = any, _Select = any, Include = any, 
     if (['bytes', 'binary', 'varbinary', 'image'].includes(lowerType)) {
       return 'string';
     }
-    return 'any';
+    // `Field.type` already holds the TypeScript type the parser resolved for the
+    // provider, and the resolver returns a few types this SQL table does not list:
+    // `Buffer` (BLOB), `number | bigint` (BIGINT) and `number[] | string` (VECTOR).
+    // Those used to fall through to `any`, so the generated client silently lost the
+    // type of every byte and vector column.
+    return RESOLVED_TS_TYPES.has(type) ? type : 'any';
   }
 
   private toCamelCase(str: string): string {

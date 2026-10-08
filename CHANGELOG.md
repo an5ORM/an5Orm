@@ -1,17 +1,71 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.0] - 2026-10-08
 
 ### Added
+- generate vector_search in the Rust client (6f43d54)
 - Emit `vector_search` and `<Model>VectorSearchArgs` in the generated Rust client, matching
   the other seven clients. Python already exposed it through `AdapterTableClient`.
+- `test/query-semantics.test.js` runs the six behaviours above against a real SQLite
+  database, so they are asserted on SQL that actually executes.
 
 ### Changed
+- Update `generator/src/code-generator.ts`.
+- Update `generator/src/dialect.ts`.
+- Update `generator/src/dotnet-generator.ts`.
+- Update `generator/src/golang-generator.ts`.
+- Update `generator/src/java-generator.ts`.
+- Update `generator/src/kotlin-generator.ts`.
+- Update `generator/src/rust-generator.ts`.
+- Update `generator/src/swift-generator.ts`.
+- Update `pyproject.toml`.
+- Update `test/generator-regressions.test.js`.
+- Update `test/live-db.integration.test.js`.
+- Update `test/provider-push.sqlite.test.js`.
 - A SQLite `VECTOR(n)` column is written as a BLOB of little-endian float32 and ranked inside
   the database, and a column that already holds JSON text is still read correctly, so an
   existing database needs no migration. The declared column type is unchanged: the storage is
   the runtime's decision, because SQLite stores the value the adapter binds whatever the DDL
   says. See the adapter changelog for the four ranking strategies.
+- The generated Go client uses the same empty-branch and `NOT` semantics as `parseWhere`,
+  so a schema produces consistent queries in both runtimes.
+- `dist/` is regenerated to match the sources.
+
+### Fixed
+- The generated TypeScript client typed a `VECTOR(n)` column as `any`, so reading one gave no
+  help from the compiler or an editor. The same fallthrough also reached every `BLOB` and
+  `BIGINT` column, which came out as `any` instead of `Buffer` and `number | bigint`.
+- The generated Go client could not store a vector at all. `database/sql` binds only a fixed
+  set of types, so a `*[]float32` field reached the driver as `unsupported type []float32`, and
+  on the way back the column's bytes were scanned straight into the slice. Writes now go
+  through the float32 codec, reads decode the stored bytes, and the in-memory fallback scores
+  the column too. Because a nullable column is spelled as a pointer to the slice, the codec
+  unwraps one; missing that made the search silently return no rows.
+- The generated Java client's `An5Values.asVector` re-parsed `[0.1, 0.2]` text, which a BLOB
+  never matches, so a `VECTOR(n)` column read back as `null` on SQLite. It now delegates to
+  the runtime codec, which accepts the bytes, the older JSON and an already-decoded array.
+- The generated Kotlin client read a `VECTOR(n)` column as a `String`, because the row accessor
+  had no vector case. It now reads it as a `DoubleArray`.
+- The generated Swift client did not compile for a `VECTOR(n)` column: it called
+  `An5Values.vector`, which exists in no runtime, and declared the property as a non-optional
+  `[Double]` with a `= nil` default and an `if let` binding over it. It now reads through
+  `row.vector` and keeps the property optional, as any nullable column is.
+- The generated .NET client bound a `float[]` verbatim, which the provider has no mapping for.
+  A vector is now bound as the JSON array SQL Server expects, and a `VECTOR` or JSON column is
+  decoded into `float[]` on read instead of being left null.
+- The example schema declares a real `VECTOR(3)` column, so the round-trip and the in-database
+  ranking are exercised end to end in the example suites instead of only being compiled.
+- **Empty and `undefined` branches of a filter were dropped instead of being honoured** —
+  `parseWhere` now treats `OR: []` as matching no rows, an empty branch inside an `OR` as
+  matching every row, and `NOT` over an array as `NOT (a OR b)` rather than `NOT (a AND b)`.
+  A filter value of `undefined` is skipped instead of producing a broken clause.
+  **This changes results.** Code relying on `OR: []` returning every row, or on `NOT`
+  over an array only excluding rows that fail *all* conditions, will see different rows.
+- **A generated Go client treated SQLite as SQL Server** — the bare connection string
+  `"sqlite"` now selects the SQLite dialect instead of falling through to SQL Server and
+  emitting SQL Server syntax against a SQLite file.
+- **Generated Go clients kept the `dbo.` schema under SQLite** — the prefix is stripped
+  for SQLite, which has no `dbo` schema. Other schemas are untouched.
 
 ## [1.2.0] - 2026-10-04
 
@@ -41,31 +95,6 @@
 ## [1.1.1] - 2026-10-03
 
 - Correct empty and NOT filter branches and align built generator artifacts.
-
-## [Unreleased]
-
-### Fixed
-- **Empty and `undefined` branches of a filter were dropped instead of being honoured** —
-  `parseWhere` now treats `OR: []` as matching no rows, an empty branch inside an `OR` as
-  matching every row, and `NOT` over an array as `NOT (a OR b)` rather than `NOT (a AND b)`.
-  A filter value of `undefined` is skipped instead of producing a broken clause.
-
-  **This changes results.** Code relying on `OR: []` returning every row, or on `NOT`
-  over an array only excluding rows that fail *all* conditions, will see different rows.
-- **A generated Go client treated SQLite as SQL Server** — the bare connection string
-  `"sqlite"` now selects the SQLite dialect instead of falling through to SQL Server and
-  emitting SQL Server syntax against a SQLite file.
-- **Generated Go clients kept the `dbo.` schema under SQLite** — the prefix is stripped
-  for SQLite, which has no `dbo` schema. Other schemas are untouched.
-
-### Changed
-- The generated Go client uses the same empty-branch and `NOT` semantics as `parseWhere`,
-  so a schema produces consistent queries in both runtimes.
-- `dist/` is regenerated to match the sources.
-
-### Added
-- `test/query-semantics.test.js` runs the six behaviours above against a real SQLite
-  database, so they are asserted on SQL that actually executes.
 
 ## [1.1.0] - 2026-10-02
 

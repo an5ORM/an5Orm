@@ -289,6 +289,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using An5Orm.Entities;
@@ -377,9 +378,39 @@ namespace An5Orm
         {
             var p = cmd.CreateParameter();
             p.ParameterName = (name ?? "").TrimStart('@');
-            p.Value = value ?? DBNull.Value;
+            p.Value = Bindable(value) ?? DBNull.Value;
             cmd.Parameters.Add(p);
             return p;
+        }
+
+        /// <summary>
+        /// Converts a value into something the provider can bind.
+        /// </summary>
+        /// <remarks>
+        /// A <c>VECTOR(n)</c> column is transmitted as a JSON array over TDS, so a float or
+        /// double array is written in that form. The array itself is not bindable: the
+        /// provider has no mapping for it, and the failure names the array rather than the
+        /// column it was meant for.
+        /// </remarks>
+        public static object Bindable(object value)
+        {
+            // \`float[]\` and \`double[]\` are listed separately rather than through a shared
+            // \`IEnumerable<double>\`: an array of value type is not covariant, so
+            // \`float[]\` does not convert to it.
+            if (value is float[] floats) return FormatVector(floats.Select(v => (double)v));
+            if (value is double[] doubles) return FormatVector(doubles);
+            return value;
+        }
+
+        /// <summary>Renders a vector as the JSON array SQL Server expects.</summary>
+        public static string FormatVector(IEnumerable<double> vector)
+        {
+            var parts = new List<string>();
+            foreach (var value in vector)
+            {
+                parts.Add(value.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+            }
+            return "[" + string.Join(", ", parts) + "]";
         }
 
         /// <summary>Quotes an identifier for the dialect.</summary>
@@ -1006,6 +1037,60 @@ namespace An5Orm
         /// property would otherwise fail to set. A value that cannot be
         /// converted is skipped rather than aborting the whole read.
         /// </summary>
+        /// <summary>
+        /// Reads a stored vector into the \`float[]\` an entity declares.
+        /// </summary>
+        /// <remarks>
+        /// A \`VECTOR(n)\` column arrives as a JSON array over TDS, so the JSON form is
+        /// what is parsed. A float32 BLOB is also accepted because that is what the SQLite
+        /// provider stores in the same column. Returns <c>null</c> for anything else, which
+        /// leaves the property at its default rather than aborting the whole read.
+        /// </remarks>
+        private static float[] DecodeVectorColumn(object value)
+        {
+            if (value is float[] already) return already;
+            if (value is double[] asDouble)
+            {
+                var fromDouble = new float[asDouble.Length];
+                for (int i = 0; i < asDouble.Length; i++) fromDouble[i] = (float)asDouble[i];
+                return fromDouble;
+            }
+
+            string text = value as string;
+            byte[] bytes = value as byte[];
+            if (bytes != null && bytes.Length > 0 && bytes[0] != (byte)'[' && bytes.Length % 4 == 0)
+            {
+                var fromBlob = new float[bytes.Length / 4];
+                for (int i = 0; i < fromBlob.Length; i++)
+                {
+                    int offset = i * 4;
+                    uint bits = (uint)(bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24));
+                    fromBlob[i] = BitConverter.ToSingle(BitConverter.GetBytes(bits), 0);
+                }
+                return fromBlob;
+            }
+            if (text == null && bytes != null)
+            {
+                text = System.Text.Encoding.UTF8.GetString(bytes);
+            }
+            if (text == null) return null;
+
+            var open = text.IndexOf('[');
+            var close = text.LastIndexOf(']');
+            if (open < 0 || close <= open) return null;
+            var body = text.Substring(open + 1, close - open - 1).Trim();
+            if (body.Length == 0) return null;
+
+            var parts = body.Split(',');
+            var parsed = new float[parts.Length];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (!float.TryParse(parts[i].Trim(), System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out parsed[i])) return null;
+            }
+            return parsed;
+        }
+
         private static void SetValue(System.Reflection.PropertyInfo prop, object target, object value)
         {
             var wanted = prop.PropertyType;
@@ -1022,6 +1107,17 @@ namespace An5Orm
                 {
                     prop.SetValue(target, Convert.ChangeType(value, underlying));
                     return;
+                }
+                // A \`VECTOR(n)\` column is transmitted as a JSON array over TDS, which no
+                // converter bridges to the \`float[]\` the entity declares.
+                if (wanted == typeof(float[]))
+                {
+                    var vector = DecodeVectorColumn(value);
+                    if (vector != null)
+                    {
+                        prop.SetValue(target, vector);
+                        return;
+                    }
                 }
                 if (value is string text && wanted == typeof(Guid)) { prop.SetValue(target, Guid.Parse(text)); return; }
                 if (value is string when && wanted == typeof(DateTime)) { prop.SetValue(target, DateTime.Parse(when, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind)); return; }

@@ -85,7 +85,7 @@ async function main() {
         email: { ts: 'string', sql: 'NVARCHAR(255)' },
         name: { ts: 'string', sql: 'NVARCHAR(255)' },
         score: { ts: 'number', sql: 'INT' },
-        embedding: { ts: 'string', sql: 'NVARCHAR(MAX)' },
+        embedding: { ts: 'number[] | string', sql: 'VECTOR(3)' },
         createdAt: { ts: 'Date', sql: 'DATETIME2' },
         updatedAt: { ts: 'Date', sql: 'DATETIME2' },
       },
@@ -116,7 +116,7 @@ async function main() {
         [email] NVARCHAR(255) NOT NULL UNIQUE,
         [name] NVARCHAR(255) NULL,
         [score] INT NOT NULL DEFAULT 0,
-        [embedding] NVARCHAR(MAX) NULL,
+        [embedding] VECTOR(3) NULL,
         [createdAt] DATETIME2 NULL,
         [updatedAt] DATETIME2 NULL
       )

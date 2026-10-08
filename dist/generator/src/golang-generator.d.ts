@@ -23,6 +23,14 @@ export declare class GolangGenerator {
     private generateDbContext;
     private generateTableClientStruct;
     private generateQueryAndScan;
+    /**
+     * The vector codec the generated client needs on both sides of a query.
+     *
+     * A \`VECTOR(n)\` column stores float32 bytes, which is a third of the JSON text it
+     * replaces and is what the in-database distance functions read. A column written
+     * before that encoding holds JSON text, so both are still accepted on the way in.
+     */
+    private generateVectorHelpers;
     private generateWhereBuilder;
     private generateCrudMethods;
     private generateVectorSearch;

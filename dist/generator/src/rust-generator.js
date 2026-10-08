@@ -823,7 +823,7 @@ impl SqlBuilder {
         lines.push(`    }`);
         lines.push(``);
         lines.push(`    /// The rows nearest \`vector\`, each carrying a \`distance\`.`);
-        lines.push(`    pub async fn vector_search(&self, args: &${name}VectorSearchArgs) -> Result<Vec<${name}>> {`);
+        lines.push(`    pub async fn vector_search(&self, args: &${name}VectorSearchArgs) -> Result<Vec<(${name}, f64)>> {`);
         lines.push(`        let rows = self`);
         lines.push(`            .db`);
         lines.push(`            .table("${model.name}")`);
@@ -836,7 +836,11 @@ impl SqlBuilder {
         lines.push(`                ..Default::default()`);
         lines.push(`            })`);
         lines.push(`            .await?;`);
-        lines.push(`        deserialize_rows(rows)`);
+        lines.push(`        rows.into_iter().map(|row| {`);
+        lines.push(`            let distance = row.get("distance").and_then(serde_json::Value::as_f64)`);
+        lines.push(`                .ok_or("vector search returned no distance")?;`);
+        lines.push(`            Ok((deserialize_row(row)?, distance))`);
+        lines.push(`        }).collect()`);
         lines.push(`    }`);
         lines.push(``);
         lines.push(`    pub async fn find_first(&self, args: &${name}FindFirstArgs) -> Result<Option<${name}>> {`);

@@ -197,13 +197,15 @@ function createDialect(provider, quote) {
     // destructured by a caller.
     const columnDefinition = (column) => {
         const identity = identityKeyword(column, provider);
+        const sqlType = provider === 'sqlite' && /^VECTOR\s*(\(|$)/i.test(column.sqlType)
+            ? 'BLOB' : column.sqlType;
         // Where the identity keyword goes is not a detail: SQL Server takes it as part
         // of the column type (`INT IDENTITY(1,1)`), while SQLite only accepts it after
         // `PRIMARY KEY` and only spells the documented form `INTEGER PRIMARY KEY
         // AUTOINCREMENT`.
         const type = identity && provider !== 'sqlite'
-            ? `${quote(column.name)} ${column.sqlType} ${identity}`
-            : `${quote(column.name)} ${column.sqlType}`;
+            ? `${quote(column.name)} ${sqlType} ${identity}`
+            : `${quote(column.name)} ${sqlType}`;
         const nullable = column.isOptional ? '' : ' NOT NULL';
         const unique = column.isUnique && !column.isId ? ' UNIQUE' : '';
         const defaultSql = defaultClause(column.defaultExpr, provider);

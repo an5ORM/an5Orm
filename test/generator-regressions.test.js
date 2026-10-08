@@ -28,6 +28,11 @@ const distSrc = path.join(__dirname, '..', 'dist', 'generator', 'src');
 const { SchemaParser } = require(path.join(distSrc, 'parser.js'));
 const { PythonGenerator } = require(path.join(distSrc, 'python-generator.js'));
 const { MetadataGenerator } = require(path.join(distSrc, 'metadata-generator.js'));
+const { CodeGenerator } = require(path.join(distSrc, 'code-generator.js'));
+const { JavaGenerator } = require(path.join(distSrc, 'java-generator.js'));
+const { KotlinGenerator } = require(path.join(distSrc, 'kotlin-generator.js'));
+const { SwiftGenerator } = require(path.join(distSrc, 'swift-generator.js'));
+const { GolangGenerator } = require(path.join(distSrc, 'golang-generator.js'));
 const { bracketedTableName, dottedTableName } = require(path.join(distSrc, 'types.js'));
 
 let passed = 0;
@@ -264,6 +269,104 @@ test("a type from another provider is reported instead of silently generating co
     ['Catalog.position', 'Catalog.enabled', 'Catalog.payload']
   );
   assertIncludes(error.issues[0].message, 'unknown type "INTEGER" for SQL Server');
+});
+
+test("the generated TypeScript model keeps the resolver's type, not `any`", async () => {
+  // `normalizeType` is fed `Field.type`, which the parser has already turned into a
+  // TypeScript type. Its SQL keyword table lists none of `number[] | string`,
+  // `Buffer` or `number | bigint`, so all three used to reach the client as `any`
+  // and a vector or byte column lost its type without any warning.
+  const outDir = path.join(tmpRoot, 'ts-out');
+  const models = await parse(
+    'ts-types',
+    `
+model Asset {
+  id        NVARCHAR(64) @id @default(uuid())
+  embedding VECTOR(3)
+  payload   BLOB
+  views     BIGINT
+  @@map("assets")
+}
+`,
+  );
+  new CodeGenerator(path.join(outDir, 'typescript')).generate(models);
+  const generated = fs.readFileSync(path.join(outDir, 'typescript', 'Asset.ts'), 'utf8');
+  assertIncludes(generated, 'embedding: number[] | string;');
+  assertIncludes(generated, 'payload: Buffer;');
+  assertIncludes(generated, 'views: number | bigint;');
+  assert.ok(!/^\s*(embedding|payload|views): any/m.test(generated), 'no column may fall back to any');
+});
+
+test("every generated client reads a VECTOR(n) column through its runtime codec", async () => {
+  // A `VECTOR(n)` column stores float32 bytes on SQLite, so reading it means calling
+  // the runtime's codec. Each of these generators once went its own way instead, and
+  // each failure was invisible until a schema actually had a vector column:
+  //   Java    re-parsed `[0.1, 0.2]` text, which a BLOB never matches
+  //   Kotlin  had no vector case and read the column as a String
+  //   Swift   called `An5Values.vector`, a symbol that exists in no runtime
+  const outDir = path.join(tmpRoot, 'vector-read');
+  const schema = `
+model Asset {
+  id        NVARCHAR(64) @id @default(uuid())
+  embedding VECTOR(3)
+  @@map("assets")
+}
+`;
+  const models = await parse('vector-read', schema);
+
+  const java = path.join(outDir, 'java');
+  new JavaGenerator(java).generate(models);
+  const javaValues = fs.readFileSync(path.join(java, 'An5Values.java'), 'utf8');
+  assertIncludes(javaValues, 'SqliteVectors.decodeVector(value, 0)');
+
+  const kotlin = path.join(outDir, 'kotlin');
+  new KotlinGenerator(kotlin).generate(models);
+  assertIncludes(fs.readFileSync(path.join(kotlin, 'Asset.kt'), 'utf8'), 'row.vectorOrNull("embedding")');
+
+  const swift = path.join(outDir, 'swift');
+  new SwiftGenerator(swift).generate(models);
+  const swiftAsset = fs.readFileSync(path.join(swift, 'Sources', 'An5Client', 'Asset.swift'), 'utf8');
+  assertIncludes(swiftAsset, 'row.vector("embedding")');
+  // A nullable column whose property is non-optional generates `= nil` defaults for a
+  // non-optional type, which does not compile.
+  assertIncludes(swiftAsset, 'embedding: [Double]?');
+  assertIncludes(swiftAsset, 'embedding: [Double]? = nil');
+  assert.ok(!/embedding: \[Double\] = nil/.test(swiftAsset), 'an optional vector must stay optional');
+  assert.ok(!/An5Values/.test(swiftAsset), 'no symbol from outside the runtime may be referenced');
+});
+
+test("the generated Go client stores a vector column as float32 bytes", async () => {
+  // `database/sql` binds only a fixed set of types, so a `*[]float32` field reached
+  // the driver as `unsupported type []float32`, and on the way back the column's bytes
+  // were scanned straight into the slice. Both directions need the codec, and the
+  // fallback scorer needs it too because the field is nullable and sits behind a pointer.
+  const outDir = path.join(tmpRoot, 'go-vector');
+  const models = await parse(
+    'go-vector',
+    `
+model Asset {
+  id        NVARCHAR(64) @id @default(uuid())
+  embedding VECTOR(3)?
+  @@map("assets")
+}
+`,
+  );
+  new GolangGenerator(outDir).generate(models);
+  const client = fs.readFileSync(path.join(outDir, 'client.go'), 'utf8');
+
+  // Written through the codec in both statements that bind a field value.
+  assertEq((client.match(/encodeVectorArg\(fieldVal\.Interface\(\)\)/g) || []).length, 2, 'create and update');
+  // Read back out of the bytes the column stores.
+  assertIncludes(client, 'isVectorGoType(fieldVal.Type())');
+  assertIncludes(client, 'setVectorField(fieldVal, decoded)');
+  // Scored in memory when the database has no vector operator.
+  assertIncludes(client, 'rowVec := vectorComponents(fieldVal)');
+  // A pointer is how a nullable column is spelled, so the codec must unwrap it.
+  assertIncludes(client, 'func vectorSliceType(t reflect.Type) reflect.Type');
+  assertIncludes(client, 'for field.Kind() == reflect.Ptr {');
+
+  const asset = fs.readFileSync(path.join(outDir, 'Asset.go'), 'utf8');
+  assertIncludes(asset, 'Embedding *[]float32');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
