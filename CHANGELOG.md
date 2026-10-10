@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.1] - 2026-10-10
+
+### Fixed
+- The generated Java `An5DbContext` javadoc example called `findUnique(Filters.eq("name", "Ada"))`, but `Filters.eq` takes the filter value alone, so the example did not compile against the client it shipped with. It now builds a `UserWhere` with `StringFilter.is("Ada")` and passes `where.toMap()` to `findUnique`, which is the call the adapter accepts.
+- The generated Python client documented examples that could not work. `an5_client.py` ordered results by `created_at`, while the SQL builder quotes a query key verbatim and the schema column is `createdAt`, so the query reached a column that does not exist; it now orders by `createdAt` and states that keys are schema field names. `an5_orm_types.py` showed `UserWhereInput(...)` as a query argument, but the Python adapter has no dataclass support and raises when one is passed; the module now documents the dataclasses as the filter shapes the client accepts and shows the dictionary form the adapter reads.
+
 ## [1.3.0] - 2026-10-08
 
 ### Added

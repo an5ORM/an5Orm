@@ -64,7 +64,7 @@ export class PythonGenerator {
 
   private generateOrmTypes(models: Model[], outputDir: string) {
     let content = '# This file is auto-generated. Do not edit directly.\n';
-    content += '"""\nAN5 ORM typed filter/args dataclasses for type-safe queries.\n\nUsage example::\n\n    db.user.find_many(where=UserWhereInput(name=StringFilter(contains="John")),\n                      order_by=UserOrderByInput(created_at="desc"),\n                      take=10)\n"""\n';
+    content += '"""\nAN5 ORM typed filter/args dataclasses.\n\nThese describe the filter shapes the Python client accepts. The adapter reads plain\ndicts, not these dataclasses, and it quotes every key verbatim, so use the schema\nfield names (`createdAt`, not `created_at`):\n\n    db.user.find_many(where={"name": {"contains": "John"}},\n                      order_by={"createdAt": "desc"},\n                      take=10)\n"""\n';
     content += 'from __future__ import annotations\n';
     content += 'from dataclasses import dataclass, field\n';
     content += 'from typing import List, Optional, Any\n';
@@ -358,9 +358,11 @@ export class PythonGenerator {
 
     content += 'class An5Client:\n';
     content += '    """AN5 Python ORM Client - type-safe database access.\n\n';
+    content += '    Query keys are schema field names, used verbatim: the SQL builder quotes a key\n';
+    content += '    as-is, so `createdAt` reaches the database and `created_at` does not.\n\n';
     content += '    Usage:\n';
     content += '        db = An5Client()\n';
-    content += '        users = db.user.find_many(where={"name": {"contains": "John"}}, order_by={"created_at": "asc"}, take=10)\n';
+    content += '        users = db.user.find_many(where={"name": {"contains": "John"}}, order_by={"createdAt": "asc"}, take=10)\n';
     content += '        user  = db.user.find_first(where={"id": "abc"})\n';
     content += '        new   = db.user.create(data={"name": "Alice", "email": "alice@example.com"})\n';
     content += '    """\n';

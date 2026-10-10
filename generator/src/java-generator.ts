@@ -1284,7 +1284,9 @@ import an5.adapters.An5Adapter;
  *
  * <pre>
  * try (An5DbContext db = new An5DbContext(An5Config.connectionString())) {
- *   User ada = db.getUser().findUnique(Filters.eq("name", "Ada"));
+ *   An5OrmTypes.UserWhere where = new An5OrmTypes.UserWhere();
+ *   where.Name = An5OrmTypes.StringFilter.is("Ada");
+ *   User ada = db.getUser().findUnique(where.toMap());
  * }
  * </pre>
  */
