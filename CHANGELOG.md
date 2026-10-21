@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.2] - 2026-10-21
+
+### Fixed
+- **Generated .NET client `VectorSearch` on `float[]` columns and Euclidean / dot metrics** — the standalone generated `TableClient<T>.VectorSearch` in-memory fallback (used for SQLite and when native database vector operators are unavailable) previously checked only `rawVal is string`, leaving `rowVector` as `null` and returning zero hits whenever the entity property was decoded into `float[]` by `DecodeVectorColumn`. It now decodes `float[]`, `double[]`, `byte[]`, `List<double>` and JSON text, and computes true Euclidean distance and negative dot product instead of reusing cosine similarity.
+- **Generated Go client `VectorSearch` on SQLite** — `TableClient[T].VectorSearch` now skips the SQL Server `SELECT TOP ... VECTOR_DISTANCE(...) WITH (NOLOCK)` query when `c.Dialect == DialectSqlite`, going straight to the in-memory scoring path without an unnecessary failed query round trip.
+
 ## [1.3.1] - 2026-10-10
 
 ### Fixed

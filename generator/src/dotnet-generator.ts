@@ -986,9 +986,22 @@ namespace An5Orm
                 {
                     try
                     {
-                        if (rawVal is string jsonStr)
+                        if (rawVal is List<double> dblList)
                         {
-                            rowVector = ParseDoubleArray(jsonStr);
+                            rowVector = dblList;
+                        }
+                        else
+                        {
+                            var decoded = DecodeVectorColumn(rawVal);
+                            if (decoded != null)
+                            {
+                                rowVector = new List<double>(decoded.Length);
+                                for (int i = 0; i < decoded.Length; i++) rowVector.Add(decoded[i]);
+                            }
+                            else if (rawVal is string jsonStr)
+                            {
+                                rowVector = ParseDoubleArray(jsonStr);
+                            }
                         }
                     }
                     catch { }
@@ -996,8 +1009,31 @@ namespace An5Orm
 
                 if (rowVector != null && rowVector.Count == vector.Count)
                 {
-                    double sim = CosineSimilarity(vector, rowVector);
-                    double distance = distanceMetric.Equals("cosine", StringComparison.OrdinalIgnoreCase) ? (1.0 - sim) : sim;
+                    double distance;
+                    if (distanceMetric.Equals("euclidean", StringComparison.OrdinalIgnoreCase) || distanceMetric.Equals("l2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        double sum = 0.0;
+                        for (int i = 0; i < vector.Count; i++)
+                        {
+                            double diff = vector[i] - rowVector[i];
+                            sum += diff * diff;
+                        }
+                        distance = Math.Sqrt(sum);
+                    }
+                    else if (distanceMetric.Equals("dot", StringComparison.OrdinalIgnoreCase) || distanceMetric.Equals("inner_product", StringComparison.OrdinalIgnoreCase) || distanceMetric.Equals("ip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        double dot = 0.0;
+                        for (int i = 0; i < vector.Count; i++)
+                        {
+                            dot += vector[i] * rowVector[i];
+                        }
+                        distance = -dot;
+                    }
+                    else
+                    {
+                        double sim = CosineSimilarity(vector, rowVector);
+                        distance = 1.0 - sim;
+                    }
                     results.Add(Tuple.Create(row, distance));
                 }
             }
