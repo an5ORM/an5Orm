@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.3.3] - 2026-11-05
+## [1.3.4] - 2026-11-05
 
 ### Added
 - **Runnable CLI entry point (`an5`, `an5-orm`, `orm`)** — exposed CLI executable binaries via `package.json` `"bin"` pointing to `./dist/cli.js`, supporting `npx @an5/orm <command>`, `npx an5 <command>`, and `npx an5-orm <command>`.
