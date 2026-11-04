@@ -26,6 +26,7 @@ const {
   buildDownMigrationSql,
   buildMigrationFile,
   buildCreateTableSql,
+  buildCreateViewSql,
   formatDbColumnSqlType,
   generateColumnDiff,
   generateDiff,
@@ -37,7 +38,18 @@ const {
   quoteTableName,
   splitSqlBatches,
   tableIdentityName,
+  verifyAppliedMigrations,
 } = require('../dist/migration-core.js');
+
+const {
+  blockNameForObject,
+  blockRange,
+  buildViewBlock,
+  qualifiedBlockKey,
+  sqlServerTypeForColumn,
+} = require('../dist/generator/src/pull-schema.js');
+
+const { orderViewsByDependency } = require('../dist/generator/src/view-order.js');
 
 // ─── Test harness ────────────────────────────────────────────────────────────
 
@@ -555,6 +567,270 @@ test('parseSchemaText keeps mapped index and unique artifact names', () => {
   assert.deepStrictEqual(model.indexes, [{ fields: ['age'], name: 'IX_app_users_age_active', includeFields: ['email', 'tenantId'], filter: 'deletedAt IS NULL', options: 'FILLFACTOR = 90, ONLINE = ON' }]);
 });
 
+test('parseSchemaText reads view blocks and their SQL', () => {
+  const [view] = parseSchemaText(`
+    view ActiveUser {
+      id    NVARCHAR(64)
+      email NVARCHAR(255)
+      @@map("active_users")
+      @@schema("reporting")
+      @@sql("SELECT id, email FROM users WHERE active = 1")
+    }
+  `);
+
+  assertEq(view.isView, true);
+  assertEq(view.tableName, 'reporting.active_users');
+  assert.deepStrictEqual(view.fields.map((field) => field.name), ['id', 'email']);
+  assertEq(view.viewSql, 'SELECT id, email FROM users WHERE active = 1');
+  assertIncludes(buildCreateViewSql(view), 'CREATE OR ALTER VIEW [reporting].[active_users] AS');
+  assertIncludes(buildCreateViewSql(view), 'SELECT id, email FROM users WHERE active = 1');
+});
+
+test('a view without @@sql is reported', () => {
+  assert.throws(
+    () => parseSchemaText('view Broken {\n  id NVARCHAR(64)\n}'),
+    (error) => error.name === 'FieldTypeError' && /a view needs @@sql/.test(error.issues[0].message),
+  );
+});
+
+test('db:pull builds a view block from catalog columns and its definition', () => {
+  const block = buildViewBlock({
+    modelName: 'ActiveUser',
+    viewName: 'active_users',
+    schemaName: 'reporting',
+    columns: [
+      { columnName: 'id', dataType: 'nvarchar', maxLength: 128, precision: 0, scale: 0, isNullable: false },
+      { columnName: 'label', dataType: 'decimal', maxLength: 9, precision: 18, scale: 2, isNullable: true },
+    ],
+    definition: 'CREATE VIEW [reporting].[active_users] AS\nSELECT id, label FROM users',
+  });
+
+  assertIncludes(block, 'view ActiveUser {');
+  assertIncludes(block, 'id NVARCHAR(64)');
+  assertIncludes(block, 'label DECIMAL(18, 2)?');
+  assertIncludes(block, '@@map("active_users")');
+  assertIncludes(block, '@@schema("reporting")');
+  assertIncludes(block, '@@sql("""');
+  assertIncludes(block, 'SELECT id, label FROM users');
+  assert.ok(!block.includes('CREATE VIEW'), 'the CREATE header must not reach @@sql');
+
+  // The block it writes must be accepted by the schema readers it feeds.
+  const [view] = parseSchemaText(block);
+  assertEq(view.name, 'ActiveUser');
+  assertEq(view.isView, true);
+  assertEq(view.tableName, 'reporting.active_users');
+  assertEq(view.viewSql, 'SELECT id, label FROM users');
+
+  assertEq(buildViewBlock({
+    modelName: 'Broken', viewName: 'broken', schemaName: 'dbo', columns: [], definition: null,
+  }), null);
+});
+
+test('db:pull finds a block whose SQL contains a closing brace', () => {
+  const text = [
+    'model User {',
+    '  id INT @id',
+    '}',
+    '',
+    'view Labels {',
+    '  id INT',
+    '  @@sql("""',
+    "    SELECT '}' AS id",
+    '  """)',
+    '}',
+    '',
+  ].join('\n');
+
+  const range = blockRange(text, 'view', 'Labels');
+  assertEq(text.slice(range.start, range.end), [
+    'view Labels {',
+    '  id INT',
+    '  @@sql("""',
+    "    SELECT '}' AS id",
+    '  """)',
+    '}',
+  ].join('\n'));
+  assertEq(blockRange(text, 'view', 'Missing'), null);
+  assertEq(qualifiedBlockKey('labels', 'dbo'), 'labels');
+  assertEq(qualifiedBlockKey('labels', 'reporting'), 'reporting.labels');
+});
+
+test('db:pull names a new block from the object without mangling singular words', () => {
+  assertEq(blockNameForObject('users'), 'User');
+  assertEq(blockNameForObject('active_users'), 'ActiveUser');
+  assertEq(blockNameForObject('order_items'), 'OrderItem');
+  assertEq(blockNameForObject('user_status'), 'UserStatus');
+  // Already singular, but ends in `s`: stripping it would produce `Statu`.
+  assertEq(blockNameForObject('status'), 'Status');
+  assertEq(blockNameForObject('addresses'), 'Address');
+  assertEq(blockNameForObject('classes'), 'Class');
+  assertEq(blockNameForObject('address'), 'Address');
+  assertEq(blockNameForObject('analysis'), 'Analysis');
+});
+
+test('a model field cannot point at a view as a relation', () => {
+  assert.throws(
+    () => parseSchemaText(`
+      model User {
+        id    NVARCHAR(64) @id
+        label ViewLabel
+      }
+      view ViewLabel {
+        id NVARCHAR(64)
+        @@sql("SELECT id FROM users")
+      }
+    `),
+    (error) => error.name === 'FieldTypeError' && /is a view and cannot be the target of a relation/.test(error.issues[0].message),
+  );
+});
+
+test('@@sql accepts a triple-quoted body spanning several lines', () => {
+  const [view] = parseSchemaText(`
+    view ActiveUser {
+      id    NVARCHAR(64)
+      @@map("active_users")
+      @@sql("""
+        SELECT id
+        FROM users
+        WHERE active = 1 AND name <> 'a)b'   -- a parenthesis inside a string
+      """)
+    }
+  `);
+
+  assertEq(view.viewSql, "SELECT id\nFROM users\nWHERE active = 1 AND name <> 'a)b'   -- a parenthesis inside a string");
+  assertIncludes(buildCreateViewSql(view), 'FROM users\nWHERE active = 1');
+});
+
+test('the closing parenthesis may follow the triple quote on the next line', () => {
+  const [view] = parseSchemaText(`
+    view ActiveUser {
+      id    NVARCHAR(64)
+      @@map("active_users")
+      @@sql("""
+        SELECT id
+        FROM users
+        WHERE active = 1
+      """
+      )
+    }
+  `);
+
+  assertEq(view.isView, true);
+  assertEq(view.viewSql, 'SELECT id\nFROM users\nWHERE active = 1');
+});
+
+test('the @@definition alias reads a triple-quoted body too', () => {
+  const [view] = parseSchemaText(`
+    view ActiveUser {
+      id NVARCHAR(64)
+      @@map("active_users")
+      @@definition("""
+        SELECT id FROM users
+      """)
+    }
+  `);
+
+  assertEq(view.viewSql, 'SELECT id FROM users');
+});
+
+test('a pasted CREATE VIEW header is not repeated in the generated DDL', () => {
+  const [view] = parseSchemaText(`
+    view ActiveUser {
+      id NVARCHAR(64)
+      @@map("active_users")
+      @@sql("CREATE VIEW [reporting].[someone_else] AS SELECT id FROM users")
+    }
+  `);
+
+  const sql = buildCreateViewSql(view);
+  assertEq((sql.match(/CREATE\s+(?:OR\s+ALTER\s+)?VIEW/gi) || []).length, 1);
+  assertIncludes(sql, 'CREATE OR ALTER VIEW [active_users] AS\nSELECT id FROM users');
+  assert.ok(!sql.includes('someone_else'), 'the pasted name must not survive');
+});
+
+test('generateDiff creates, replaces and reverts views', async () => {
+  const models = parseSchemaText(`
+    view ActiveUser {
+      id NVARCHAR(64)
+      @@map("active_users")
+      @@sql("SELECT id FROM users WHERE active = 1")
+    }
+  `);
+
+  const created = await generateDiff(models, [], async () => []);
+  assert.deepStrictEqual(created.map((op) => op.type), ['CREATE_VIEW']);
+  assertIncludes(created[0].sql, 'CREATE OR ALTER VIEW [active_users] AS');
+  assertIncludes(buildDownMigrationSql(created), 'DROP VIEW [active_users]');
+
+  // The catalog may return the full CREATE statement and reformatted whitespace.
+  const unchanged = await generateDiff(
+    models,
+    [],
+    async () => [],
+    undefined,
+    ['active_users'],
+    async () => 'CREATE VIEW [active_users] AS\n  SELECT id FROM users WHERE active = 1',
+  );
+  assert.deepStrictEqual(unchanged, []);
+
+  const changed = await generateDiff(
+    models,
+    [],
+    async () => [],
+    undefined,
+    ['active_users'],
+    async () => 'CREATE VIEW [active_users] AS SELECT id FROM users WHERE active = 0',
+  );
+  assert.deepStrictEqual(changed.map((op) => op.type), ['CREATE_VIEW']);
+  assertIncludes(changed[0].details, 'changed');
+  // Rolling back restores the definition the database had before.
+  assertIncludes(buildDownMigrationSql(changed), 'WHERE active = 0');
+});
+
+test('dependent views are ordered after the view they read', async () => {
+  // Declared backwards on purpose: a summary that reads a detail view.
+  const models = parseSchemaText(`
+    view UserSummary {
+      id NVARCHAR(64)
+      @@map("user_summary")
+      @@sql("SELECT id FROM active_users")
+    }
+    view ActiveUser {
+      id NVARCHAR(64)
+      @@map("active_users")
+      @@sql("SELECT id FROM users WHERE active = 1")
+    }
+  `);
+
+  const ordered = orderViewsByDependency(models.map((model) => ({
+    model,
+    names: [model.tableName, model.name],
+    sql: model.viewSql ?? '',
+  })));
+  assert.deepStrictEqual(ordered.ordered.map((entry) => entry.model.name), ['ActiveUser', 'UserSummary']);
+  assertEq(ordered.cyclic, false);
+
+  const ops = await generateDiff(models, [], async () => []);
+  assert.deepStrictEqual(ops.map((op) => op.table), ['active_users', 'user_summary']);
+
+  // A cycle cannot be satisfied by any creation order; keep the schema order.
+  const cyclic = orderViewsByDependency([
+    { names: ['A'], sql: 'SELECT * FROM b' },
+    { names: ['B'], sql: 'SELECT * FROM a' },
+  ]);
+  assertEq(cyclic.cyclic, true);
+  assert.deepStrictEqual(cyclic.ordered.map((entry) => entry.names[0]), ['A', 'B']);
+});
+
+test('a migration fences CREATE VIEW into its own batch', () => {  const text = buildMigrationFile('2026-11-03T00-00-00', [
+    { type: 'CREATE_TABLE', table: 'users', sql: 'CREATE TABLE [users] ([id] INT)' },
+    { type: 'CREATE_VIEW', table: 'active_users', sql: 'CREATE OR ALTER VIEW [active_users] AS\nSELECT id FROM users' },
+  ]);
+
+  assertIncludes(text, '\nGO\n-- CREATE_VIEW: active_users');
+  assertIncludes(text, 'CREATE OR ALTER VIEW [active_users] AS\nSELECT id FROM users\nGO');
+});
+
 test('buildCreateTableSql maps defaults and constraints', () => {
   const [model] = parseSchemaText(`
     model Session {
@@ -567,9 +843,10 @@ test('buildCreateTableSql maps defaults and constraints', () => {
 
   const sql = buildCreateTableSql(model);
   assertIncludes(sql, '[id] UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID()');
-  assertIncludes(sql, '[createdAt] DATETIME2 DEFAULT CURRENT_TIMESTAMP');
-  assertIncludes(sql, '[active] BIT DEFAULT 1');
-  assertIncludes(sql, "[label] NVARCHAR(255) DEFAULT 'owner''s'");
+  // A default does not make the column nullable.
+  assertIncludes(sql, '[createdAt] DATETIME2 NOT NULL DEFAULT CURRENT_TIMESTAMP');
+  assertIncludes(sql, '[active] BIT NOT NULL DEFAULT 1');
+  assertIncludes(sql, "[label] NVARCHAR(255) NOT NULL DEFAULT 'owner''s'");
 });
 
 test('buildCreateTableSql includes compound unique constraints', () => {
@@ -860,7 +1137,9 @@ test('generateDiff does not duplicate inline unique constraints for new tables',
   const ops = await generateDiff([model], [], async () => []);
 
   assert.deepStrictEqual(ops.map((op) => op.type), ['CREATE_TABLE', 'ADD_INDEX']);
-  assertIncludes(ops[0].sql, '[email] NVARCHAR(255) NOT NULL UNIQUE');
+  // Named, not bare UNIQUE: a database-generated name cannot be matched by the
+  // next diff, which would then add a second unique for the same column.
+  assertIncludes(ops[0].sql, '[email] NVARCHAR(255) NOT NULL CONSTRAINT [UQ_users_email] UNIQUE');
   assertEq(ops[1].sql, 'CREATE INDEX [IX_users_age] ON [users] ([age])');
 });
 
@@ -886,6 +1165,105 @@ test('generateDiff emits mapped advanced index metadata for existing tables', as
 
   assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_INDEX']);
   assertEq(ops[0].sql, 'CREATE INDEX [IX_app_users_age_active] ON [users] ([age]) INCLUDE ([email], [tenantId]) WHERE deletedAt IS NULL WITH (FILLFACTOR = 90)');
+});
+
+test('generateDiff names a new unique column instead of adding the constraint twice', async () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id    NVARCHAR(64) @id
+      email NVARCHAR(255) @unique
+    }
+  `);
+
+  const ops = await generateDiff(
+    [model],
+    ['users'],
+    async () => [
+      { columnName: 'id', dataType: 'nvarchar', maxLength: 128, isNullable: false, isPrimaryKey: true, isIdentity: false },
+    ],
+    async () => ({ indexes: [], uniqueConstraints: [] }),
+  );
+
+  assert.deepStrictEqual(ops.map((op) => op.type), ['ADD_COLUMN']);
+  assertEq(ops[0].sql, 'ALTER TABLE [users] ADD [email] NVARCHAR(255) NOT NULL CONSTRAINT [UQ_users_email] UNIQUE');
+});
+
+test('generateDiff is stable once the named unique has been applied', async () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id    NVARCHAR(64) @id
+      email NVARCHAR(255) @unique
+    }
+  `);
+  const columns = [
+    { columnName: 'id', dataType: 'nvarchar', maxLength: 128, isNullable: false, isPrimaryKey: true, isIdentity: false },
+    { columnName: 'email', dataType: 'nvarchar', maxLength: 510, isNullable: false, isPrimaryKey: false, isIdentity: false },
+  ];
+
+  const ops = await generateDiff(
+    [model],
+    ['users'],
+    async () => columns,
+    async () => ({ indexes: [], uniqueConstraints: ['UQ_users_email'] }),
+  );
+
+  assert.deepStrictEqual(ops, []);
+});
+
+test('@default stops at its own closing parenthesis, before @description', () => {
+  const [model] = parseSchemaText(`
+    model Order {
+      id        NVARCHAR(64)  @id @default(uuid()) @description("Primary key (generated)")
+      total     INT           @default(0) @description("Amount")
+      createdAt DATETIME2     @default(now()) @description("Created at")
+    }
+  `);
+
+  assert.deepStrictEqual(model.fields.map((field) => field.defaultValue), ['uuid()', '0', 'now()']);
+  const sql = buildCreateTableSql(model);
+  assertIncludes(sql, '[id] NVARCHAR(64) PRIMARY KEY DEFAULT NEWID()');
+  assertIncludes(sql, '[total] INT NOT NULL DEFAULT 0');
+  assertIncludes(sql, '[createdAt] DATETIME2 NOT NULL DEFAULT CURRENT_TIMESTAMP');
+  assert.ok(!sql.includes('@description'), `description leaked into DDL:\n${sql}`);
+});
+
+test('@@index options survive parentheses inside a filter expression', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      id    NVARCHAR(64) @id
+      score INT
+      @@index([score], filter: "(score > 0)", options: "FILLFACTOR = 90")
+    }
+  `);
+
+  assert.deepStrictEqual(model.indexes[0], {
+    fields: ['score'],
+    filter: '(score > 0)',
+    options: 'FILLFACTOR = 90',
+  });
+
+  const ops = [];
+  buildIndexDiff(model, { indexes: [], uniqueConstraints: [] }, ops);
+  assertIncludes(ops[0].sql, 'WHERE (score > 0) WITH (FILLFACTOR = 90)');
+});
+
+test('verifyAppliedMigrations reports changed and missing files', () => {
+  const applied = [
+    { id: '2026_01.sql', checksum: 'aaa' },
+    { id: '2026_02.sql', checksum: 'bbb' },
+    { id: '2026_03.sql', checksum: 'ccc' },
+  ];
+  const files = {
+    '2026_01.sql': 'one',
+    '2026_02.sql': 'changed',
+    '2026_03.sql': null,
+  };
+  const checksum = (content) => ({ one: 'aaa', changed: 'different' })[content] ?? 'unknown';
+
+  assert.deepStrictEqual(
+    verifyAppliedMigrations(applied, (id) => files[id] ?? null, checksum),
+    { changed: ['2026_02.sql'], missing: ['2026_03.sql'] },
+  );
 });
 
 test('generateDiff matches dbo-qualified schema tables with unqualified introspection names', async () => {

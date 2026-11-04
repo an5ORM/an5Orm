@@ -105,27 +105,28 @@ export class PythonGenerator {
       }
       content += '\n';
 
-      // CreateInput
-      const requiredFields = model.fields.filter(f => !f.isId && !f.isOptional && !f.hasDefault);
-      const optionalFields = model.fields.filter(f => !f.isId && (f.isOptional || f.hasDefault));
-      content += `@dataclass\nclass ${name}CreateInput:\n    """Typed data for creating a new ${name} record."""\n`;
-      for (const f of requiredFields) {
-        content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
-      }
-      for (const f of optionalFields) {
-        content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f)}] = None\n`;
-      }
-      if (requiredFields.length === 0 && optionalFields.length === 0) content += '    pass\n';
-      content += '\n';
+      // CreateInput / UpdateInput describe writes; a view has none.
+      if (!model.isView) {
+        const requiredFields = model.fields.filter(f => !f.isId && !f.isOptional && !f.hasDefault);
+        const optionalFields = model.fields.filter(f => !f.isId && (f.isOptional || f.hasDefault));
+        content += `@dataclass\nclass ${name}CreateInput:\n    """Typed data for creating a new ${name} record."""\n`;
+        for (const f of requiredFields) {
+          content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
+        }
+        for (const f of optionalFields) {
+          content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f)}] = None\n`;
+        }
+        if (requiredFields.length === 0 && optionalFields.length === 0) content += '    pass\n';
+        content += '\n';
 
-      // UpdateInput
-      const updateFields = model.fields.filter(f => !f.isId);
-      content += `@dataclass\nclass ${name}UpdateInput:\n    """Typed data for updating an existing ${name} record."""\n`;
-      for (const f of updateFields) {
-        content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f)}] = None\n`;
+        const updateFields = model.fields.filter(f => !f.isId);
+        content += `@dataclass\nclass ${name}UpdateInput:\n    """Typed data for updating an existing ${name} record."""\n`;
+        for (const f of updateFields) {
+          content += `    ${this.toSnakeCase(f.name)}: Optional[${this.mapPyType(f)}] = None\n`;
+        }
+        if (updateFields.length === 0) content += '    pass\n';
+        content += '\n';
       }
-      if (updateFields.length === 0) content += '    pass\n';
-      content += '\n';
 
       // FindManyArgs
       content += `@dataclass\nclass ${name}FindManyArgs:\n    """ORM-style args for ${name}.find_many()."""\n`;
@@ -328,6 +329,7 @@ export class PythonGenerator {
   }
 
   private generateClient(models: Model[], outputDir: string) {
+    const hasViews = models.some((model) => model.isView);
     let content = '# This file is auto-generated. Do not edit directly.\n';
     content += 'import os\n';
     content += 'from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING\n\n';
@@ -337,7 +339,7 @@ export class PythonGenerator {
     // generated output dir, so no relative-import fallback here — a
     // relative fallback would be unresolvable and trip Pylance
     // `reportMissingImports` on every generated client.
-    content += 'from an5_adapter import An5Adapter, AdapterTableClient, create_an5_adapter, set_adapter_metadata\n\n';
+    content += `from an5_adapter import An5Adapter, AdapterTableClient${hasViews ? ', ViewClient' : ''}, create_an5_adapter, set_adapter_metadata\n\n`;
 
     const metadataModule = this.metadataModule();
     content += 'try:\n';
@@ -376,6 +378,17 @@ export class PythonGenerator {
     for (const model of models) {
       const propName = this.toSnakeCase(model.name) + 's';
       const singleName = this.toSnakeCase(model.name);
+      if (model.isView) {
+        // The adapter's ViewClient refuses writes; assigning it here is what makes
+        // `db.activeUsers.update(...)` fail with the read-only message instead of
+        // reaching the database as a table write.
+        content += `        client = self.adapter.view("${model.name}")\n`;
+        content += `        self.${model.name}: ViewClient = client\n`;
+        content += `        self.${model.name}s: ViewClient = client\n`;
+        content += `        self.${singleName}: ViewClient = client\n`;
+        content += `        self.${propName}: ViewClient = client\n`;
+        continue;
+      }
       content += `        client = AdapterTableClient(self.adapter, "${model.name}")\n`;
       content += `        self.${model.name}: AdapterTableClient["${model.name}Row"] = client\n`;
       content += `        self.${model.name}s: AdapterTableClient["${model.name}Row"] = client\n`;

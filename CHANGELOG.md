@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.3.3] - 2026-11-05
+
+### Added
+- **Runnable CLI entry point (`an5`, `an5-orm`, `orm`)** — exposed CLI executable binaries via `package.json` `"bin"` pointing to `./dist/cli.js`, supporting `npx @an5/orm <command>`, `npx an5 <command>`, and `npx an5-orm <command>`.
+- **Subcommand dispatch** — CLI dispatches `generate` / `codegen`, `db:push` / `push`, `db:pull` / `pull`, `db:migrate` / `migrate` (including `diff`, `generate`, `apply`, `rollback`, `status`, and colon notation `db:migrate:<cmd>`), `db:seed` / `seed`, and `db:cleanup` / `cleanup`, as well as `--version` and `--help`.
+- **Pre-pack CLI validation** — `scripts/verify-pack.js` now verifies that all advertised `bin` entry points exist in the package tarball before publish.
+
+### Fixed
+- **Missing compiled entry-point files** — `push.ts`, `pull.ts`, `migrate.ts`, `seed.ts`, and `cleanup.ts` are now compiled into `dist/` alongside their `.d.ts` declarations via `tsconfig.cli.json`, eliminating the `could not determine executable to run` failure when invoked in consuming projects without `tsx` (#2).
+- **Documentation for consuming projects** — updated `README.md` with explicit `npx @an5/orm <command>` invocations and examples for configuring consuming `package.json` scripts (`"generate": "an5 generate"`, `"db:push": "an5 db:push"`).
+
 ## [1.3.2] - 2026-10-21
 
 ### Fixed

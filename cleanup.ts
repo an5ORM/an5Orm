@@ -33,6 +33,54 @@ function refuseIfNotSqlServer(provider: Provider, command: string): void {
   process.exit(1);
 }
 
+/**
+ * The tables and views the schema files declare, lower-cased.
+ *
+ * SQL Server compares object names case-insensitively in the default collation,
+ * so `Users` and `users` are the same object here; a case-sensitive comparison
+ * would drop a table the schema still declares.
+ */
+function declaredObjects(schemaText: string): { tables: Set<string>; views: Set<string> } {
+  const tables = new Set<string>();
+  const views = new Set<string>();
+  let block: 'model' | 'view' | null = null;
+  let blockName = '';
+
+  for (const rawLine of schemaText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('//')) continue;
+
+    const start = /^(model|view)\s+(\w+)\s*\{/.exec(line);
+    if (start) {
+      block = start[1] as 'model' | 'view';
+      blockName = start[2] ?? '';
+      if (block === 'model') tables.add(blockName.toLowerCase() + 's');
+      else views.add(blockName.toLowerCase() + 's');
+      continue;
+    }
+
+    if (line === '}') {
+      block = null;
+      continue;
+    }
+
+    const mapped = /^@@map\(\s*"([^"]+)"\s*\)/.exec(line);
+    if (mapped?.[1]) {
+      // A mapped name replaces the default one, but `@@map` outside a block is
+      // still read as a table name: older schema files may have it there.
+      const target = block === 'view' ? views : tables;
+      target.add(mapped[1].toLowerCase());
+    }
+  }
+
+  return { tables, views };
+}
+
+/** Quotes a catalog identifier, doubling `]` the way T-SQL expects. */
+function quoteName(name: string): string {
+  return `[${name.replace(/]/g, ']]')}]`;
+}
+
 async function cleanup() {
   // Drops tables by comparing sys.tables with the schema files, so a non-SQL
   // Server connection string is a mistake worth naming first.
@@ -56,43 +104,48 @@ async function cleanup() {
     }
   }
 
-  const lines = schemaText.split("\n");
-  
-  const validTables = new Set<string>();
+  const { tables: validTables, views: validViews } = declaredObjects(schemaText);
 
-  for (let line of lines) {
-    line = line.trim();
-    if (line.startsWith("model ")) {
-      const modelName = line.split(" ")[1].replace("{", "").trim();
-      // Default table name is model name + 's' (lowercase)
-      validTables.add(modelName.toLowerCase() + "s");
-    }
-    if (line.startsWith("@@map")) {
-      const mapMatch = line.match(/@@map\("(.+)"\)/);
-      if (mapMatch) {
-        // The last model's default name should be replaced by the map name
-        // Since we add the default name first, we need to be careful.
-        // Actually, let's just add the map name.
-        validTables.add(mapMatch[1]);
-      }
-    }
-  }
-
-  // Also include the capitalization variations from an5Metadata if we can, 
+  // Also include the capitalization variations from an5Metadata if we can,
   // but schema.an5 is the source of truth.
-  
+
   console.log("Valid tables from schema:", Array.from(validTables));
+  console.log("Valid views from schema:", Array.from(validViews));
 
   const dbTables = await (await getDb()).$queryRawUnsafe<any>(`
     SELECT name FROM sys.tables WHERE is_ms_shipped = 0
   `);
+  const dbViews = await (await getDb()).$queryRawUnsafe<any>(`
+    SELECT name FROM sys.views WHERE is_ms_shipped = 0
+  `);
 
   const tablesToDrop = dbTables
     .map(t => t.name)
-    .filter(name => !validTables.has(name) && !validTables.has(name.toLowerCase()));
+    .filter(name => !validTables.has(name.toLowerCase()));
+  const viewsToDrop = dbViews
+    .map(v => v.name)
+    .filter(name => !validViews.has(name.toLowerCase()));
+
+  // Views go first: one of them may read a table that is about to be dropped, and
+  // an orphan view is exactly what this command is meant to remove.
+  if (viewsToDrop.length > 0) {
+    console.log("Views to be DROPPED:", viewsToDrop);
+    for (const view of viewsToDrop) {
+      console.log(`Dropping view [${view}]...`);
+      try {
+        await (await getDb()).$executeRawUnsafe(`DROP VIEW IF EXISTS ${quoteName(view)}`);
+        console.log(`✅ Dropped [${view}]`);
+      } catch (err: any) {
+        console.error(`❌ Failed to drop view [${view}]: ${err.message}`);
+      }
+    }
+  }
 
   if (tablesToDrop.length === 0) {
-    console.log("✅ No extra tables found. Database is clean.");
+    console.log(viewsToDrop.length === 0
+      ? "✅ No extra tables found. Database is clean."
+      : "✅ No extra tables found.");
+    console.log("✅ Cleanup completed.");
     process.exit(0);
   }
 
@@ -101,10 +154,10 @@ async function cleanup() {
   for (const table of tablesToDrop) {
     console.log(`Dropping table [${table}]...`);
     try {
-      // We need to handle foreign key constraints. 
+      // We need to handle foreign key constraints.
       // For a thorough cleanup, we might need to drop constraints first.
       // But for now, we'll try a simple DROP TABLE.
-      await (await getDb()).$executeRawUnsafe(`DROP TABLE [${table}]`);
+      await (await getDb()).$executeRawUnsafe(`DROP TABLE ${quoteName(table)}`);
       console.log(`✅ Dropped [${table}]`);
     } catch (err: any) {
       console.error(`❌ Failed to drop [${table}]: ${err.message}`);
@@ -118,10 +171,10 @@ async function cleanup() {
           
           for (const c of constraints) {
               console.log(`Dropping constraint [${c.constraint_name}] on [${c.table_name}]...`);
-              await (await getDb()).$executeRawUnsafe(`ALTER TABLE [${c.table_name}] DROP CONSTRAINT [${c.constraint_name}]`);
+              await (await getDb()).$executeRawUnsafe(`ALTER TABLE ${quoteName(c.table_name)} DROP CONSTRAINT ${quoteName(c.constraint_name)}`);
           }
           // Try dropping again
-          await (await getDb()).$executeRawUnsafe(`DROP TABLE [${table}]`);
+          await (await getDb()).$executeRawUnsafe(`DROP TABLE ${quoteName(table)}`);
           console.log(`✅ Dropped [${table}] after removing constraints.`);
       }
     }

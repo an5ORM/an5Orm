@@ -182,6 +182,7 @@ func GetDefaultConnectionString() string {
         content += this.generateBaseOrmTypes();
         content += this.generateDbContext(models);
         content += this.generateTableClientStruct();
+        content += this.generateViewClientStruct();
         content += this.generateQueryAndScan();
         content += this.generateWhereBuilder();
         content += this.generateCrudMethods();
@@ -311,8 +312,9 @@ func SortOrderPtr(s SortOrder) *SortOrder { return &s }
         let content = `// An5DbContext represents the main ORM database context.\ntype An5DbContext struct {\n\tDB      *sql.DB\n\tDialect Dialect\n`;
         for (const model of models) {
             const name = this.capitalize(model.name);
-            content += `\t${name}s *TableClient[${model.name}]\n`;
-            content += `\t${name}  *TableClient[${model.name}]\n`;
+            const client = model.isView ? 'ViewClient' : 'TableClient';
+            content += `\t${name}s *${client}[${model.name}]\n`;
+            content += `\t${name}  *${client}[${model.name}]\n`;
         }
         content += `}
 
@@ -328,7 +330,8 @@ func NewAn5DbContextWithConnStr(db *sql.DB, connStr string) *An5DbContext {
 `;
         for (const model of models) {
             const name = this.capitalize(model.name);
-            content += `\tclient${name} := NewTableClient[${model.name}](db, "${(0, types_1.dottedTableName)(model)}", d)\n`;
+            const client = model.isView ? 'NewViewClient' : 'NewTableClient';
+            content += `\tclient${name} := ${client}[${model.name}](db, "${(0, types_1.dottedTableName)(model)}", d)\n`;
             content += `\tctx.${name}s = client${name}\n`;
             content += `\tctx.${name}  = client${name}\n`;
         }
@@ -378,6 +381,65 @@ func (c *TableClient[T]) ph(n int) string {
 \t\treturn fmt.Sprintf("$%d", n)
 \t}
 \treturn "?"
+}
+
+`;
+    }
+    // ─── ViewClient ────────────────────────────────────────────────────────────
+    /**
+     * The read-only client used for views.
+     *
+     * Go has no way to hide methods from an embedded value, so wrapping rather
+     * than embedding is what makes a write to a view a compile error. The read
+     * methods delegate, which keeps a view's rows scanning exactly like a table's.
+     */
+    generateViewClientStruct() {
+        return `// ViewClient provides read-only access to a database view.
+type ViewClient[T any] struct {
+\tDB       *sql.DB
+\tDialect  Dialect
+\tViewName string
+\ttable    *TableClient[T]
+}
+
+// NewViewClient creates a typed read-only client for a view.
+func NewViewClient[T any](db *sql.DB, viewName string, dialect Dialect) *ViewClient[T] {
+\treturn &ViewClient[T]{
+\t\tDB:       db,
+\t\tDialect:  dialect,
+\t\tViewName: viewName,
+\t\ttable:    NewTableClient[T](db, viewName, dialect),
+\t}
+}
+
+// FindMany queries the view with ORM-style args.
+func (c *ViewClient[T]) FindMany(ctx context.Context, args interface{}) ([]T, error) {
+\treturn c.table.FindMany(ctx, args)
+}
+
+// FindFirst returns the first matching row of the view.
+func (c *ViewClient[T]) FindFirst(ctx context.Context, args interface{}) (*T, error) {
+\treturn c.table.FindFirst(ctx, args)
+}
+
+// FindUnique returns one row of the view by primary key.
+func (c *ViewClient[T]) FindUnique(ctx context.Context, args interface{}) (*T, error) {
+\treturn c.table.FindUnique(ctx, args)
+}
+
+// Count returns how many rows of the view match.
+func (c *ViewClient[T]) Count(ctx context.Context, args interface{}) (int64, error) {
+\treturn c.table.Count(ctx, args)
+}
+
+// QueryRaw runs a raw SELECT against the view.
+func (c *ViewClient[T]) QueryRaw(ctx context.Context, query string, args ...interface{}) ([]T, error) {
+\treturn c.table.QueryRaw(ctx, query, args...)
+}
+
+// VectorSearch searches a vector column of the view.
+func (c *ViewClient[T]) VectorSearch(ctx context.Context, vector []float64, opts ...VectorSearchOptions) ([]T, error) {
+\treturn c.table.VectorSearch(ctx, vector, opts...)
 }
 
 `;
@@ -1309,24 +1371,25 @@ var _ = time.Time{}
             content += `\t${this.capitalize(field.name)} *SortOrder\n`;
         }
         content += `}\n\n`;
-        // CreateInput
-        content += `// ${name}CreateInput holds data for creating a new ${name} record.\ntype ${name}CreateInput struct {\n`;
-        for (const field of model.fields) {
-            if (!field.isId) {
-                const goType = this.mapGoType(field, field.isOptional || field.hasDefault);
-                content += `\t${this.capitalize(field.name)} ${goType}\n`;
+        // CreateInput / UpdateInput / DeleteManyArgs describe writes; a view has none.
+        if (!model.isView) {
+            content += `// ${name}CreateInput holds data for creating a new ${name} record.\ntype ${name}CreateInput struct {\n`;
+            for (const field of model.fields) {
+                if (!field.isId) {
+                    const goType = this.mapGoType(field, field.isOptional || field.hasDefault);
+                    content += `\t${this.capitalize(field.name)} ${goType}\n`;
+                }
             }
-        }
-        content += `}\n\n`;
-        // UpdateInput
-        content += `// ${name}UpdateInput holds data for updating an existing ${name} record.\ntype ${name}UpdateInput struct {\n`;
-        for (const field of model.fields) {
-            if (!field.isId) {
-                const goType = this.mapGoType(field, true); // always pointer so we can detect zero
-                content += `\t${this.capitalize(field.name)} ${goType}\n`;
+            content += `}\n\n`;
+            content += `// ${name}UpdateInput holds data for updating an existing ${name} record.\ntype ${name}UpdateInput struct {\n`;
+            for (const field of model.fields) {
+                if (!field.isId) {
+                    const goType = this.mapGoType(field, true); // always pointer so we can detect zero
+                    content += `\t${this.capitalize(field.name)} ${goType}\n`;
+                }
             }
+            content += `}\n\n`;
         }
-        content += `}\n\n`;
         // FindManyArgs
         content += `// ${name}FindManyArgs provides ORM-style args for FindMany queries on ${name}.\ntype ${name}FindManyArgs struct {\n`;
         content += `\tWhere   *${name}WhereInput\n`;
@@ -1346,9 +1409,11 @@ var _ = time.Time{}
         content += `\tWhere *${name}WhereInput\n`;
         content += `}\n\n`;
         // DeleteManyArgs
-        content += `// ${name}DeleteManyArgs provides ORM-style args for DeleteMany queries on ${name}.\ntype ${name}DeleteManyArgs struct {\n`;
-        content += `\tWhere *${name}WhereInput\n`;
-        content += `}\n\n`;
+        if (!model.isView) {
+            content += `// ${name}DeleteManyArgs provides ORM-style args for DeleteMany queries on ${name}.\ntype ${name}DeleteManyArgs struct {\n`;
+            content += `\tWhere *${name}WhereInput\n`;
+            content += `}\n\n`;
+        }
         // CountArgs
         content += `// ${name}CountArgs provides ORM-style args for Count queries on ${name}.\ntype ${name}CountArgs struct {\n`;
         content += `\tWhere *${name}WhereInput\n`;

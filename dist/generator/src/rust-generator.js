@@ -432,35 +432,38 @@ pub struct DateTimeFilter {
                 s.push(`    pub ${snake}: Option<SortOrder>,`);
             }
             s.push(`}\n`);
-            // CreateInput (skip @id auto fields from required set via hasDefault)
-            s.push(`/// Typed data for creating a new ${name} record.`);
-            s.push(`#[derive(Debug, Clone, Serialize, Deserialize)]`);
-            s.push(`pub struct ${name}CreateInput {`);
-            for (const f of model.fields) {
-                if (f.isId && f.hasDefault)
-                    continue;
-                const snake = this.toSnakeCase(f.name);
-                const isOpt = f.isOptional || f.hasDefault;
-                const rsType = this.mapRustType(f, isOpt);
-                if (isOpt) {
-                    s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+            // CreateInput / UpdateInput describe writes; a view has none.
+            if (!model.isView) {
+                // CreateInput (skip @id auto fields from required set via hasDefault)
+                s.push(`/// Typed data for creating a new ${name} record.`);
+                s.push(`#[derive(Debug, Clone, Serialize, Deserialize)]`);
+                s.push(`pub struct ${name}CreateInput {`);
+                for (const f of model.fields) {
+                    if (f.isId && f.hasDefault)
+                        continue;
+                    const snake = this.toSnakeCase(f.name);
+                    const isOpt = f.isOptional || f.hasDefault;
+                    const rsType = this.mapRustType(f, isOpt);
+                    if (isOpt) {
+                        s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                    }
+                    s.push(`    pub ${snake}: ${rsType},`);
                 }
-                s.push(`    pub ${snake}: ${rsType},`);
+                s.push(`}\n`);
+                // UpdateInput (all non-id optional)
+                s.push(`/// Typed data for updating an existing ${name} record.`);
+                s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+                s.push(`pub struct ${name}UpdateInput {`);
+                for (const f of model.fields) {
+                    if (f.isId)
+                        continue;
+                    const snake = this.toSnakeCase(f.name);
+                    const rsType = this.mapRustType(f, true);
+                    s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                    s.push(`    pub ${snake}: ${rsType},`);
+                }
+                s.push(`}\n`);
             }
-            s.push(`}\n`);
-            // UpdateInput (all non-id optional)
-            s.push(`/// Typed data for updating an existing ${name} record.`);
-            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
-            s.push(`pub struct ${name}UpdateInput {`);
-            for (const f of model.fields) {
-                if (f.isId)
-                    continue;
-                const snake = this.toSnakeCase(f.name);
-                const rsType = this.mapRustType(f, true);
-                s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
-                s.push(`    pub ${snake}: ${rsType},`);
-            }
-            s.push(`}\n`);
             // FindManyArgs / FindFirstArgs / FindUniqueArgs / CountArgs
             s.push(`/// ORM-style args for ${name}.find_many().`);
             s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
@@ -505,14 +508,16 @@ pub struct DateTimeFilter {
             s.push(`    pub distance_metric: String,`);
             s.push(`}\n`);
             // UpdateArgs carries the typed input alongside the where clause.
-            s.push(`/// ORM-style args for ${name}.update().`);
-            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
-            s.push(`pub struct ${name}UpdateArgs {`);
-            s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
-            s.push(`    pub where_: Option<${name}WhereInput>,`);
-            s.push(`    #[serde(default)]`);
-            s.push(`    pub data: ${name}UpdateInput,`);
-            s.push(`}\n`);
+            if (!model.isView) {
+                s.push(`/// ORM-style args for ${name}.update().`);
+                s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+                s.push(`pub struct ${name}UpdateArgs {`);
+                s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                s.push(`    pub where_: Option<${name}WhereInput>,`);
+                s.push(`    #[serde(default)]`);
+                s.push(`    pub data: ${name}UpdateInput,`);
+                s.push(`}\n`);
+            }
         }
         return s.join('\n') + '\n';
     }
@@ -601,7 +606,7 @@ pub struct DateTimeFilter {
 
 use an5_adapters::{
     AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, RowMap, TableClient,
-    UpdateArgs, VectorSearchArgs,
+    UpdateArgs, VectorSearchArgs${models.some((model) => model.isView) ? ', ViewClient' : ''},
 };
 use serde::de::DeserializeOwned;
 
@@ -788,6 +793,11 @@ impl SqlBuilder {
     buildModelRuntimeHandle(model) {
         const name = this.capitalize(model.name);
         const snake = this.toSnakeCase(model.name);
+        // A view is read through the runtime's read-only ViewClient, so the handle
+        // for a view cannot expose write methods at all.
+        const reader = model.isView
+            ? `self.db.adapter().view("${model.name}")`
+            : `self.db.table("${model.name}")`;
         const lines = [];
         lines.push(`/// Typed queries for ${name}. Obtained via \`An5Client::${snake}()\`.`);
         lines.push(`#[derive(Clone)]`);
@@ -807,9 +817,7 @@ impl SqlBuilder {
         lines.push(`    pub fn adapter(&self) -> &An5Adapter { self.db.adapter() }`);
         lines.push(``);
         lines.push(`    pub async fn find_many(&self, args: &${name}FindManyArgs) -> Result<Vec<${name}>> {`);
-        lines.push(`        let rows = self`);
-        lines.push(`            .db`);
-        lines.push(`            .table("${model.name}")`);
+        lines.push(`        let rows = ${reader}`);
         lines.push(`            .find_many(&FindManyArgs {`);
         lines.push(`                r#where: to_value(&args.where_)?,`);
         lines.push(`                order_by: to_value(&args.order_by)?,`);
@@ -824,9 +832,7 @@ impl SqlBuilder {
         lines.push(``);
         lines.push(`    /// The rows nearest \`vector\`, each carrying a \`distance\`.`);
         lines.push(`    pub async fn vector_search(&self, args: &${name}VectorSearchArgs) -> Result<Vec<(${name}, f64)>> {`);
-        lines.push(`        let rows = self`);
-        lines.push(`            .db`);
-        lines.push(`            .table("${model.name}")`);
+        lines.push(`        let rows = ${reader}`);
         lines.push(`            .vector_search(&VectorSearchArgs {`);
         lines.push(`                vector: args.vector.iter().map(|v| *v as f64).collect(),`);
         lines.push(`                take: args.take.unwrap_or(0),`);
@@ -844,9 +850,7 @@ impl SqlBuilder {
         lines.push(`    }`);
         lines.push(``);
         lines.push(`    pub async fn find_first(&self, args: &${name}FindFirstArgs) -> Result<Option<${name}>> {`);
-        lines.push(`        let row = self`);
-        lines.push(`            .db`);
-        lines.push(`            .table("${model.name}")`);
+        lines.push(`        let row = ${reader}`);
         lines.push(`            .find_first(&FindManyArgs {`);
         lines.push(`                r#where: to_value(&args.where_)?,`);
         lines.push(`                order_by: to_value(&args.order_by)?,`);
@@ -860,9 +864,7 @@ impl SqlBuilder {
         lines.push(`    }`);
         lines.push(``);
         lines.push(`    pub async fn find_unique(&self, args: &${name}FindUniqueArgs) -> Result<Option<${name}>> {`);
-        lines.push(`        let row = self`);
-        lines.push(`            .db`);
-        lines.push(`            .table("${model.name}")`);
+        lines.push(`        let row = ${reader}`);
         lines.push(`            .find_unique(&FindManyArgs {`);
         lines.push(`                r#where: to_value(&args.where_)?,`);
         lines.push(`                ..Default::default()`);
@@ -875,37 +877,40 @@ impl SqlBuilder {
         lines.push(`    }`);
         lines.push(``);
         lines.push(`    pub async fn count(&self, args: &${name}FindUniqueArgs) -> Result<i64> {`);
-        lines.push(`        self.db`);
-        lines.push(`            .table("${model.name}")`);
+        lines.push(`        ${reader}`);
         lines.push(`            .count(&CountArgs { r#where: to_value(&args.where_)? })`);
         lines.push(`            .await`);
         lines.push(`    }`);
         lines.push(``);
-        lines.push(`    pub async fn create(&self, data: &${name}CreateInput) -> Result<${name}> {`);
-        lines.push(`        let row = self`);
-        lines.push(`            .db`);
-        lines.push(`            .table("${model.name}")`);
-        lines.push(`            .create(&to_map(data)?)`);
-        lines.push(`            .await?;`);
-        lines.push(`        deserialize_row(row)`);
-        lines.push(`    }`);
-        lines.push(``);
-        lines.push(`    pub async fn update(&self, args: &${name}UpdateArgs) -> Result<u64> {`);
-        lines.push(`        self.db`);
-        lines.push(`            .table("${model.name}")`);
-        lines.push(`            .update(&UpdateArgs {`);
-        lines.push(`                r#where: to_value(&args.where_)?,`);
-        lines.push(`                data: serde_json::to_value(&args.data)?,`);
-        lines.push(`            })`);
-        lines.push(`            .await`);
-        lines.push(`    }`);
-        lines.push(``);
-        lines.push(`    pub async fn delete(&self, args: &${name}FindUniqueArgs) -> Result<u64> {`);
-        lines.push(`        self.db`);
-        lines.push(`            .table("${model.name}")`);
-        lines.push(`            .delete_many(&DeleteManyArgs { r#where: to_value(&args.where_)? })`);
-        lines.push(`            .await`);
-        lines.push(`    }`);
+        // Writes are generated for tables only: a view has no CreateInput or
+        // UpdateInput, so these methods could not be called even if emitted.
+        if (!model.isView) {
+            lines.push(`    pub async fn create(&self, data: &${name}CreateInput) -> Result<${name}> {`);
+            lines.push(`        let row = self`);
+            lines.push(`            .db`);
+            lines.push(`            .table("${model.name}")`);
+            lines.push(`            .create(&to_map(data)?)`);
+            lines.push(`            .await?;`);
+            lines.push(`        deserialize_row(row)`);
+            lines.push(`    }`);
+            lines.push(``);
+            lines.push(`    pub async fn update(&self, args: &${name}UpdateArgs) -> Result<u64> {`);
+            lines.push(`        self.db`);
+            lines.push(`            .table("${model.name}")`);
+            lines.push(`            .update(&UpdateArgs {`);
+            lines.push(`                r#where: to_value(&args.where_)?,`);
+            lines.push(`                data: serde_json::to_value(&args.data)?,`);
+            lines.push(`            })`);
+            lines.push(`            .await`);
+            lines.push(`    }`);
+            lines.push(``);
+            lines.push(`    pub async fn delete(&self, args: &${name}FindUniqueArgs) -> Result<u64> {`);
+            lines.push(`        self.db`);
+            lines.push(`            .table("${model.name}")`);
+            lines.push(`            .delete_many(&DeleteManyArgs { r#where: to_value(&args.where_)? })`);
+            lines.push(`            .await`);
+            lines.push(`    }`);
+        }
         lines.push(`}`);
         lines.push(``);
         return lines.join('\n') + '\n';

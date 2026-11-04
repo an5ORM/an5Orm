@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Model, Field, Relation } from './types';
+import { attributeArgs, hasAttribute, parseIndexDirective, splitSchemaLines, unquote } from './attributes';
 import {
   DEFAULT_PROVIDER,
   FieldTypeError,
@@ -37,10 +38,25 @@ interface PendingModelRef {
   line: string;
 }
 
+/**
+ * A field inside a `view` whose type matched nothing.
+ *
+ * A view's fields describe the shape of a result set, never a relation, so the
+ * decision made for models — "a name used by another block is a relation" — does
+ * not apply. The reference is kept until every block has been read so the error
+ * can still suggest a close model name.
+ */
+interface PendingViewRef {
+  view: string;
+  field: string;
+  type: string;
+}
+
 export class SchemaParser {
   private schemaText: string = '';
   private issues: FieldTypeIssue[] = [];
   private modelRefs: PendingModelRef[] = [];
+  private viewRefs: PendingViewRef[] = [];
   private models: Model[] = [];
 
   /**
@@ -55,9 +71,10 @@ export class SchemaParser {
   public async parse(): Promise<Model[]> {
     this.issues = [];
     this.modelRefs = [];
+    this.viewRefs = [];
     this.models = [];
     this.loadSchema();
-    const lines = this.schemaText.split('\n');
+    const lines = splitSchemaLines(this.schemaText);
     const models: Model[] = [];
     let currentModel: Model | null = null;
 
@@ -84,6 +101,22 @@ export class SchemaParser {
         continue;
       }
 
+      const viewHeaderMatch = line.match(/^view\s+(\w+)\s*\{/);
+      if (viewHeaderMatch) {
+        const viewName = viewHeaderMatch[1];
+        currentModel = {
+          name: viewName,
+          tableName: viewName.toLowerCase() + 's',
+          schemaName: this.provider === 'mssql' ? 'dbo' : '',
+          provider: this.provider,
+          fields: [],
+          relations: [],
+          isView: true,
+        };
+        models.push(currentModel);
+        continue;
+      }
+
       if (line === '}') {
         currentModel = null;
         continue;
@@ -96,6 +129,12 @@ export class SchemaParser {
 
     this.models = models;
     this.resolveModelRefs();
+
+    const missingSql = models.filter((model) => model.isView && !model.viewSql?.trim());
+    if (missingSql.length > 0) {
+      const names = missingSql.map((model) => `"${model.name}"`).join(', ');
+      throw new Error(`View ${names} must declare @@sql("SELECT ...").`);
+    }
 
     // Every bad type is reported at once, so one pass over the schema is enough
     // instead of re-running the generator after every line.
@@ -119,32 +158,42 @@ export class SchemaParser {
   }
 
   private parseModelLine(line: string, model: Model) {
+    if (line.startsWith('@@sql') || line.startsWith('@@definition')) {
+      // `@@definition` is accepted as an alias: the directive names a SQL body,
+      // and both spellings are unambiguous.
+      const attribute = line.startsWith('@@sql') ? '@@sql' : '@@definition';
+      if (model.isView) {
+        const sql = unquote(attributeArgs(line, attribute));
+        if (sql !== undefined) model.viewSql = sql.trim();
+      }
+      return;
+    }
     if (line.startsWith('@@map')) {
-      const mapMatch = line.match(/@@map\("(.+)"\)/);
-      if (mapMatch) model.tableName = mapMatch[1];
+      const mapped = unquote(attributeArgs(line, '@@map'));
+      if (mapped) model.tableName = mapped;
       return;
     }
     if (line.startsWith('@@schema')) {
-      // `(.*)` rather than `(.+)`: `@@schema("")` is how a model says "no
-      // schema", needed for databases that have no schema concept. With `(.+)`
-      // the empty string does not match, the directive is silently ignored and
-      // the model keeps `dbo`.
-      const schemaMatch = line.match(/@@schema\("(.*)"\)/);
-      if (schemaMatch) model.schemaName = schemaMatch[1].trim();
+      // An empty string is meaningful: `@@schema("")` says "no schema", needed
+      // for databases that have no schema concept. It must not be dropped as if
+      // the directive were absent.
+      const declared = unquote(attributeArgs(line, '@@schema'));
+      if (declared !== undefined) model.schemaName = declared.trim();
       return;
     }
     if (line.startsWith('@@unique')) {
-      const uniqueMatch = line.match(/@@unique\(\[([\w,\s]+)\]\)/);
-      if (uniqueMatch) {
-        const fields = uniqueMatch[1].split(',').map(f => f.trim());
+      // Constraints describe stored tables; a view's shape comes from its SQL.
+      if (model.isView) return;
+      const parsed = parseIndexDirective(attributeArgs(line, '@@unique'));
+      if (parsed) {
         model.compoundUniques = model.compoundUniques || [];
-        model.compoundUniques.push(fields);
+        model.compoundUniques.push(parsed.fields);
       }
       return;
     }
     if (line.startsWith('@@description')) {
-      const descMatch = line.match(/@@description\("(.+)"\)/);
-      if (descMatch) model.description = descMatch[1];
+      const description = unquote(attributeArgs(line, '@@description'));
+      if (description !== undefined) model.description = description;
       return;
     }
     if (line.startsWith('@@')) return;
@@ -158,16 +207,19 @@ export class SchemaParser {
     // later at the database layer, in a message unrelated to the schema.
     const resolved = resolveFieldType(head.type, this.provider);
     if (!resolved) {
+      if (model.isView) {
+        // A view's fields are columns of a result set, never relations.
+        this.viewRefs.push({ view: model.name, field: head.name, type: head.type });
+        return;
+      }
       this.modelRefs.push({ model, name: head.name, type: head.type, isArray: head.isArray, isOptional: head.isOptional, line });
       return;
     }
 
-    const hasDefault = line.includes('@default') || line.includes('@updatedAt') || line.includes('@id');
-    const isId = line.includes('@id');
-    let description: string | undefined;
-    const descMatch = line.match(/@description\("(.+)"\)/);
-    if (descMatch) description = descMatch[1];
-    model.fields.push({ name: head.name, type: resolved.ts, sqlType: head.type, isOptional: head.isOptional, hasDefault, isId, description });
+    const hasDefault = hasAttribute(line, '@default') || hasAttribute(line, '@updatedAt') || hasAttribute(line, '@id');
+    const isId = hasAttribute(line, '@id');
+    const description = unquote(attributeArgs(line, '@description'));
+    model.fields.push({ name: head.name, type: resolved.ts, sqlType: head.type, isOptional: head.isOptional, hasDefault, isId, ...(description !== undefined ? { description } : {}) });
   }
 
   /**
@@ -182,25 +234,45 @@ export class SchemaParser {
    */
   private resolveModelRefs() {
     const modelNames = this.models.map((model) => model.name);
+    const tableNames = this.models.filter((model) => !model.isView).map((model) => model.name);
+    const viewNames = new Set(this.models.filter((model) => model.isView).map((model) => model.name));
+
+    for (const ref of this.viewRefs) {
+      this.issues.push({
+        path: `${ref.view}.${ref.field}`,
+        message: unknownFieldTypeMessage(ref.type, this.provider, modelNames),
+      });
+    }
+    this.viewRefs = [];
 
     for (const ref of this.modelRefs) {
-      if (!modelNames.includes(ref.type)) {
+      if (viewNames.has(ref.type)) {
+        // A relation carries a foreign key and generated write inputs. A view has
+        // neither, and an `include` of it would have no CreateInput to reference.
         this.issues.push({
           path: `${ref.model.name}.${ref.name}`,
-          message: unknownFieldTypeMessage(ref.type, this.provider, modelNames),
+          message: `"${ref.type}" is a view and cannot be the target of a relation; select from it directly instead`,
+        });
+        continue;
+      }
+      if (!tableNames.includes(ref.type)) {
+        this.issues.push({
+          path: `${ref.model.name}.${ref.name}`,
+          message: unknownFieldTypeMessage(ref.type, this.provider, tableNames),
         });
         continue;
       }
 
       let foreignKey = '', localKey = '', relationName = '';
-      const nameMatch = ref.line.match(/@relation\("(\w+)"/);
-      if (nameMatch) relationName = nameMatch[1];
-      const relationMatch = ref.line.match(/@relation\((?:.*fields:\s*\[(\w+)\],)?\s*(?:.*references:\s*\[(\w+)\],?)?.*\)/);
-      if (relationMatch) {
-        foreignKey = relationMatch[1] || '';
-        localKey = relationMatch[2] || '';
+      const relationArgs = attributeArgs(ref.line, '@relation');
+      if (relationArgs) {
+        // `@relation("name", fields: [userId], references: [id])`; the name is
+        // either positional or spelled `name:`.
+        relationName = relationArgs.match(/^\s*(?:\w+\s*:\s*)?"([^"]+)"/)?.[1] ?? '';
+        foreignKey = (relationArgs.match(/\bfields\s*:\s*\[([^\]]*)\]/)?.[1] ?? '').split(',')[0]?.trim() ?? '';
+        localKey = (relationArgs.match(/\breferences\s*:\s*\[([^\]]*)\]/)?.[1] ?? '').split(',')[0]?.trim() ?? '';
       }
-      const description = ref.line.match(/@description\("(.+)"\)/)?.[1];
+      const description = unquote(attributeArgs(ref.line, '@description'));
       ref.model.relations.push({
         name: ref.name,
         type: ref.type,

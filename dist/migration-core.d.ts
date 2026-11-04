@@ -26,6 +26,10 @@ export interface SchemaModel {
     fields: SchemaField[];
     compoundUniques: Array<string[] | SchemaIndexDefinition>;
     indexes: Array<string[] | SchemaIndexDefinition>;
+    /** A `view` block rather than a table. */
+    isView?: boolean;
+    /** The `@@sql("...")` body; required for a view. */
+    viewSql?: string;
 }
 export interface DbColumn {
     columnName: string;
@@ -39,11 +43,13 @@ export interface DbColumn {
     defaultValue?: string;
 }
 export interface MigrationOp {
-    type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'ADD_UNIQUE' | 'DROP_INDEX' | 'DROP_UNIQUE' | 'DROP_TABLE';
+    type: 'CREATE_TABLE' | 'ADD_COLUMN' | 'DROP_COLUMN' | 'ALTER_COLUMN' | 'ADD_INDEX' | 'ADD_UNIQUE' | 'DROP_INDEX' | 'DROP_UNIQUE' | 'DROP_TABLE' | 'CREATE_VIEW' | 'DROP_VIEW';
     table: string;
     column?: string;
     details?: string;
     sql?: string;
+    /** For `CREATE_VIEW`: the definition to restore on rollback. */
+    previousSql?: string;
     previousSqlType?: string;
     previousNullable?: boolean;
     riskWarnings?: string[];
@@ -61,7 +67,23 @@ export interface MigrationSections {
 }
 export interface AppliedMigrationRef {
     id: string;
+    checksum?: string;
 }
+export interface AppliedMigrationDrift {
+    /** Applied migration files whose contents no longer match the recorded checksum. */
+    changed: string[];
+    /** Applied migration files that are no longer on disk. */
+    missing: string[];
+}
+/**
+ * Compares applied migrations with the files they were applied from.
+ *
+ * `apply` used to look only at the ids, so editing an applied file was invisible
+ * and a fresh database would get different SQL from the one already recorded.
+ * Rollback already refuses a changed checksum; this catches it before the next
+ * migration is applied, where it can still be fixed without a partial history.
+ */
+export declare function verifyAppliedMigrations(applied: readonly AppliedMigrationRef[], readMigration: (id: string) => string | null, checksum: (content: string) => string): AppliedMigrationDrift;
 export interface MigrationCommandOptions {
     preview: boolean;
     rest: string[];
@@ -87,9 +109,17 @@ export declare function buildUniqueConstraintPreflightSql(tableName: string, fie
  */
 export declare function parseSchemaText(text: string, provider?: Provider): SchemaModel[];
 export declare function buildCreateTableSql(model: SchemaModel): string;
+/**
+ * The migration DDL for a view.
+ *
+ * `CREATE OR ALTER` is SQL Server's form; `db:migrate` is SQL Server-only today.
+ * The body is expected to be a single `SELECT` (`@@sql`), so no batch splitting
+ * is needed here — the caller isolates the statement with `GO`.
+ */
+export declare function buildCreateViewSql(model: SchemaModel): string;
 export declare function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, ops: MigrationOp[]): void;
 export declare function generateColumnDiff(model: SchemaModel, dbColumns: DbColumn[], ops: MigrationOp[]): void;
-export declare function generateDiff(schemaModels: SchemaModel[], dbTables: string[], introspectTable: (tableName: string) => Promise<DbColumn[]>, introspectArtifacts?: (tableName: string) => Promise<TableArtifacts>): Promise<MigrationOp[]>;
+export declare function generateDiff(schemaModels: SchemaModel[], dbTables: string[], introspectTable: (tableName: string) => Promise<DbColumn[]>, introspectArtifacts?: (tableName: string) => Promise<TableArtifacts>, dbViews?: string[], introspectViewDefinition?: (viewName: string) => Promise<string | null>): Promise<MigrationOp[]>;
 export declare function buildMigrationFile(timestamp: string, ops: MigrationOp[]): string;
 export declare function buildDownMigrationSql(ops: MigrationOp[]): string;
 export declare function parseMigrationSections(sql: string): MigrationSections;
@@ -99,4 +129,3 @@ export declare function parseRollbackSelection(args: string[], applied: AppliedM
     label: string;
 };
 export declare function parseMigrationCommandOptions(args: string[]): MigrationCommandOptions;
-//# sourceMappingURL=migration-core.d.ts.map

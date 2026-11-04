@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.verifyAppliedMigrations = verifyAppliedMigrations;
 exports.parseSqlType = parseSqlType;
 exports.formatDbColumnSqlType = formatDbColumnSqlType;
 exports.mapDefault = mapDefault;
@@ -12,6 +13,7 @@ exports.buildAddColumnPreflightSql = buildAddColumnPreflightSql;
 exports.buildUniqueConstraintPreflightSql = buildUniqueConstraintPreflightSql;
 exports.parseSchemaText = parseSchemaText;
 exports.buildCreateTableSql = buildCreateTableSql;
+exports.buildCreateViewSql = buildCreateViewSql;
 exports.buildIndexDiff = buildIndexDiff;
 exports.generateColumnDiff = generateColumnDiff;
 exports.generateDiff = generateDiff;
@@ -21,7 +23,33 @@ exports.parseMigrationSections = parseMigrationSections;
 exports.splitSqlBatches = splitSqlBatches;
 exports.parseRollbackSelection = parseRollbackSelection;
 exports.parseMigrationCommandOptions = parseMigrationCommandOptions;
+const attributes_1 = require("./generator/src/attributes");
 const field_types_1 = require("./generator/src/field-types");
+const dialect_1 = require("./generator/src/dialect");
+const view_order_1 = require("./generator/src/view-order");
+/**
+ * Compares applied migrations with the files they were applied from.
+ *
+ * `apply` used to look only at the ids, so editing an applied file was invisible
+ * and a fresh database would get different SQL from the one already recorded.
+ * Rollback already refuses a changed checksum; this catches it before the next
+ * migration is applied, where it can still be fixed without a partial history.
+ */
+function verifyAppliedMigrations(applied, readMigration, checksum) {
+    const drift = { changed: [], missing: [] };
+    for (const migration of applied) {
+        if (!migration.checksum)
+            continue;
+        const content = readMigration(migration.id);
+        if (content === null) {
+            drift.missing.push(migration.id);
+            continue;
+        }
+        if (checksum(content) !== migration.checksum)
+            drift.changed.push(migration.id);
+    }
+    return drift;
+}
 function parseSqlType(raw) {
     const match = raw.match(/^(\w+)/);
     return match?.[1]?.toUpperCase() ?? raw.toUpperCase();
@@ -80,23 +108,18 @@ function schemaIndexName(definition, fallback) {
     return fallback(schemaIndexFields(definition));
 }
 function parseMappedIndex(line, directive) {
-    const match = line.match(new RegExp(`${directive}\\(\\[([\\w,\\s]+)\\]([^)]*)\\)`));
-    if (!match)
+    const parsed = (0, attributes_1.parseIndexDirective)((0, attributes_1.attributeArgs)(line, directive));
+    if (!parsed)
         return null;
-    const fields = (match[1] ?? '').split(',').map(field => field.trim()).filter(Boolean);
-    const nameMatch = match[2]?.match(/\bmap\s*:\s*"([^"]+)"/);
-    const includeMatch = match[2]?.match(/\binclude\s*:\s*\[([\w,\s]+)\]/);
-    const filterMatch = match[2]?.match(/\bfilter\s*:\s*"([^"]+)"/);
-    const optionsMatch = match[2]?.match(/\boptions\s*:\s*"([^"]+)"/);
-    const definition = { fields };
-    if (nameMatch?.[1])
-        definition.name = nameMatch[1];
-    if (includeMatch?.[1])
-        definition.includeFields = includeMatch[1].split(',').map(field => field.trim()).filter(Boolean);
-    if (filterMatch?.[1])
-        definition.filter = filterMatch[1];
-    if (optionsMatch?.[1])
-        definition.options = optionsMatch[1];
+    const definition = { fields: parsed.fields };
+    if (parsed.name)
+        definition.name = parsed.name;
+    if (parsed.includeFields && parsed.includeFields.length > 0)
+        definition.includeFields = parsed.includeFields;
+    if (parsed.filter !== undefined)
+        definition.filter = parsed.filter;
+    if (parsed.options !== undefined)
+        definition.options = parsed.options;
     return definition;
 }
 function quoteTableName(raw) {
@@ -269,9 +292,10 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
     const models = [];
     const typeIssues = [];
     const modelRefs = [];
+    const viewRefs = [];
     /** `@@schema` per model, applied after the model is read rather than mid-loop. */
     const schemas = new Map();
-    const lines = text.split('\n');
+    const lines = (0, attributes_1.splitSchemaLines)(text);
     let current = null;
     for (let line of lines) {
         line = line.trim();
@@ -290,20 +314,43 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
             models.push(current);
             continue;
         }
+        const viewMatch = line.match(/^view\s+(\w+)\s*\{/);
+        if (viewMatch) {
+            const viewName = viewMatch[1] ?? 'View';
+            current = {
+                name: viewName,
+                tableName: viewName.toLowerCase() + 's',
+                fields: [],
+                compoundUniques: [],
+                indexes: [],
+                isView: true,
+            };
+            models.push(current);
+            continue;
+        }
         if (line === '}') {
             current = null;
             continue;
         }
         if (!current)
             continue;
+        if (line.startsWith('@@sql') || line.startsWith('@@definition')) {
+            if (current.isView) {
+                const attribute = line.startsWith('@@sql') ? '@@sql' : '@@definition';
+                const sql = (0, attributes_1.unquote)((0, attributes_1.attributeArgs)(line, attribute));
+                if (sql !== undefined)
+                    current.viewSql = sql.trim();
+            }
+            continue;
+        }
         if (line.startsWith('@@map')) {
             // Just the table name. A schema comes from `@@schema` alone, because a mapped
             // name may legitimately contain a dot: `@@map("reports.daily")` is one table
             // whose name has a dot in it, not a table called `daily` in a schema called
             // `reports`.
-            const m = line.match(/@@map\("(.+)"\)/);
-            if (m?.[1])
-                current.tableName = m[1];
+            const mapped = (0, attributes_1.unquote)((0, attributes_1.attributeArgs)(line, '@@map'));
+            if (mapped)
+                current.tableName = mapped;
             continue;
         }
         if (line.startsWith('@@schema')) {
@@ -311,18 +358,22 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
             // honoured it, so a migration created the table in the connection's default
             // schema and the client then read the one the schema file named. Composed in
             // once the whole model has been read, below.
-            const m = line.match(/@@schema\("(.*)"\)/);
-            if (m !== null)
-                schemas.set(current, m[1]?.trim() ?? '');
+            const declared = (0, attributes_1.unquote)((0, attributes_1.attributeArgs)(line, '@@schema'));
+            if (declared !== undefined)
+                schemas.set(current, declared.trim());
             continue;
         }
         if (line.startsWith('@@unique')) {
+            if (current.isView)
+                continue;
             const parsed = parseMappedIndex(line, '@@unique');
             if (parsed)
                 current.compoundUniques.push(parsed);
             continue;
         }
         if (line.startsWith('@@index')) {
+            if (current.isView)
+                continue;
             const parsed = parseMappedIndex(line, '@@index');
             if (parsed)
                 current.indexes.push(parsed);
@@ -334,21 +385,27 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
         if (!head)
             continue;
         if (!(0, field_types_1.resolveFieldType)(head.type, provider)) {
-            modelRefs.push({ model: current.name, field: head.name, type: head.type });
+            if (current.isView) {
+                viewRefs.push({ view: current.name, field: head.name, type: head.type });
+            }
+            else {
+                modelRefs.push({ model: current.name, field: head.name, type: head.type });
+            }
             continue;
         }
+        const uniqueArgs = (0, attributes_1.attributeArgs)(line, '@unique');
         current.fields.push({
             name: head.name,
             sqlType: head.type.toUpperCase(),
             isOptional: head.isOptional,
-            isId: line.includes('@id'),
-            isUnique: line.includes('@unique'),
-            uniqueName: line.match(/@unique\([^)]*\bmap\s*:\s*"([^"]+)"/)?.[1],
+            isId: (0, attributes_1.hasAttribute)(line, '@id'),
+            isUnique: (0, attributes_1.hasAttribute)(line, '@unique'),
+            uniqueName: uniqueArgs ? (0, attributes_1.stringOption)(uniqueArgs, 'map') : undefined,
             // `@updatedAt` is `now()` under another name, and db:push treats it as such.
             // Without this here a stamp column looked like it had no default and every
             // diff wanted to add one.
-            defaultValue: line.match(/@default\((.*)\)/)?.[1]
-                ?? (line.includes('@updatedAt') ? 'now()' : undefined),
+            defaultValue: (0, attributes_1.attributeArgs)(line, '@default')
+                ?? ((0, attributes_1.hasAttribute)(line, '@updatedAt') ? 'now()' : undefined),
         });
     }
     // `dbo` stays implicit: an unqualified model produces the SQL it always has, and a
@@ -359,12 +416,32 @@ function parseSchemaText(text, provider = field_types_1.DEFAULT_PROVIDER) {
             model.tableName = `${schema}.${model.tableName}`;
     }
     const modelNames = models.map((model) => model.name);
+    const tableNames = models.filter((model) => !model.isView).map((model) => model.name);
+    const viewNames = new Set(models.filter((model) => model.isView).map((model) => model.name));
     for (const ref of modelRefs) {
-        if (!modelNames.includes(ref.type)) {
+        if (viewNames.has(ref.type)) {
             typeIssues.push({
                 path: `${ref.model}.${ref.field}`,
-                message: (0, field_types_1.unknownFieldTypeMessage)(ref.type, provider, modelNames),
+                message: `"${ref.type}" is a view and cannot be the target of a relation; select from it directly instead`,
             });
+            continue;
+        }
+        if (!tableNames.includes(ref.type)) {
+            typeIssues.push({
+                path: `${ref.model}.${ref.field}`,
+                message: (0, field_types_1.unknownFieldTypeMessage)(ref.type, provider, tableNames),
+            });
+        }
+    }
+    for (const ref of viewRefs) {
+        typeIssues.push({
+            path: `${ref.view}.${ref.field}`,
+            message: (0, field_types_1.unknownFieldTypeMessage)(ref.type, provider, modelNames),
+        });
+    }
+    for (const model of models) {
+        if (model.isView && !model.viewSql?.trim()) {
+            typeIssues.push({ path: model.name, message: 'a view needs @@sql("SELECT ...")' });
         }
     }
     if (typeIssues.length > 0)
@@ -376,12 +453,16 @@ function buildCreateTableSql(model) {
         let def = `[${f.name}] ${f.sqlType}`;
         if (f.isId)
             def += ' PRIMARY KEY';
+        // A default does not make a column nullable. Skipping NOT NULL here created a
+        // nullable column that the next diff then wanted to alter back.
+        if (!f.isOptional && !f.isId)
+            def += ' NOT NULL';
         if (f.defaultValue)
             def += ` ${mapDefault(f.defaultValue)}`;
-        if (!f.isOptional && !f.defaultValue && !f.isId)
-            def += ' NOT NULL';
+        // Always named: an unnamed UNIQUE gets a database-generated name, which the
+        // next diff cannot match against `UQ_<table>_<field>` and tries to add again.
         if (f.isUnique && !f.isId)
-            def += f.uniqueName ? ` CONSTRAINT [${f.uniqueName}] UNIQUE` : ' UNIQUE';
+            def += ` CONSTRAINT [${f.uniqueName ?? fieldUniqueConstraintName(model, f)}] UNIQUE`;
         return def;
     });
     for (let idx = 0; idx < model.compoundUniques.length; idx++) {
@@ -394,6 +475,22 @@ function buildCreateTableSql(model) {
         colDefs.push(`CONSTRAINT [${constraintName}] UNIQUE (${fieldsStr})`);
     }
     return `CREATE TABLE ${quoteTableName(model.tableName)} (\n  ${colDefs.join(',\n  ')}\n)`;
+}
+/**
+ * The migration DDL for a view.
+ *
+ * `CREATE OR ALTER` is SQL Server's form; `db:migrate` is SQL Server-only today.
+ * The body is expected to be a single `SELECT` (`@@sql`), so no batch splitting
+ * is needed here — the caller isolates the statement with `GO`.
+ */
+function buildCreateViewSql(model) {
+    if (!model.viewSql?.trim()) {
+        throw new Error(`View "${model.name}" has no @@sql("SELECT ...") definition.`);
+    }
+    // A pasted catalog definition keeps its `CREATE VIEW` header; the header this
+    // function writes is the one that names the migrated object.
+    const body = (0, dialect_1.viewSqlBody)(model.viewSql);
+    return `CREATE OR ALTER VIEW ${quoteTableName(model.tableName)} AS\n${body}`;
 }
 function buildIndexDiff(model, artifacts, ops) {
     const existingIndexes = new Set((artifacts.indexes || []).map(name => name.toLowerCase()));
@@ -493,12 +590,12 @@ function generateColumnDiff(model, dbColumns, ops) {
             let def = `[${f.name}] ${f.sqlType}`;
             if (f.isId)
                 def += ' PRIMARY KEY';
+            if (!f.isOptional && !f.isId)
+                def += ' NOT NULL';
             if (f.defaultValue)
                 def += ` ${mapDefault(f.defaultValue)}`;
-            if (!f.isOptional && !f.defaultValue && !f.isId)
-                def += ' NOT NULL';
             if (f.isUnique && !f.isId)
-                def += f.uniqueName ? ` CONSTRAINT [${f.uniqueName}] UNIQUE` : ' UNIQUE';
+                def += ` CONSTRAINT [${f.uniqueName ?? fieldUniqueConstraintName(model, f)}] UNIQUE`;
             ops.push({
                 type: 'ADD_COLUMN',
                 table: model.tableName,
@@ -546,11 +643,19 @@ function generateColumnDiff(model, dbColumns, ops) {
         }
     }
 }
-async function generateDiff(schemaModels, dbTables, introspectTable, introspectArtifacts) {
+async function generateDiff(schemaModels, dbTables, introspectTable, introspectArtifacts, dbViews = [], introspectViewDefinition) {
     const ops = [];
+    const tableModels = schemaModels.filter(model => !model.isView);
+    // A view may read another view. The migration applies its operations in
+    // order, so the referenced view has to be created first.
+    const viewModels = (0, view_order_1.orderViewsByDependency)(schemaModels.filter(model => model.isView).map(model => ({
+        model,
+        names: [model.tableName, model.name],
+        sql: model.viewSql ?? '',
+    }))).ordered.map(entry => entry.model);
     const dbTableIdentities = new Set(dbTables.map(tableIdentityName));
-    const schemaTableNames = new Set(schemaModels.map(m => tableIdentityName(m.tableName)));
-    for (const model of schemaModels) {
+    const schemaTableNames = new Set(tableModels.map(m => tableIdentityName(m.tableName)));
+    for (const model of tableModels) {
         if (!dbTableIdentities.has(tableIdentityName(model.tableName))) {
             ops.push({ type: 'CREATE_TABLE', table: model.tableName, sql: buildCreateTableSql(model) });
             buildIndexDiff(model, {
@@ -562,12 +667,23 @@ async function generateDiff(schemaModels, dbTables, introspectTable, introspectA
             }, ops);
         }
     }
-    for (const model of schemaModels) {
+    for (const model of tableModels) {
         if (dbTableIdentities.has(tableIdentityName(model.tableName))) {
             const dbColumns = await introspectTable(model.tableName);
             generateColumnDiff(model, dbColumns, ops);
             if (introspectArtifacts) {
-                buildIndexDiff(model, await introspectArtifacts(model.tableName), ops);
+                const artifacts = await introspectArtifacts(model.tableName);
+                // A new `@unique` column already carries its UNIQUE in the ADD COLUMN
+                // statement. Without this, buildIndexDiff saw the constraint missing from
+                // the catalog and emitted a second, identically named one, failing on apply.
+                const existingColumns = new Set(dbColumns.map(column => column.columnName.toLowerCase()));
+                const addedUniqueNames = model.fields
+                    .filter(field => field.isUnique && !field.isId && !existingColumns.has(field.name.toLowerCase()))
+                    .map(field => field.uniqueName ?? fieldUniqueConstraintName(model, field));
+                buildIndexDiff(model, {
+                    indexes: artifacts.indexes ?? [],
+                    uniqueConstraints: [...(artifacts.uniqueConstraints ?? []), ...addedUniqueNames],
+                }, ops);
             }
         }
     }
@@ -578,6 +694,42 @@ async function generateDiff(schemaModels, dbTables, introspectTable, introspectA
                 table: tableName,
                 details: 'Table not in schema',
                 sql: `-- DROP TABLE ${quoteTableName(tableName)}`,
+            });
+        }
+    }
+    // Views are compared by their SQL body rather than by name alone: a view whose
+    // query changed has to be replaced, and a catalog that reformats whitespace must
+    // not make every diff think it did.
+    const dbViewIdentities = new Map(dbViews.map(name => [tableIdentityName(name), name]));
+    const schemaViewNames = new Set(viewModels.map(view => tableIdentityName(view.tableName)));
+    for (const view of viewModels) {
+        const existingName = dbViewIdentities.get(tableIdentityName(view.tableName));
+        const existingDefinition = existingName !== undefined && introspectViewDefinition
+            ? await introspectViewDefinition(existingName)
+            : null;
+        if (existingName !== undefined && (0, dialect_1.normalizeViewSql)(existingDefinition) === (0, dialect_1.normalizeViewSql)(view.viewSql)) {
+            continue;
+        }
+        const previousSql = existingDefinition
+            ? /^\s*CREATE\s/i.test(existingDefinition)
+                ? existingDefinition.trim()
+                : `CREATE OR ALTER VIEW ${quoteTableName(view.tableName)} AS\n${existingDefinition.trim().replace(/;+\s*$/, '')}`
+            : undefined;
+        ops.push({
+            type: 'CREATE_VIEW',
+            table: view.tableName,
+            details: existingName !== undefined ? 'View definition changed' : 'View not in database',
+            sql: buildCreateViewSql(view),
+            ...(previousSql !== undefined ? { previousSql } : {}),
+        });
+    }
+    for (const viewName of dbViews) {
+        if (!schemaViewNames.has(tableIdentityName(viewName))) {
+            ops.push({
+                type: 'DROP_VIEW',
+                table: viewName,
+                details: 'View not in schema',
+                sql: `-- DROP VIEW ${quoteTableName(viewName)}`,
             });
         }
     }
@@ -602,12 +754,20 @@ function buildMigrationFile(timestamp, ops) {
     lines.push('-- migrate:up');
     lines.push('');
     for (const op of ops) {
+        // `CREATE VIEW` has to be the first statement in a T-SQL batch, so it is fenced
+        // with GO. Without this, a migration that creates a table and then a view fails
+        // with "'CREATE VIEW' must be the first statement in a query batch".
+        const lastMeaningfulLine = [...lines].reverse().find(line => line.trim() !== '');
+        if (op.type === 'CREATE_VIEW' && lastMeaningfulLine !== 'GO')
+            lines.push('GO');
         lines.push(`-- ${op.type}: ${op.table}`);
         for (const warning of op.riskWarnings || []) {
             lines.push(`-- WARNING: ${warning}`);
         }
         if (op.sql)
             lines.push(op.sql);
+        if (op.type === 'CREATE_VIEW')
+            lines.push('GO');
         lines.push('');
     }
     lines.push('-- migrate:down');
@@ -627,6 +787,17 @@ function buildDownMigrationSql(ops) {
         const table = quoteTableName(op.table);
         if (op.type === 'CREATE_TABLE') {
             lines.push(`DROP TABLE ${table}`);
+            continue;
+        }
+        if (op.type === 'CREATE_VIEW') {
+            // A replaced view is restored to its old definition; a newly created one is
+            // simply dropped. `CREATE OR ALTER` is fenced by the GO this function joins.
+            lines.push(op.previousSql ? op.previousSql.trim() : `DROP VIEW ${table}`);
+            continue;
+        }
+        if (op.type === 'DROP_VIEW') {
+            // Its up SQL is a commented `DROP VIEW`; dropping a view is never automatic,
+            // so there is nothing to undo here.
             continue;
         }
         if (op.type === 'ADD_COLUMN' && op.column) {
@@ -730,4 +901,3 @@ function parseMigrationCommandOptions(args) {
     }
     return { preview, rest };
 }
-//# sourceMappingURL=migration-core.js.map

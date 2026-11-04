@@ -125,8 +125,8 @@ export declare function resolveConnectionString(config: An5OrmConfig, env?: EnvL
  *
  * Falls back to SQL Server when the scheme is unknown — it is the default
  * provider, and ADO-style strings (`Server=...;Database=...`) have no scheme to
- * read. `sqlite://`, a bare path ending in `.sqlite`, `.sqlite3` or `.db` — the same
- * list `An5Adapter` uses.
+ * read. `:memory:`, any `sqlite:` URI (`sqlite://`, `sqlite::memory:`) and a bare
+ * path ending in `.sqlite`, `.sqlite3` or `.db` — the same list `An5Adapter` uses.
  */
 export declare function detectProvider(connectionString: string | undefined | null): Provider;
 /**

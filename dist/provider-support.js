@@ -47,4 +47,3 @@ function sqlServerOnlyError(provider, command) {
         '   Use a SQL Server connection string, or generate and apply the schema with ' +
         `${field_types_1.PROVIDER_LABELS[provider]}'s own tooling.`);
 }
-//# sourceMappingURL=provider-support.js.map

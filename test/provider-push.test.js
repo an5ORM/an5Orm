@@ -23,7 +23,7 @@ const { test } = require('node:test');
 const distSrc = path.join(__dirname, '..', 'dist', 'generator', 'src');
 assert.ok(fs.existsSync(path.join(distSrc, 'dialect.js')), `Expected built dialect at ${distSrc}`);
 
-const { dialectFor, defaultClause } = require(path.join(distSrc, 'dialect.js'));
+const { dialectFor, defaultClause, normalizeViewSql } = require(path.join(distSrc, 'dialect.js'));
 
 const column = (over = {}) => ({
   name: 'email',
@@ -251,6 +251,101 @@ test('CREATE TABLE and CREATE INDEX keep their shape across providers', () => {
   assert.equal(sqlite.createUniqueIndex('[UQ_w]', '[widgets]', ['[a]', '[b]']), 'CREATE UNIQUE INDEX [UQ_w] ON [widgets] ([a], [b])');
 });
 
+test('@@index include, filter and options reach the providers that support them', () => {
+  // db:migrate already emitted these for SQL Server; db:push used to drop them, so
+  // a pushed database was left without the covering/partial index the schema asked
+  // for. Each provider gets the subset of the clause its engine understands.
+  const options = {
+    includeFields: ['[email]'],
+    filter: '[age] > 0',
+    options: 'FILLFACTOR = 90, ONLINE = ON',
+  };
+  assert.equal(
+    dialectFor('mssql').createIndex('[IX_w]', '[widgets]', ['[age]'], options),
+    'CREATE INDEX [IX_w] ON [widgets] ([age]) INCLUDE ([email]) WHERE [age] > 0 WITH (FILLFACTOR = 90, ONLINE = ON)',
+  );
+  assert.equal(
+    dialectFor('postgres').createIndex('"IX_w"', '"widgets"', ['"age"'], {
+      includeFields: ['"email"'],
+      filter: 'age > 0',
+      options: 'FILLFACTOR = 90',
+    }),
+    'CREATE INDEX "IX_w" ON "widgets" ("age") INCLUDE ("email") WHERE age > 0',
+  );
+  // SQLite has partial indexes but no covering indexes or WITH options.
+  assert.equal(
+    dialectFor('sqlite').createIndex('[IX_w]', '[widgets]', ['[age]'], { includeFields: ['[email]'], filter: 'age > 0' }),
+    'CREATE INDEX [IX_w] ON [widgets] ([age]) WHERE age > 0',
+  );
+  // MySQL has neither, so the base index is still created rather than failing.
+  assert.equal(
+    dialectFor('mysql').createIndex('`IX_w`', '`widgets`', ['`age`'], options),
+    'CREATE INDEX `IX_w` ON `widgets` (`age`)',
+  );
+});
+
+// ─── Views ───────────────────────────────────────────────────────────────────
+
+test('each provider creates a view with the syntax it owns', () => {
+  assert.equal(
+    dialectFor('mssql').createView('[dbo].[active_widgets]', 'SELECT id FROM widgets'),
+    'CREATE OR ALTER VIEW [dbo].[active_widgets] AS\nSELECT id FROM widgets',
+  );
+  assert.equal(
+    dialectFor('postgres').createView('"active_widgets"', 'SELECT id FROM widgets'),
+    'CREATE OR REPLACE VIEW "active_widgets" AS\nSELECT id FROM widgets',
+  );
+  assert.equal(
+    dialectFor('mysql').createView('`active_widgets`', 'SELECT id FROM widgets'),
+    'CREATE OR REPLACE VIEW `active_widgets` AS\nSELECT id FROM widgets',
+  );
+  // SQLite has neither CREATE OR REPLACE nor OR ALTER, so push drops first.
+  assert.equal(
+    dialectFor('sqlite').createView('[active_widgets]', 'SELECT id FROM widgets'),
+    'CREATE VIEW [active_widgets] AS\nSELECT id FROM widgets',
+  );
+  assert.equal(dialectFor('sqlite').dropView('[active_widgets]'), 'DROP VIEW IF EXISTS [active_widgets]');
+  assert.equal(dialectFor('sqlite').supportsCreateOrReplaceView, false);
+  for (const provider of ['mssql', 'postgres', 'mysql']) {
+    assert.equal(dialectFor(provider).supportsCreateOrReplaceView, true, provider);
+  }
+  // A trailing semicolon would otherwise be followed by the batch separator.
+  assert.equal(dialectFor('mssql').createView('[v]', 'SELECT 1;'), 'CREATE OR ALTER VIEW [v] AS\nSELECT 1');
+  // A definition pasted from a catalog keeps its own header; only the schema's
+  // name may appear in the statement push sends.
+  assert.equal(
+    dialectFor('mssql').createView('[v]', 'CREATE VIEW [other] AS SELECT 1;'),
+    'CREATE OR ALTER VIEW [v] AS\nSELECT 1',
+  );
+});
+
+test('view lookups use each provider catalog and compare normalized definitions', () => {
+  assert.equal(
+    dialectFor('mssql').viewExists('dbo.active_widgets'),
+    "SELECT name FROM sys.views WHERE object_id = OBJECT_ID('dbo.active_widgets')",
+  );
+  assert.match(dialectFor('mssql').viewDefinition('dbo.active_widgets'), /OBJECT_DEFINITION/);
+  assert.match(dialectFor('postgres').viewExists('widgets'), /pg_views/);
+  assert.match(dialectFor('postgres').viewDefinition('widgets'), /pg_views/);
+  assert.match(dialectFor('mysql').viewExists('widgets'), /information_schema\.views/);
+  assert.match(dialectFor('mysql').viewDefinition('widgets'), /view_definition/);
+  assert.equal(
+    dialectFor('sqlite').viewExists('active_widgets'),
+    "SELECT name FROM sqlite_master WHERE type = 'view' AND name = 'active_widgets'",
+  );
+  assert.match(dialectFor('sqlite').viewDefinition('active_widgets'), /type = 'view'/);
+
+  // A catalog may return the full statement; the schema keeps only the SELECT.
+  assert.equal(
+    normalizeViewSql('CREATE VIEW [active_widgets] AS\n  SELECT id FROM widgets;'),
+    normalizeViewSql('select   id   from widgets'),
+  );
+  assert.notEqual(
+    normalizeViewSql('CREATE VIEW [v] AS SELECT id FROM widgets'),
+    normalizeViewSql('SELECT id FROM widgets WHERE active = 1'),
+  );
+});
+
 // ─── Google Sheets ───────────────────────────────────────────────────────────
 
 test('Google Sheets refuses DDL instead of sending SQL it cannot run', () => {
@@ -265,15 +360,17 @@ test('Google Sheets refuses DDL instead of sending SQL it cannot run', () => {
 
 test('every provider implements the whole dialect surface', () => {
   const asked = [
-    'quote', 'quoteTable', 'tableExists', 'columnExists', 'uniqueConstraintExists',
-    'indexExists', 'columnDefinition', 'createTable', 'createIndex',
-    'createUniqueIndex', 'addColumn', 'addUniqueConstraint',
+    'quote', 'quoteTable', 'tableExists', 'viewExists', 'viewDefinition', 'columnExists',
+    'uniqueConstraintExists', 'indexExists', 'columnDefinition', 'createTable',
+    'createView', 'dropView', 'createIndex', 'createUniqueIndex', 'addColumn',
+    'addUniqueConstraint',
   ];
   for (const provider of ['mssql', 'postgres', 'mysql', 'sqlite', 'googlesheets']) {
     const dialect = dialectFor(provider);
     for (const name of asked) {
       assert.equal(typeof dialect[name], 'function', `${provider} is missing ${name}`);
     }
+    assert.equal(typeof dialect.supportsCreateOrReplaceView, 'boolean', `${provider} is missing supportsCreateOrReplaceView`);
   }
 });
 
@@ -406,6 +503,43 @@ test('a connection string is read the same way whatever its case', () => {
   assert.equal(detectProvider('SQLITE://./app.db'), 'sqlite');
   assert.equal(detectProvider('./data/app.sqlite3'), 'sqlite');
   assert.equal(dialectFor(detectProvider('./data/app.sqlite3')).provider, 'sqlite');
+});
+
+test('SQLite is detected the same way the adapter detects it', () => {
+  const { detectProvider } = require(path.join(distSrc, 'config.js'));
+  // An in-memory database has no suffix and no path, and `sqlite:name` is the
+  // adapter's SQLite prefix even without a `.db` extension. Missing either made
+  // the ORM validate the schema against SQL Server while the adapter ran SQLite.
+  for (const connection of [':memory:', 'sqlite::memory:', 'sqlite:app', 'sqlite://']) {
+    assert.equal(detectProvider(connection), 'sqlite', connection);
+  }
+});
+
+test('push names an inline unique the way db:migrate expects', () => {
+  const { parsePushSchema } = require(path.join(distSrc, 'push-schema.js'));
+  const { models, issues } = parsePushSchema(
+    `model Widget {
+       id    VARCHAR(8)   @id
+       email NVARCHAR(255) @unique(map: "UQ_app_widgets_email")
+       code  NVARCHAR(8)  @unique
+     }`,
+    'mssql',
+  );
+  assert.deepEqual(issues, []);
+
+  const dialect = dialectFor('mssql');
+  assert.equal(
+    dialect.columnDefinition(models[0].fields[1]),
+    '[email] NVARCHAR(255) NOT NULL CONSTRAINT [UQ_app_widgets_email] UNIQUE',
+  );
+  assert.equal(
+    dialect.columnDefinition(models[0].fields[2]),
+    '[code] NVARCHAR(8) NOT NULL CONSTRAINT [UQ_widgets_code] UNIQUE',
+  );
+  assert.equal(
+    dialect.addColumn('[widgets]', models[0].fields[2]),
+    'ALTER TABLE [widgets] ADD [code] NVARCHAR(8) NOT NULL CONSTRAINT [UQ_widgets_code] UNIQUE',
+  );
 });
 
 test('no provider emits T-SQL syntax it does not own', () => {

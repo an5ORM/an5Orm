@@ -143,27 +143,28 @@ namespace An5Orm
       }
       content += `    }\n\n`;
 
-      // CreateInput
-      content += `    /// <summary>Typed data for creating a new ${name} record.</summary>\n`;
-      content += `    public class ${name}CreateInput\n    {\n`;
-      for (const f of model.fields) {
-        if (!f.isId) {
-          const ct = this.mapType(f, f.isOptional || f.hasDefault);
-          content += `        public ${ct} ${this.capitalize(f.name)} { get; set; }\n`;
+      // Create / update / delete inputs describe writes; a view has none.
+      if (!model.isView) {
+        content += `    /// <summary>Typed data for creating a new ${name} record.</summary>\n`;
+        content += `    public class ${name}CreateInput\n    {\n`;
+        for (const f of model.fields) {
+          if (!f.isId) {
+            const ct = this.mapType(f, f.isOptional || f.hasDefault);
+            content += `        public ${ct} ${this.capitalize(f.name)} { get; set; }\n`;
+          }
         }
-      }
-      content += `    }\n\n`;
+        content += `    }\n\n`;
 
-      // UpdateInput
-      content += `    /// <summary>Typed data for updating an existing ${name} record.</summary>\n`;
-      content += `    public class ${name}UpdateInput\n    {\n`;
-      for (const f of model.fields) {
-        if (!f.isId) {
-          const ut = this.mapType(f, true); // always nullable for update
-          content += `        public ${ut} ${this.capitalize(f.name)} { get; set; }\n`;
+        content += `    /// <summary>Typed data for updating an existing ${name} record.</summary>\n`;
+        content += `    public class ${name}UpdateInput\n    {\n`;
+        for (const f of model.fields) {
+          if (!f.isId) {
+            const ut = this.mapType(f, true); // always nullable for update
+            content += `        public ${ut} ${this.capitalize(f.name)} { get; set; }\n`;
+          }
         }
+        content += `    }\n\n`;
       }
-      content += `    }\n\n`;
 
       // FindManyArgs
       content += `    /// <summary>ORM-style args for ${name}.FindMany().</summary>\n`;
@@ -190,10 +191,12 @@ namespace An5Orm
       content += `    }\n\n`;
 
       // DeleteManyArgs
-      content += `    /// <summary>ORM-style args for ${name}.DeleteMany().</summary>\n`;
-      content += `    public class ${name}DeleteManyArgs\n    {\n`;
-      content += `        public ${name}WhereInput Where { get; set; }\n`;
-      content += `    }\n\n`;
+      if (!model.isView) {
+        content += `    /// <summary>ORM-style args for ${name}.DeleteMany().</summary>\n`;
+        content += `    public class ${name}DeleteManyArgs\n    {\n`;
+        content += `        public ${name}WhereInput Where { get; set; }\n`;
+        content += `    }\n\n`;
+      }
 
       // CountArgs
       content += `    /// <summary>ORM-style args for ${name}.Count().</summary>\n`;
@@ -494,8 +497,9 @@ namespace An5Orm
 
     for (const model of models) {
       const name = this.capitalize(model.name);
-      content += `        public TableClient<${model.name}> ${name}s => new TableClient<${model.name}>(ConnectionString, "${dottedTableName(model)}");\n`;
-      content += `        public TableClient<${model.name}> ${name} => ${name}s;\n`;
+      const client = model.isView ? 'ViewClient' : 'TableClient';
+      content += `        public ${client}<${model.name}> ${name}s => new ${client}<${model.name}>(ConnectionString, "${dottedTableName(model)}");\n`;
+      content += `        public ${client}<${model.name}> ${name} => ${name}s;\n`;
     }
 
     content += `    }
@@ -1189,6 +1193,46 @@ namespace An5Orm
             }
             return false;
         }
+    }
+
+    /// <summary>
+    /// Read-only client for a database view.
+    ///
+    /// It exposes the same read methods as <see cref="TableClient{T}"/> and no
+    /// write methods, so attempting to write a view fails at compile time rather
+    /// than in the database. The view's rows still map onto the generated entity
+    /// class, which is why the queries delegate instead of being duplicated.
+    /// </summary>
+    public class ViewClient<T> where T : new()
+    {
+        private readonly TableClient<T> _table;
+
+        public ViewClient(string connectionString, string viewName)
+        {
+            _table = new TableClient<T>(connectionString, viewName);
+        }
+
+        public string ConnectionString => _table.ConnectionString;
+        public string ViewName => _table.TableName;
+        public An5Dialect Dialect => _table.Dialect;
+
+        public List<T> QueryRaw(string query, Dictionary<string, object> parameters = null)
+            => _table.QueryRaw(query, parameters);
+
+        public List<T> FindMany(string whereClause = null, Dictionary<string, object> parameters = null)
+            => _table.FindMany(whereClause, parameters);
+
+        public T FindFirst(string whereClause = null, Dictionary<string, object> parameters = null)
+            => _table.FindFirst(whereClause, parameters);
+
+        public T FindUnique(object id)
+            => _table.FindUnique(id);
+
+        public int Count(string whereClause = null, Dictionary<string, object> parameters = null)
+            => _table.Count(whereClause, parameters);
+
+        public List<T> VectorSearch(List<double> vector, int take = 10, string whereClause = null, Dictionary<string, object> parameters = null, string vectorField = "Embedding", string distanceMetric = "cosine")
+            => _table.VectorSearch(vector, take, whereClause, parameters, vectorField, distanceMetric);
     }
 }
 `;

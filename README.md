@@ -69,37 +69,57 @@ DATABASE_URL=sqlserver://localhost:1433;database=mydb;user=sa;password=Secret123
 
 ### CLI Commands
 
+You can run AN5 commands directly using `npx @an5/orm` (or `npx an5`):
+
 ```bash
 # Generate client code from .an5 schemas
-npm run generate
+npx @an5/orm generate
+# or: npx an5 generate
 
 # Push schema directly to database
-npm run db:push
+npx @an5/orm db:push
 
 # Pull database schema into .an5 files
-npm run db:pull
+npx @an5/orm db:pull
 
 # Check schema diff
-npm run db:migrate diff
+npx @an5/orm db:migrate diff
 
 # Generate new migration script
-npm run db:migrate:generate
+npx @an5/orm db:migrate generate
 
 # Apply pending migrations
-npm run db:migrate:apply
+npx @an5/orm db:migrate apply
 
 # Rollback last migration
-npm run db:migrate:rollback
+npx @an5/orm db:migrate rollback
 
 # View migration status
-npm run db:migrate:status
+npx @an5/orm db:migrate status
 
 # Run database seed script
-npm run db:seed
+npx @an5/orm db:seed
 
-# Clean up database tables
-npm run db:cleanup
+# Clean up extra tables and views
+npx @an5/orm db:cleanup
 ```
+
+You can also add these commands to your project's `package.json` scripts:
+
+```json
+{
+  "scripts": {
+    "generate": "an5 generate",
+    "db:push": "an5 db:push",
+    "db:pull": "an5 db:pull",
+    "db:migrate": "an5 db:migrate",
+    "db:seed": "an5 db:seed",
+    "db:cleanup": "an5 db:cleanup"
+  }
+}
+```
+
+Then run them with `npm run generate`, `npm run db:push`, etc.
 
 ## Runtime Database Usage (via `@an5/adapters`)
 
@@ -166,6 +186,49 @@ model Order {
   user      User           @relation(fields: [userId], references: [id])
 
   @@map("orders")
+}
+```
+
+Views are declared with the same field syntax, so generated clients can type their
+rows, plus the `SELECT` that defines them. A view is read-only: writes are not
+generated, and `db:push`/`db:migrate` create the view after the tables it reads —
+and after any view it reads. `db:pull` writes a database view back as a `view`
+block, with its columns and the SQL body from the catalog. `db:cleanup` drops
+views that are no longer in the schema, before the tables they might read.
+
+`@@sql` holds the `SELECT` body; a full `CREATE VIEW ... AS ...` statement pasted
+from a catalog is reduced to that body, so its header and object name are not
+repeated in the generated DDL.
+
+Generated clients expose a view through a read-only client — `ViewClient` in
+TypeScript, Python, .NET, Java and Kotlin, `ViewModelClient` in Swift, and
+`ViewClient[T]` in Go and Rust. Those types have the read methods only, so a write
+to a view is rejected at compile time rather than by the database.
+
+```an5
+view ActiveUser {
+  id    NVARCHAR(1000)
+  email NVARCHAR(255)
+
+  @@map("active_users")
+  @@sql("SELECT id, email FROM users WHERE active = 1")
+}
+```
+
+A longer query can be written over several lines with triple quotes; the indentation
+shared by the SQL lines is removed before it reaches the database:
+
+```an5
+view ActiveUser {
+  id    NVARCHAR(1000)
+  email NVARCHAR(255)
+
+  @@map("active_users")
+  @@sql("""
+    SELECT id, email
+    FROM users
+    WHERE active = 1
+  """)
 }
 ```
 

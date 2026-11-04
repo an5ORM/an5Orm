@@ -33,6 +33,8 @@ const { JavaGenerator } = require(path.join(distSrc, 'java-generator.js'));
 const { KotlinGenerator } = require(path.join(distSrc, 'kotlin-generator.js'));
 const { SwiftGenerator } = require(path.join(distSrc, 'swift-generator.js'));
 const { GolangGenerator } = require(path.join(distSrc, 'golang-generator.js'));
+const { DotnetGenerator } = require(path.join(distSrc, 'dotnet-generator.js'));
+const { RustGenerator } = require(path.join(distSrc, 'rust-generator.js'));
 const { bracketedTableName, dottedTableName } = require(path.join(distSrc, 'types.js'));
 
 let passed = 0;
@@ -295,6 +297,234 @@ model Asset {
   assertIncludes(generated, 'payload: Buffer;');
   assertIncludes(generated, 'views: number | bigint;');
   assert.ok(!/^\s*(embedding|payload|views): any/m.test(generated), 'no column may fall back to any');
+});
+
+test("a view block generates read-only TypeScript types and metadata", async () => {
+  const outDir = path.join(tmpRoot, 'ts-view');
+  const models = await parse('view-ts', `
+model Widget {
+  id   NVARCHAR(64) @id
+  name NVARCHAR(80)
+  @@map("widgets")
+}
+
+view WidgetLabel {
+  id   NVARCHAR(64)
+  name NVARCHAR(80)
+  @@map("widget_labels")
+  @@sql("SELECT id, name FROM widgets")
+}
+`);
+
+  const view = models.find((model) => model.name === 'WidgetLabel');
+  assertEq(view.isView, true);
+  assertEq(view.viewSql, 'SELECT id, name FROM widgets');
+  assertEq(view.relations.length, 0);
+
+  new CodeGenerator(path.join(outDir, 'typescript')).generate(models);
+  const generated = fs.readFileSync(path.join(outDir, 'typescript', 'WidgetLabel.ts'), 'utf8');
+  assertIncludes(generated, 'WidgetLabelViewClient = ViewClient<');
+  assert.ok(!generated.includes('CreateInput'), 'a view must not expose a create input');
+  assert.ok(!generated.includes('UpdateInput'), 'a view must not expose an update input');
+  assert.ok(!generated.includes('TableClient'), 'a view must not be typed as a writable table');
+
+  const index = fs.readFileSync(path.join(outDir, 'typescript', 'index.ts'), 'utf8');
+  assertIncludes(index, 'WidgetLabel!: WidgetLabelTypes.WidgetLabelViewClient;');
+
+  const metaFile = path.join(outDir, 'view-metadata.ts');
+  new MetadataGenerator(metaFile, '').generate(models);
+  const meta = fs.readFileSync(metaFile, 'utf8');
+  assertIncludes(meta, 'WidgetLabel: "widget_labels"');
+});
+
+test("a view without @@sql is rejected by the generator parser", async () => {
+  let error;
+  try {
+    await parse('view-missing-sql', 'view Broken {\n  id NVARCHAR(64)\n}');
+  } catch (err) {
+    error = err;
+  }
+  assert.ok(error, 'the parser must reject a view without @@sql');
+  assertIncludes(error.message, '@@sql');
+});
+
+test("the generated Python client reads a view through its ViewClient", async () => {
+  const outDir = path.join(tmpRoot, 'py-view');
+  const models = await parse('py-view', `
+model Widget {
+  id   NVARCHAR(64) @id
+  name NVARCHAR(80)
+  @@map("widgets")
+}
+
+view WidgetLabel {
+  id   NVARCHAR(64)
+  name NVARCHAR(80)
+  @@map("widget_labels")
+  @@sql("SELECT id, name FROM widgets")
+}
+`);
+
+  new PythonGenerator(path.join(outDir, 'an5_metadata.py')).generate(models);
+  const client = fs.readFileSync(path.join(outDir, 'an5_client.py'), 'utf8');
+  assertIncludes(client, 'ViewClient');
+  assertIncludes(client, 'self.adapter.view("WidgetLabel")');
+  assert.ok(
+    !client.includes('AdapterTableClient(self.adapter, "WidgetLabel")'),
+    'a view must not be wired to the writable table client',
+  );
+
+  const types = fs.readFileSync(path.join(outDir, 'an5_orm_types.py'), 'utf8');
+  assert.ok(!types.includes('class WidgetLabelCreateInput'), 'a view must not expose a create input');
+  assert.ok(!types.includes('class WidgetLabelUpdateInput'), 'a view must not expose an update input');
+  assertIncludes(types, 'class WidgetLabelWhereInput');
+});
+
+test("the generated .NET client reads a view through its ViewClient", async () => {
+  const outDir = path.join(tmpRoot, 'dotnet-view');
+  const models = await parse('dotnet-view', `
+model Widget {
+  id   NVARCHAR(64) @id
+  name NVARCHAR(80)
+  @@map("widgets")
+}
+
+view WidgetLabel {
+  id   NVARCHAR(64)
+  name NVARCHAR(80)
+  @@map("widget_labels")
+  @@sql("SELECT id, name FROM widgets")
+}
+`, 'mssql');
+
+  new DotnetGenerator(outDir).generate(models);
+
+  const context = fs.readFileSync(path.join(outDir, 'An5DbContext.cs'), 'utf8');
+  assertIncludes(context, 'public ViewClient<WidgetLabel> WidgetLabels => new ViewClient<WidgetLabel>');
+  assertIncludes(context, 'public class ViewClient<T> where T : new()');
+  // The read methods are delegated, not reimplemented.
+  assertIncludes(context, '=> _table.FindMany(whereClause, parameters);');
+  assertIncludes(context, '=> _table.Count(whereClause, parameters);');
+  assertIncludes(context, '=> _table.VectorSearch(vector, take, whereClause, parameters, vectorField, distanceMetric);');
+
+  const types = fs.readFileSync(path.join(outDir, 'An5OrmTypes.cs'), 'utf8');
+  assert.ok(!types.includes('class WidgetLabelCreateInput'), 'a view must not expose a create input');
+  assert.ok(!types.includes('class WidgetLabelUpdateInput'), 'a view must not expose an update input');
+  assert.ok(!types.includes('class WidgetLabelDeleteManyArgs'), 'a view must not expose a delete input');
+  assertIncludes(types, 'class WidgetLabelWhereInput');
+
+  // ...but the view still has a table entity, because the rows are mapped to it.
+  assertIncludes(context, 'new TableClient<Widget>');
+  assert.ok(!context.includes('new TableClient<WidgetLabel>'), 'a view must not be wired to the writable table client');
+});
+
+test("the Go, Rust, Java, Kotlin and Swift clients read a view through a read-only client", async () => {
+  const models = await parse('all-view-clients', `
+model Widget {
+  id   NVARCHAR(64) @id
+  name NVARCHAR(80)
+  @@map("widgets")
+}
+
+view WidgetLabel {
+  id   NVARCHAR(64)
+  name NVARCHAR(80)
+  @@map("widget_labels")
+  @@sql("SELECT id, name FROM widgets")
+}
+`, 'mssql');
+
+  // Go: a distinct ViewClient with no write methods.
+  const goDir = path.join(tmpRoot, 'go-view');
+  new GolangGenerator(goDir).generate(models);
+  const goClient = fs.readFileSync(path.join(goDir, 'client.go'), 'utf8');
+  assertIncludes(goClient, 'WidgetLabels *ViewClient[WidgetLabel]');
+  assertIncludes(goClient, 'NewViewClient[WidgetLabel](db, "dbo.widget_labels"');
+  assertIncludes(goClient, 'type ViewClient[T any] struct');
+  assert.ok(!goClient.includes('func (c *ViewClient[T]) Create'), 'a view client must not offer a write');
+  const goModel = fs.readFileSync(path.join(goDir, 'WidgetLabel.go'), 'utf8');
+  assert.ok(!goModel.includes('type WidgetLabelCreateInput'));
+  assert.ok(!goModel.includes('type WidgetLabelDeleteManyArgs'));
+  assertIncludes(goModel, 'type WidgetLabelWhereInput');
+
+  // Rust: reads go through the runtime ViewClient; write methods and inputs stay out.
+  const rustDir = path.join(tmpRoot, 'rust-view');
+  new RustGenerator(rustDir).generate(models);
+  const rustClient = fs.readFileSync(path.join(rustDir, 'src', 'client.rs'), 'utf8');
+  assertIncludes(rustClient, 'self.db.adapter().view("WidgetLabel")');
+  assertEq((rustClient.match(/pub async fn create\(/g) || []).length, 1, 'only the table gets create()');
+  assertEq((rustClient.match(/pub async fn update\(/g) || []).length, 1, 'only the table gets update()');
+  assertEq((rustClient.match(/pub async fn delete\(/g) || []).length, 1, 'only the table gets delete()');
+  const rustModels = fs.readFileSync(path.join(rustDir, 'src', 'models.rs'), 'utf8');
+  assert.ok(!rustModels.includes('pub struct WidgetLabelCreateInput'));
+  assert.ok(!rustModels.includes('pub struct WidgetLabelUpdateInput'));
+  assert.ok(!rustModels.includes('pub struct WidgetLabelUpdateArgs'));
+
+  // Java: a separate typed ViewClient.
+  const javaDir = path.join(tmpRoot, 'java-view');
+  new JavaGenerator(javaDir).generate(models);
+  const javaContext = fs.readFileSync(path.join(javaDir, 'An5DbContext.java'), 'utf8');
+  assertIncludes(javaContext, 'private final ViewClient<WidgetLabel> widgetLabelClient;');
+  assertIncludes(javaContext, 'this.widgetLabelClient = new ViewClient<WidgetLabel>(');
+  assertIncludes(javaContext, 'adapter.view("WidgetLabel"), WidgetLabel::fromRow');
+  assert.ok(!javaContext.includes('ModelClient<WidgetLabel>'), 'a view must not use the writable client');
+  const javaView = fs.readFileSync(path.join(javaDir, 'ViewClient.java'), 'utf8');
+  assert.ok(!javaView.includes('public T create('), 'a view client must not offer create');
+
+  // Kotlin: the generated ViewClient wraps the runtime one.
+  const kotlinDir = path.join(tmpRoot, 'kotlin-view');
+  new KotlinGenerator(kotlinDir).generate(models);
+  const kotlinDb = fs.readFileSync(path.join(kotlinDir, 'An5Db.kt'), 'utf8');
+  assertIncludes(kotlinDb, 'val widgetLabel: ViewClient<WidgetLabel> =');
+  assertIncludes(kotlinDb, 'ViewClient(an5.view("WidgetLabel"), WidgetLabel::fromRow)');
+  assert.ok(!kotlinDb.includes('ModelClient(an5.table("WidgetLabel")'));
+
+  // Swift: SwiftPM sees the runtime's ViewClient, so the typed wrapper has another name.
+  const swiftDir = path.join(tmpRoot, 'swift-view');
+  new SwiftGenerator(swiftDir).generate(models);
+  const swiftDb = fs.readFileSync(path.join(swiftDir, 'Sources', 'An5Client', 'An5Db.swift'), 'utf8');
+  assertIncludes(swiftDb, 'public let widgetLabel: ViewModelClient<WidgetLabel>');
+  assertIncludes(swiftDb, 'ViewModelClient(\n            view: adapter.view("WidgetLabel")');
+  assert.ok(!swiftDb.includes('ModelClient(\n            table: adapter.table("WidgetLabel")'));
+});
+
+test("a view cannot be the target of a relation", async () => {
+  let error;
+  try {
+    await parse('view-relation', `
+model User {
+  id    NVARCHAR(64) @id
+  label WidgetLabel
+}
+
+view WidgetLabel {
+  id NVARCHAR(64)
+  @@sql("SELECT id FROM widgets")
+}
+`);
+  } catch (err) {
+    error = err;
+  }
+  assert.ok(error, 'a relation to a view must be rejected');
+  assertIncludes(error.issues?.[0]?.message ?? error.message, 'is a view and cannot be the target of a relation');
+});
+
+test("a view's SQL may span several lines in a triple-quoted string", async () => {
+  const models = await parse('view-multiline', `
+view WidgetLabel {
+  id   NVARCHAR(64)
+  name NVARCHAR(80)
+  @@map("widget_labels")
+  @@sql("""
+    SELECT id, name
+    FROM widgets
+    WHERE name <> 'a)b'
+  """)
+}
+`);
+
+  const view = models.find((model) => model.name === 'WidgetLabel');
+  assertEq(view.viewSql, "SELECT id, name\nFROM widgets\nWHERE name <> 'a)b'");
 });
 
 test("every generated client reads a VECTOR(n) column through its runtime codec", async () => {

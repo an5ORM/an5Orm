@@ -80,7 +80,7 @@ model Order {
  * and the logging are supplied here, so this exercises the shipped sequence rather
  * than a copy of it.
  */
-function push(db, models) {
+function push(db, models, views = []) {
   const statements = [];
   return applySchema(models, dialectFor('sqlite'), {
     query: async (sql) => {
@@ -92,7 +92,7 @@ function push(db, models) {
       db.exec(sql);
     },
     log: () => {},
-  }).then((result) => ({ result, statements }));
+  }, views).then((result) => ({ result, statements }));
 }
 
 function openDb() {
@@ -105,7 +105,11 @@ maybe('a schema is created in SQLite and the DDL runs again unchanged', async ()
   assert.deepEqual(issues, []);
 
   const { db } = openDb();
-  const first = (await push(db, models)).statements;
+  const firstRun = await push(db, models);
+  const first = firstRun.statements;
+  // The one compound unique is an index on SQLite. It used to be counted twice
+  // because the SQLite branch incremented before the shared increment.
+  assert.equal(firstRun.result.uniqueConstraintsAdded, 1, 'the compound unique is counted once');
 
   // The table exists with its columns...
   // `sqlite_sequence` is SQLite's own bookkeeping for AUTOINCREMENT, not ours.
@@ -153,6 +157,105 @@ maybe('a schema is created in SQLite and the DDL runs again unchanged', async ()
   db.close();
 });
 
+maybe('a view is created after its tables and left alone on the next push', async () => {
+  const schema = (active) => `
+    model Widget {
+      id     INTEGER     @id @default(autoincrement())
+      name   VARCHAR(64)
+      active INTEGER     @default(1)
+      @@map("widgets")
+    }
+
+    view ActiveWidget {
+      id   INTEGER
+      name VARCHAR(64)
+      @@map("active_widgets")
+      @@sql("""
+        SELECT id, name
+        FROM widgets
+        WHERE active = ${active}
+      """)
+    }
+  `;
+
+  const initial = parsePushSchema(schema(1), 'sqlite');
+  assert.deepEqual(initial.issues, []);
+  assert.equal(initial.views.length, 1);
+
+  const { db } = openDb();
+  const first = await push(db, initial.models, initial.views);
+  assert.equal(first.result.viewsApplied, 1);
+  assert.equal(
+    db.prepare("SELECT type FROM sqlite_master WHERE name = 'active_widgets'").get().type,
+    'view',
+  );
+
+  db.prepare('INSERT INTO widgets (name, active) VALUES (?, ?)').run('on', 1);
+  db.prepare('INSERT INTO widgets (name, active) VALUES (?, ?)').run('off', 0);
+  assert.deepEqual(
+    db.prepare('SELECT name FROM active_widgets').all().map((row) => row.name),
+    ['on'],
+    'the view must run against the table push just created',
+  );
+
+  // The catalog and the schema agree, so a second push does not recreate it.
+  const second = await push(db, initial.models, initial.views);
+  assert.equal(second.result.tablesCreated, 0);
+  assert.equal(second.result.viewsApplied, 0);
+  assert.ok(
+    second.statements.some((sql) => /sqlite_master/.test(sql) && /type = 'view'/.test(sql)),
+    'the second push still checks the view catalog',
+  );
+
+  // A changed body replaces the view (SQLite needs DROP first).
+  const changed = parsePushSchema(schema(0), 'sqlite');
+  const third = await push(db, changed.models, changed.views);
+  assert.equal(third.result.viewsApplied, 1);
+  assert.ok(third.statements.includes('DROP VIEW IF EXISTS [active_widgets]'));
+  assert.deepEqual(
+    db.prepare('SELECT name FROM active_widgets').all().map((row) => row.name),
+    ['off'],
+  );
+  db.close();
+});
+
+maybe('a view that reads another view is created after it', async () => {
+  // Declared backwards: the summary reads the detail view, which SQLite would
+  // accept lazily but a database with eager validation would not.
+  const parsed = parsePushSchema(`
+    model Widget {
+      id     INTEGER @id @default(autoincrement())
+      name   VARCHAR(64)
+      active INTEGER @default(1)
+      @@map("widgets")
+    }
+
+    view WidgetSummary {
+      id   INTEGER
+      name VARCHAR(64)
+      @@map("widget_summary")
+      @@sql("SELECT id, name FROM active_widgets")
+    }
+
+    view ActiveWidget {
+      id   INTEGER
+      name VARCHAR(64)
+      @@map("active_widgets")
+      @@sql("SELECT id, name FROM widgets WHERE active = 1")
+    }
+  `, 'sqlite');
+  assert.deepEqual(parsed.issues, []);
+
+  const { db } = openDb();
+  const { result, statements } = await push(db, parsed.models, parsed.views);
+  assert.equal(result.viewsApplied, 2);
+  const detail = statements.findIndex((sql) => sql.includes('VIEW [active_widgets]'));
+  const summary = statements.findIndex((sql) => sql.includes('VIEW [widget_summary]'));
+  assert.ok(detail >= 0 && summary >= 0, 'both views are created');
+  assert.ok(detail < summary, 'the referenced view is created first');
+  db.close();
+});
+
 maybe('a new column is added to an existing SQLite table, unique and all', async () => {
   const { db } = openDb();
   db.exec('CREATE TABLE [widgets] ([id] INTEGER PRIMARY KEY, [sku] VARCHAR(64) NOT NULL)');
@@ -161,7 +264,7 @@ maybe('a new column is added to an existing SQLite table, unique and all', async
     `model Widget {
        id     INTEGER     @id
        sku    VARCHAR(64) @unique
-       email  VARCHAR(255) @unique
+       email  VARCHAR(255) @unique(map: "UQ_app_widgets_email")
        colour VARCHAR(32)
        note   TEXT?
      }`,
@@ -183,8 +286,8 @@ maybe('a new column is added to an existing SQLite table, unique and all', async
   // SQLite refuses "Cannot add a UNIQUE column", so the unique becomes an index.
   assert.doesNotMatch(added.join('\n'), /UNIQUE/i);
   assert.ok(
-    statements.includes('CREATE UNIQUE INDEX [UQ_widgets_email] ON [widgets] ([email])'),
-    `expected a unique index for email: ${statements.join(' | ')}`,
+    statements.includes('CREATE UNIQUE INDEX [UQ_app_widgets_email] ON [widgets] ([email])'),
+    `expected the mapped unique index for email: ${statements.join(' | ')}`,
   );
 
   const columns = db.prepare("SELECT name, \"notnull\" FROM pragma_table_info('widgets')").all();

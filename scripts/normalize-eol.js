@@ -48,4 +48,9 @@ for (const target of process.argv.slice(2).length ? process.argv.slice(2) : ['di
   walk(path.resolve(ROOT, target));
 }
 
+const cliPath = path.resolve(ROOT, 'dist', 'cli.js');
+if (fs.existsSync(cliPath)) {
+  fs.chmodSync(cliPath, 0o755);
+}
+
 console.log(`🔤 normalized ${converted} generated file(s) to LF`);

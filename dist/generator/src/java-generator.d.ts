@@ -51,6 +51,14 @@ export declare class JavaGenerator {
     private generateMetadata;
     private generateConfig;
     private modelClientSource;
+    /**
+     * The typed client used for views.
+     *
+     * <p>It repeats {@link ModelClient}'s read signatures and stops there: with no
+     * {@code create}/{@code update}/{@code delete} to call, writing a view is a
+     * compile error rather than a runtime refusal.
+     */
+    private viewClientSource;
     private generateDbContext;
     private tableName;
 }

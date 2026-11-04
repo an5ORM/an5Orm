@@ -41,7 +41,7 @@ function packedFiles() {
   return new Set(files.map(f => toPosix(f.path)));
 }
 
-/** Every file package.json advertises: main, types and each exports branch. */
+/** Every file package.json advertises: main, types, bin and each exports branch. */
 function entryPoints() {
   const points = [];
   const walk = (node, trail) => {
@@ -59,6 +59,13 @@ function entryPoints() {
   walk(pkg.exports, 'exports');
   if (pkg.main) points.push({ trail: 'main', target: toPosix(pkg.main) });
   if (pkg.types) points.push({ trail: 'types', target: toPosix(pkg.types) });
+  if (typeof pkg.bin === 'string') {
+    points.push({ trail: 'bin', target: toPosix(pkg.bin).replace(/^\.\//, '') });
+  } else if (pkg.bin && typeof pkg.bin === 'object') {
+    for (const [key, value] of Object.entries(pkg.bin)) {
+      points.push({ trail: `bin.${key}`, target: toPosix(value).replace(/^\.\//, '') });
+    }
+  }
   return points;
 }
 

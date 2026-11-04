@@ -22,6 +22,14 @@ export declare class GolangGenerator {
     private generateBaseOrmTypes;
     private generateDbContext;
     private generateTableClientStruct;
+    /**
+     * The read-only client used for views.
+     *
+     * Go has no way to hide methods from an embedded value, so wrapping rather
+     * than embedding is what makes a write to a view a compile error. The read
+     * methods delegate, which keeps a view's rows scanning exactly like a table's.
+     */
+    private generateViewClientStruct;
     private generateQueryAndScan;
     /**
      * The vector codec the generated client needs on both sides of a query.

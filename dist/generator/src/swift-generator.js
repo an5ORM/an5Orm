@@ -569,12 +569,13 @@ public enum An5Config {
         let accessors = models.map((model) => ({
             property: SwiftGenerator.toLowerCamelCase(model.name),
             name: model.name,
+            isView: model.isView === true,
         }));
         const unique = new Map();
         for (const entry of accessors) {
             const key = SwiftGenerator.toLowerCamelCase(entry.name);
             if (!unique.has(key))
-                unique.set(key, { property: key, name: entry.name });
+                unique.set(key, { property: key, name: entry.name, isView: entry.isView });
         }
         let content = `// This file is auto-generated. Do not edit deliberately.
 import Foundation
@@ -669,6 +670,54 @@ public struct ModelClient<T> {
     }
 }
 
+/// A read-only, typed client for one view.
+///
+/// The name avoids the runtime's own \`ViewClient\`, which is wrapped here: the runtime
+/// returns \`Row\` values and this maps them to the generated model. There are no write
+/// methods, so writing through a view does not compile.
+public struct ViewModelClient<T> {
+
+    private let client: ViewClient
+    private let read: (Row) -> T
+
+    init(view: ViewClient, read: @escaping (Row) -> T) {
+        self.client = view
+        self.read = read
+    }
+
+    /// The view this client reads.
+    public var view: String { client.view }
+
+    public func findMany() throws -> [T] { try client.findMany().map { read($0) } }
+
+    public func findMany(_ query: Query) throws -> [T] { try client.findMany(query).map { read($0) } }
+
+    public func findMany(filter: Where) throws -> [T] { try client.findMany(filter: filter).map { read($0) } }
+
+    public func findFirst(filter: Where) throws -> T? { try client.findFirst(filter: filter).map { read($0) } }
+
+    public func findUnique(filter: Where) throws -> T? { try client.findUnique(filter: filter).map { read($0) } }
+
+    public func count(_ filter: Where? = nil) throws -> Int { try client.count(filter) }
+
+    /// One row of aggregate values, keyed \`_count\`, \`_sum_<field>\` and so on.
+    public func aggregate(_ aggregate: Aggregate) throws -> Row { try client.aggregate(aggregate) }
+
+    /// One row per group, each carrying the group's count and aggregates.
+    public func groupBy(_ aggregate: Aggregate) throws -> [Row] { try client.groupBy(aggregate) }
+
+    /// The rows nearest a vector.
+    public func vectorSearch(
+        _ vector: [Double],
+        take: Int = 10,
+        filter: Where? = nil,
+        vectorField: String = "embedding",
+        metric: DistanceMetric = .cosine
+    ) throws -> [T] {
+        try client.vectorSearch(vector, take: take, filter: filter, vectorField: vectorField, metric: metric).map { read($0) }
+    }
+}
+
 /// The AN5 entry point: one typed client per model, over one connection.
 ///
 /// \`\`\`
@@ -681,7 +730,7 @@ public final class An5Db {
     public let an5: An5Adapter
 
 ${Array.from(unique.values())
-            .map((entry) => `    /// Queries for \`${entry.name}\`.\n    public let ${entry.property}: ModelClient<${entry.name}>`)
+            .map((entry) => `    /// ${entry.isView ? 'Reads' : 'Queries'} for \`${entry.name}\`.\n    public let ${entry.property}: ${entry.isView ? 'ViewModelClient' : 'ModelClient'}<${entry.name}>`)
             .join('\n\n')}
 
     /// Opens a database from a connection string, registering this schema with the runtime.
@@ -704,7 +753,9 @@ ${Array.from(unique.values())
     public init(adapter: An5Adapter) {
         self.an5 = adapter
 ${Array.from(unique.values())
-            .map((entry) => `        self.${entry.property} = ModelClient(\n            table: adapter.table("${entry.name}"),\n            read: { ${entry.name}(row: $0) },\n            write: { $0.values })`)
+            .map((entry) => entry.isView
+            ? `        self.${entry.property} = ViewModelClient(\n            view: adapter.view("${entry.name}"),\n            read: { ${entry.name}(row: $0) })`
+            : `        self.${entry.property} = ModelClient(\n            table: adapter.table("${entry.name}"),\n            read: { ${entry.name}(row: $0) },\n            write: { $0.values })`)
             .join('\n')}
     }
 

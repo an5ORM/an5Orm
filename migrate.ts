@@ -30,6 +30,7 @@ import {
   parseSchemaText,
   splitSqlBatches,
   tableIdentityName,
+  verifyAppliedMigrations,
 } from './migration-core';
 
 const rootDir = process.cwd();
@@ -104,6 +105,28 @@ async function getExistingTables(): Promise<string[]> {
     ORDER BY SCHEMA_NAME(schema_id), name
   `);
   return rows.map(r => r.name);
+}
+
+async function getExistingViews(): Promise<string[]> {
+  const rows = await (await getDb()).$queryRawUnsafe<{ name: string }>(`
+    SELECT
+      CASE
+        WHEN SCHEMA_NAME(schema_id) = 'dbo' THEN name
+        ELSE SCHEMA_NAME(schema_id) + '.' + name
+      END AS name
+    FROM sys.views
+    WHERE is_ms_shipped = 0
+    ORDER BY SCHEMA_NAME(schema_id), name
+  `);
+  return rows.map(r => r.name);
+}
+
+async function introspectViewDefinition(viewName: string): Promise<string | null> {
+  const rows = await (await getDb()).$queryRawUnsafe<{ definition: string | null }>(
+    `SELECT OBJECT_DEFINITION(OBJECT_ID(@p_0)) AS definition`,
+    viewName
+  );
+  return rows[0]?.definition ?? null;
 }
 
 function listMigrationFiles(): string[] {
@@ -199,11 +222,21 @@ async function cmdDiff() {
 
   const schemaModels = parseSchema();
   const dbTables = await getExistingTables();
+  const dbViews = await getExistingViews();
 
-  console.log(`Schema: ${schemaModels.length} models`);
-  console.log(`Database: ${dbTables.length} tables\n`);
+  const modelCount = schemaModels.filter(model => !model.isView).length;
+  const viewCount = schemaModels.length - modelCount;
+  console.log(`Schema: ${modelCount} models, ${viewCount} views`);
+  console.log(`Database: ${dbTables.length} tables, ${dbViews.length} views\n`);
 
-  const ops = await generateDiff(schemaModels, dbTables, introspectTable, introspectTableArtifacts);
+  const ops = await generateDiff(
+    schemaModels,
+    dbTables,
+    introspectTable,
+    introspectTableArtifacts,
+    dbViews,
+    introspectViewDefinition,
+  );
 
   if (ops.length === 0) {
     console.log('✅ Schema is in sync with database.');
@@ -223,7 +256,15 @@ async function cmdGenerate() {
 
   const schemaModels = parseSchema();
   const dbTables = await getExistingTables();
-  const ops = await generateDiff(schemaModels, dbTables, introspectTable, introspectTableArtifacts);
+  const dbViews = await getExistingViews();
+  const ops = await generateDiff(
+    schemaModels,
+    dbTables,
+    introspectTable,
+    introspectTableArtifacts,
+    dbViews,
+    introspectViewDefinition,
+  );
 
   if (ops.length === 0) {
     console.log('No migrations needed.');
@@ -247,8 +288,31 @@ async function cmdApply(args: string[] = []) {
   console.log(options.preview ? '\n👀 Previewing pending migrations...\n' : '\n🚀 Applying migrations...\n');
 
   const db = await getDb();
-  const applied = new Map((await getAppliedMigrations({ ensure: true })).map(row => [row.id, row.checksum]));
+  const appliedRows = await getAppliedMigrations({ ensure: true });
+  const applied = new Map(appliedRows.map(row => [row.id, row.checksum]));
   const files = listMigrationFiles();
+
+  // An applied file that changed on disk no longer describes what the database
+  // contains. Applying the rest would build on a history that cannot be reproduced.
+  const drift = verifyAppliedMigrations(
+    appliedRows,
+    (id) => {
+      const filepath = path.join(migrationsDir, id);
+      return fs.existsSync(filepath) ? fs.readFileSync(filepath, 'utf8') : null;
+    },
+    checksum,
+  );
+  if (drift.changed.length > 0 || drift.missing.length > 0) {
+    const details = [
+      ...drift.changed.map(id => `  changed: ${id}`),
+      ...drift.missing.map(id => `  missing: ${id}`),
+    ].join('\n');
+    throw new Error(
+      `Applied migration history does not match the files on disk:\n${details}\n` +
+        'Restore the files, or mark the affected migrations as unapplied deliberately before continuing.',
+    );
+  }
+
   const pending = files.filter(file => !applied.has(file));
 
   if (pending.length === 0) {
@@ -361,21 +425,45 @@ async function cmdStatus() {
 
   const schemaModels = parseSchema();
   const dbTables = await getExistingTables();
+  const dbViews = await getExistingViews();
+
+  const tableModels = schemaModels.filter(model => !model.isView);
+  const viewModels = schemaModels.filter(model => model.isView);
 
   console.log('Schema Models:');
   const dbTableIdentities = new Set(dbTables.map(tableIdentityName));
-  for (const model of schemaModels) {
+  for (const model of tableModels) {
     const exists = dbTableIdentities.has(tableIdentityName(model.tableName));
     const icon = exists ? '✅' : '⚠️';
     console.log(`  ${icon} ${model.name} → ${model.tableName} (${model.fields.length} fields)`);
   }
 
+  const dbViewIdentities = new Set(dbViews.map(tableIdentityName));
+  if (viewModels.length > 0 || dbViews.length > 0) {
+    console.log('\nSchema Views:');
+    for (const view of viewModels) {
+      const exists = dbViewIdentities.has(tableIdentityName(view.tableName));
+      const icon = exists ? '✅' : '⚠️';
+      console.log(`  ${icon} ${view.name} → ${view.tableName} (${view.fields.length} fields)`);
+    }
+  }
+
   console.log('\nDatabase Tables:');
-  const schemaTableIdentities = new Set(schemaModels.map(model => tableIdentityName(model.tableName)));
+  const schemaTableIdentities = new Set(tableModels.map(model => tableIdentityName(model.tableName)));
   for (const table of dbTables) {
     const inSchema = schemaTableIdentities.has(tableIdentityName(table));
     const icon = inSchema ? '✅' : '⚠️';
     console.log(`  ${icon} ${table}`);
+  }
+
+  if (dbViews.length > 0) {
+    console.log('\nDatabase Views:');
+    const schemaViewIdentities = new Set(viewModels.map(view => tableIdentityName(view.tableName)));
+    for (const view of dbViews) {
+      const inSchema = schemaViewIdentities.has(tableIdentityName(view));
+      const icon = inSchema ? '✅' : '⚠️';
+      console.log(`  ${icon} ${view}`);
+    }
   }
 
   if (!fs.existsSync(migrationsDir)) {

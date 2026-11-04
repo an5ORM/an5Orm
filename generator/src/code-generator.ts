@@ -60,12 +60,28 @@ export interface TableClient<T, WhereInput = any, _Select = any, Include = any, 
   groupBy(args: GroupByArgs): Promise<any[]>;
   upsert(args: UpsertArgs): Promise<T>;
 }
+
+/**
+ * A read-only client for a view block.
+ *
+ * The same query surface as TableClient without any write method, matching the
+ * runtime ViewClient in @an5/adapters.
+ */
+export interface ViewClient<T, WhereInput = any, _Select = any, Include = any, FindManyArgs = any, FindFirstArgs = any, FindUniqueArgs = any, AggregateArgs = any, GroupByArgs = any> {
+  findMany(args?: FindManyArgs): Promise<T[]>;
+  vectorSearch(args: { vector: number[]; take?: number; where?: WhereInput; include?: Include; vectorField?: string; distanceMetric?: 'cosine' | 'euclidean' | 'dot'; }): Promise<(T & { distance: number })[]>;
+  findFirst(args?: FindFirstArgs): Promise<T | null>;
+  findUnique(args?: FindUniqueArgs): Promise<T | null>;
+  count(args?: { where?: WhereInput; }): Promise<number>;
+  aggregate(args: AggregateArgs): Promise<any>;
+  groupBy(args: GroupByArgs): Promise<any[]>;
+}
 `;
     fs.writeFileSync(path.join(this.outputDir, 'base.ts'), baseTs);
   }
 
   private generateModelFile(model: Model) {
-    let content = `import { An5, TableClient } from './base';\n`;
+    let content = `import { An5, ${model.isView ? 'ViewClient' : 'TableClient'} } from './base';\n`;
     const relModels = [...new Set(model.relations.map(r => r.type))];
     for (const relModel of relModels) {
       if (relModel !== model.name) {
@@ -121,17 +137,21 @@ export interface TableClient<T, WhereInput = any, _Select = any, Include = any, 
     }
     content += `export type ${model.name}Include = { ${includeRels.join('; ')}${includeRels.length > 0 ? ';' : ''} };\n`;
 
-    content += `export type ${model.name}CreateInput = { ${model.fields.map(f => `${f.name}${f.isOptional || f.hasDefault ? '?' : ''}: ${this.inputType(f.type)}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; }`).join('; ')} };\n`;
-    content += `export type ${model.name}UpdateInput = { ${model.fields.filter(f => !f.isId).map(f => `${f.name}?: ${f.type === 'number' ? 'number | An5.IntFieldUpdateOperationsInput' : this.inputType(f.type)}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; set?: ${r.type}WhereInput | ${r.type}WhereInput[]; disconnect?: ${r.type}WhereInput | ${r.type}WhereInput[]; delete?: ${r.type}WhereInput | ${r.type}WhereInput[]; update?: { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; }[]; upsert?: { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; }[]; }`).join('; ')} };\n`;
+    if (!model.isView) {
+      content += `export type ${model.name}CreateInput = { ${model.fields.map(f => `${f.name}${f.isOptional || f.hasDefault ? '?' : ''}: ${this.inputType(f.type)}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; }`).join('; ')} };\n`;
+      content += `export type ${model.name}UpdateInput = { ${model.fields.filter(f => !f.isId).map(f => `${f.name}?: ${f.type === 'number' ? 'number | An5.IntFieldUpdateOperationsInput' : this.inputType(f.type)}${f.isOptional ? ' | null' : ''}`).join('; ')}; ${model.relations.map(r => `${r.name}?: { create?: ${r.type}CreateInput | ${r.type}CreateInput[]; connect?: ${r.type}WhereInput | ${r.type}WhereInput[]; set?: ${r.type}WhereInput | ${r.type}WhereInput[]; disconnect?: ${r.type}WhereInput | ${r.type}WhereInput[]; delete?: ${r.type}WhereInput | ${r.type}WhereInput[]; update?: { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; data: ${r.type}UpdateInput; }[]; upsert?: { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; } | { where: ${r.type}WhereInput; create: ${r.type}CreateInput; update: ${r.type}UpdateInput; }[]; }`).join('; ')} };\n`;
+    }
 
     content += `export type ${model.name}OrderByInput = { ${model.fields.map(f => `${f.name}?: An5.SortOrder`).join('; ')} };\n`;
     content += `export type ${model.name}FindManyArgs = { where?: ${model.name}WhereInput; orderBy?: ${model.name}OrderByInput | ${model.name}OrderByInput[]; take?: number; skip?: number; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}FindFirstArgs = { where?: ${model.name}WhereInput; orderBy?: ${model.name}OrderByInput | ${model.name}OrderByInput[]; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
     content += `export type ${model.name}FindUniqueArgs = { where?: ${model.name}WhereInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
-    content += `export type ${model.name}CreateArgs = { data: ${model.name}CreateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
-    content += `export type ${model.name}UpdateArgs = { where: ${model.name}WhereInput; data: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
-    content += `export type ${model.name}UpsertArgs = { where: ${model.name}WhereInput; create: ${model.name}CreateInput; update: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
-    content += `export type ${model.name}DeleteArgs = { where: ${model.name}WhereInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+    if (!model.isView) {
+      content += `export type ${model.name}CreateArgs = { data: ${model.name}CreateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+      content += `export type ${model.name}UpdateArgs = { where: ${model.name}WhereInput; data: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+      content += `export type ${model.name}UpsertArgs = { where: ${model.name}WhereInput; create: ${model.name}CreateInput; update: ${model.name}UpdateInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+      content += `export type ${model.name}DeleteArgs = { where: ${model.name}WhereInput; include?: ${model.name}Include; select?: ${model.name}Select; };\n`;
+    }
     content += `export type ${model.name}ScalarFieldEnum = ${model.fields.map(f => `'${f.name}'`).join(' | ') || 'never'};\n`;
     content += `export type ${model.name}AggregateArgs = { where?: ${model.name}WhereInput; _count?: true | { _all?: true; ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _sum?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _avg?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _min?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _max?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; };\n`;
     const numericHavingFields = model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: An5.NumberFilter | number`).join('; ');
@@ -139,7 +159,11 @@ export interface TableClient<T, WhereInput = any, _Select = any, Include = any, 
     content += `export type ${model.name}AggregateHavingInput = { _count?: { _all?: An5.NumberFilter | number; ${model.fields.map(f => `${f.name}?: An5.NumberFilter | number`).join('; ')} }; _sum?: { ${numericHavingFields} }; _avg?: { ${numericHavingFields} }; _min?: { ${scalarHavingFields} }; _max?: { ${scalarHavingFields} }; };\n`;
     content += `export type ${model.name}GroupByArgs = { by: ${model.name}ScalarFieldEnum | ${model.name}ScalarFieldEnum[]; where?: ${model.name}WhereInput; having?: ${model.name}AggregateHavingInput; orderBy?: ${model.name}OrderByInput | ${model.name}OrderByInput[]; skip?: number; take?: number; _count?: true | { _all?: true; ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _sum?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _avg?: { ${model.fields.filter(f => this.normalizeType(f.type) === 'number').map(f => `${f.name}?: true`).join('; ')} }; _min?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; _max?: { ${model.fields.map(f => `${f.name}?: true`).join('; ')} }; };\n`;
 
-    content += `export type ${model.name}TableClient = TableClient<\n  ${model.name},\n  ${model.name}WhereInput,\n  ${model.name}Select,\n  ${model.name}Include,\n  ${model.name}CreateInput,\n  ${model.name}UpdateInput,\n  ${model.name}FindManyArgs,\n  ${model.name}FindFirstArgs,\n  ${model.name}FindUniqueArgs,\n  ${model.name}CreateArgs,\n  ${model.name}UpdateArgs,\n  ${model.name}UpsertArgs,\n  ${model.name}DeleteArgs,\n  ${model.name}AggregateArgs,\n  ${model.name}GroupByArgs\n>;\n`;
+    if (model.isView) {
+      content += `export type ${model.name}ViewClient = ViewClient<\n  ${model.name},\n  ${model.name}WhereInput,\n  ${model.name}Select,\n  ${model.name}Include,\n  ${model.name}FindManyArgs,\n  ${model.name}FindFirstArgs,\n  ${model.name}FindUniqueArgs,\n  ${model.name}AggregateArgs,\n  ${model.name}GroupByArgs\n>;\n`;
+    } else {
+      content += `export type ${model.name}TableClient = TableClient<\n  ${model.name},\n  ${model.name}WhereInput,\n  ${model.name}Select,\n  ${model.name}Include,\n  ${model.name}CreateInput,\n  ${model.name}UpdateInput,\n  ${model.name}FindManyArgs,\n  ${model.name}FindFirstArgs,\n  ${model.name}FindUniqueArgs,\n  ${model.name}CreateArgs,\n  ${model.name}UpdateArgs,\n  ${model.name}UpsertArgs,\n  ${model.name}DeleteArgs,\n  ${model.name}AggregateArgs,\n  ${model.name}GroupByArgs\n>;\n`;
+    }
 
     fs.writeFileSync(path.join(this.outputDir, `${model.name}.ts`), content);
   }
@@ -173,17 +197,23 @@ export interface TableClient<T, WhereInput = any, _Select = any, Include = any, 
       content += `  export type ${model.name}WhereInput = ${model.name}Types.${model.name}WhereInput;\n`;
       content += `  export type ${model.name}Select = ${model.name}Types.${model.name}Select;\n`;
       content += `  export type ${model.name}Include = ${model.name}Types.${model.name}Include;\n`;
-      content += `  export type ${model.name}CreateInput = ${model.name}Types.${model.name}CreateInput;\n`;
-      content += `  export type ${model.name}UpdateInput = ${model.name}Types.${model.name}UpdateInput;\n`;
+      if (!model.isView) {
+        content += `  export type ${model.name}CreateInput = ${model.name}Types.${model.name}CreateInput;\n`;
+        content += `  export type ${model.name}UpdateInput = ${model.name}Types.${model.name}UpdateInput;\n`;
+      }
       content += `  export type ${model.name}OrderByInput = ${model.name}Types.${model.name}OrderByInput;\n`;
       content += `  export type ${model.name}FindManyArgs = ${model.name}Types.${model.name}FindManyArgs;\n`;
       content += `  export type ${model.name}FindFirstArgs = ${model.name}Types.${model.name}FindFirstArgs;\n`;
       content += `  export type ${model.name}FindUniqueArgs = ${model.name}Types.${model.name}FindUniqueArgs;\n`;
-      content += `  export type ${model.name}CreateArgs = ${model.name}Types.${model.name}CreateArgs;\n`;
-      content += `  export type ${model.name}UpdateArgs = ${model.name}Types.${model.name}UpdateArgs;\n`;
-      content += `  export type ${model.name}UpsertArgs = ${model.name}Types.${model.name}UpsertArgs;\n`;
-      content += `  export type ${model.name}DeleteArgs = ${model.name}Types.${model.name}DeleteArgs;\n`;
-      content += `  export type ${model.name}TableClient = ${model.name}Types.${model.name}TableClient;\n`;
+      if (!model.isView) {
+        content += `  export type ${model.name}CreateArgs = ${model.name}Types.${model.name}CreateArgs;\n`;
+        content += `  export type ${model.name}UpdateArgs = ${model.name}Types.${model.name}UpdateArgs;\n`;
+        content += `  export type ${model.name}UpsertArgs = ${model.name}Types.${model.name}UpsertArgs;\n`;
+        content += `  export type ${model.name}DeleteArgs = ${model.name}Types.${model.name}DeleteArgs;\n`;
+        content += `  export type ${model.name}TableClient = ${model.name}Types.${model.name}TableClient;\n`;
+      } else {
+        content += `  export type ${model.name}ViewClient = ${model.name}Types.${model.name}ViewClient;\n`;
+      }
       content += `  export type ${model.name}ScalarFieldEnum = ${model.name}Types.${model.name}ScalarFieldEnum;\n`;
       content += `  export type ${model.name}AggregateArgs = ${model.name}Types.${model.name}AggregateArgs;\n`;
       content += `  export type ${model.name}GroupByArgs = ${model.name}Types.${model.name}GroupByArgs;\n`;
@@ -195,9 +225,10 @@ export interface TableClient<T, WhereInput = any, _Select = any, Include = any, 
     const addedProps = new Set<string>();
     for (const model of models) {
       const props = this.getAllPropertyVariations(model.name);
+      const clientType = `${model.name}Types.${model.name}${model.isView ? 'ViewClient' : 'TableClient'}`;
       for (const prop of props) {
         if (!addedProps.has(prop)) {
-          content += `  ${prop}!: ${model.name}Types.${model.name}TableClient;\n`;
+          content += `  ${prop}!: ${clientType};\n`;
           addedProps.add(prop);
         }
       }

@@ -32,8 +32,22 @@ export interface ColumnSpec {
     isId: boolean;
     isUnique: boolean;
     isOptional: boolean;
+    /** `@unique(map: "…")`: the constraint name both push and migrate must use. */
+    uniqueName?: string | undefined;
     /** The raw `@default(...)` expression, e.g. `now()` or `"draft"`. */
     defaultExpr?: string | undefined;
+}
+/**
+ * The extra clauses `@@index(..., include:, filter:, options:)` asks for.
+ *
+ * Field names are already quoted by the caller. `options` is SQL Server syntax
+ * (`WITH (FILLFACTOR = 90, ONLINE = ON)`); other providers either support the
+ * standard subset (`include`, `filter`) or ignore what they cannot express.
+ */
+export interface IndexOptions {
+    includeFields?: string[] | undefined;
+    filter?: string | undefined;
+    options?: string | undefined;
 }
 export interface PushDialect {
     readonly provider: Provider;
@@ -61,6 +75,16 @@ export interface PushDialect {
     readonly supportsUniqueInlineOnAddColumn: boolean;
     /** Query returning one row when the table exists. */
     tableExists(raw: string): string;
+    /** Query returning one row when a view exists. */
+    viewExists(raw: string): string;
+    /**
+     * Query returning the stored view definition in a single `definition` column.
+     *
+     * Used to skip a push that would recreate an unchanged view. The value may be
+     * the body alone (PostgreSQL/MySQL) or the full `CREATE VIEW` text (SQL
+     * Server/SQLite); `normalizeViewSql` compares either form.
+     */
+    viewDefinition(raw: string): string;
     /** Query returning one row when the column exists. */
     columnExists(raw: string, column: string): string;
     /** Query returning one row when the unique constraint exists. */
@@ -70,12 +94,39 @@ export interface PushDialect {
     /** One column definition, as it appears inside `CREATE TABLE`. */
     columnDefinition(column: ColumnSpec): string;
     createTable(quotedTable: string, columnDefs: string[]): string;
-    createIndex(quotedName: string, quotedTable: string, quotedFields: string[]): string;
+    /**
+     * Whether `CREATE OR REPLACE VIEW` (or `CREATE OR ALTER VIEW`) is available.
+     *
+     * SQLite has neither, so a changed view needs `DROP VIEW` first; see `dropView`.
+     */
+    readonly supportsCreateOrReplaceView: boolean;
+    /** `CREATE [OR REPLACE|OR ALTER] VIEW ... AS <select>`. */
+    createView(quotedView: string, selectSql: string): string;
+    /** `DROP VIEW IF EXISTS`, for providers without create-or-replace. */
+    dropView(quotedView: string): string;
+    createIndex(quotedName: string, quotedTable: string, quotedFields: string[], options?: IndexOptions): string;
     createUniqueIndex(quotedName: string, quotedTable: string, quotedFields: string[]): string;
     /** `ALTER TABLE ... ADD <column>`, nullability included. */
     addColumn(quotedTable: string, column: ColumnSpec): string;
     addUniqueConstraint(quotedName: string, quotedTable: string, quotedFields: string[]): string;
 }
+/**
+ * The `SELECT` body of a view definition.
+ *
+ * Catalogs return a full `CREATE VIEW ... AS ...` statement or the bare body,
+ * depending on the provider (and on whether `OBJECT_DEFINITION` is available).
+ * `@@sql` wants the body alone, so both forms reduce to the same text.
+ */
+export declare function viewSqlBody(sql: string | null | undefined): string;
+/**
+ * Normalizes a view definition for comparison.
+ *
+ * A catalog may return `CREATE VIEW [x] AS SELECT ...` while the schema holds
+ * only `SELECT ...`. Whitespace and case are not meaningful here either, so both
+ * forms reduce to the same string; comparing the raw text would make every push
+ * think the view changed.
+ */
+export declare function normalizeViewSql(sql: string | null | undefined): string;
 /** The dialect that writes DDL for a provider. */
 export declare function dialectFor(provider: Provider): PushDialect;
 /**

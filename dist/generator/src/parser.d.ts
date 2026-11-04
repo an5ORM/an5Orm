@@ -13,6 +13,7 @@ export declare class SchemaParser {
     private schemaText;
     private issues;
     private modelRefs;
+    private viewRefs;
     private models;
     /**
      * @param schemaDir directory holding the `.an5` files

@@ -8,6 +8,14 @@
  * schema text to a column can be tested without a database.
  */
 import {
+  attributeArgs,
+  hasAttribute,
+  parseIndexDirective,
+  splitSchemaLines,
+  stringOption,
+  unquote,
+} from './attributes';
+import {
   FieldTypeIssue,
   Provider,
   readFieldLineHead,
@@ -22,6 +30,8 @@ export interface PushField {
   isOptional: boolean;
   isId: boolean;
   isUnique: boolean;
+  /** `@unique(map: "…")`, so push and migrate create the same artifact name. */
+  uniqueName?: string | undefined;
   /** The `@default(...)` expression, not SQL: only the dialect knows the spelling. */
   defaultExpr?: string | undefined;
 }
@@ -38,6 +48,22 @@ export interface PushModel {
   compoundUniques: PushIndex[];
   /** `@@index([a, b])`, as field lists. */
   indexes: PushIndex[];
+}
+
+/**
+ * A `view` block, as push needs it.
+ *
+ * `fields` describe the view's result columns for validation and generated
+ * clients; the DDL itself is `sql`, the `@@sql("...")` body.
+ */
+export interface PushView {
+  name: string;
+  /** The database view name; `@@map` may rename it independently. */
+  viewName: string;
+  schema: string;
+  declaredSchema?: string | undefined;
+  fields: PushField[];
+  sql: string;
 }
 
 /**
@@ -71,25 +97,22 @@ export interface PushIndex {
 
 export interface PushSchema {
   models: PushModel[];
+  /** `view` blocks, applied after the tables they read from. */
+  views: PushView[];
   /** Field types the provider does not have; empty when the schema is valid. */
   issues: FieldTypeIssue[];
 }
 
-/** The field list of `@@unique([a, b], …)`, plus whatever options follow it. */
-const DIRECTIVE = /^@@(?:unique|index)\(\s*\[([\w\s,]+)\]([^)]*)\)/;
-
-function parseDirective(line: string, fields: string): PushIndex {
-  const options = line.match(DIRECTIVE)?.[2] ?? '';
-  const name = options.match(/\bmap\s*:\s*"([^"]+)"/)?.[1];
-  const include = options.match(/\binclude\s*:\s*\[([\w,\s]+)\]/)?.[1];
-  const filter = options.match(/\bfilter\s*:\s*"([^"]+)"/)?.[1];
-  const opts = options.match(/\boptions\s*:\s*"([^"]+)"/)?.[1];
+/** Reads `@@unique(…)`/`@@index(…)` into the shape push and migrate share. */
+function parseDirective(line: string, name: '@@unique' | '@@index'): PushIndex | null {
+  const parsed = parseIndexDirective(attributeArgs(line, name));
+  if (!parsed) return null;
   return {
-    fields: fields.split(',').map((field) => field.trim()).filter(Boolean),
-    ...(name ? { name } : {}),
-    ...(include ? { includeFields: include.split(',').map((field) => field.trim()).filter(Boolean) } : {}),
-    ...(filter ? { filter } : {}),
-    ...(opts ? { options: opts } : {}),
+    fields: parsed.fields,
+    ...(parsed.name ? { name: parsed.name } : {}),
+    ...(parsed.includeFields ? { includeFields: parsed.includeFields } : {}),
+    ...(parsed.filter !== undefined ? { filter: parsed.filter } : {}),
+    ...(parsed.options !== undefined ? { options: parsed.options } : {}),
   };
 }
 
@@ -122,11 +145,14 @@ export function directiveName(
  */
 export function parsePushSchema(text: string, provider: Provider): PushSchema {
   const models: PushModel[] = [];
+  const views: PushView[] = [];
   const issues: FieldTypeIssue[] = [];
   const modelRefs: Array<{ model: string; field: string; type: string }> = [];
+  const viewRefs: Array<{ view: string; field: string; type: string }> = [];
   let current: PushModel | null = null;
+  let currentView: PushView | null = null;
 
-  for (const raw of text.split('\n')) {
+  for (const raw of splitSchemaLines(text)) {
     const line = raw.trim();
     if (!line || line.startsWith('//')) continue;
 
@@ -140,37 +166,92 @@ export function parsePushSchema(text: string, provider: Provider): PushSchema {
         compoundUniques: [],
         indexes: [],
       };
+      currentView = null;
       models.push(current);
+      continue;
+    }
+
+    const viewHeader = line.match(/^view\s+(\w+)\s*\{/);
+    if (viewHeader) {
+      currentView = {
+        name: viewHeader[1],
+        viewName: viewHeader[1].toLowerCase() + 's',
+        schema: defaultSchemaFor(provider),
+        fields: [],
+        sql: '',
+      };
+      current = null;
+      views.push(currentView);
       continue;
     }
 
     if (line === '}') {
       current = null;
+      currentView = null;
       continue;
     }
+
+    if (currentView) {
+      if (line.startsWith('@@sql') || line.startsWith('@@definition')) {
+        const attribute = line.startsWith('@@sql') ? '@@sql' : '@@definition';
+        const sql = unquote(attributeArgs(line, attribute));
+        if (sql !== undefined) currentView.sql = sql.trim();
+        continue;
+      }
+      if (line.startsWith('@@map')) {
+        const mapped = unquote(attributeArgs(line, '@@map'));
+        if (mapped) currentView.viewName = mapped;
+        continue;
+      }
+      if (line.startsWith('@@schema')) {
+        const declared = unquote(attributeArgs(line, '@@schema'));
+        if (declared !== undefined) {
+          currentView.schema = declared.trim();
+          currentView.declaredSchema = currentView.schema;
+        }
+        continue;
+      }
+      if (line.startsWith('@@')) continue;
+
+      const head = readFieldLineHead(line);
+      if (!head) continue;
+      if (!resolveFieldType(head.type, provider)) {
+        // A view's fields are columns of a result set, never relations.
+        viewRefs.push({ view: currentView.name, field: head.name, type: head.type });
+        continue;
+      }
+      currentView.fields.push({
+        name: head.name,
+        sqlType: head.type.toUpperCase(),
+        isOptional: head.isOptional,
+        isId: false,
+        isUnique: false,
+      });
+      continue;
+    }
+
     if (!current) continue;
 
     if (line.startsWith('@@map')) {
-      const match = line.match(/@@map\("(.+)"\)/);
-      if (match) current.tableName = match[1];
+      const mapped = unquote(attributeArgs(line, '@@map'));
+      if (mapped) current.tableName = mapped;
       continue;
     }
     if (line.startsWith('@@schema')) {
-      // `(.*)` rather than `(.+)`, because `@@schema("")` is how a model says "no
-      // schema" and has to survive as an empty string rather than being dropped as
-      // no match — which is how SQLite and MySQL schemas are written.
-      const match = line.match(/@@schema\("(.*)"\)/);
-      if (match) {
-        current.schema = match[1].trim();
+      // An empty string is meaningful — `@@schema("")` says "no schema" for databases
+      // that have none — so it has to survive as `''` rather than being dropped.
+      const declared = unquote(attributeArgs(line, '@@schema'));
+      if (declared !== undefined) {
+        current.schema = declared.trim();
         current.declaredSchema = current.schema;
       }
       continue;
     }
     if (line.startsWith('@@unique') || line.startsWith('@@index')) {
-      const match = line.match(DIRECTIVE);
-      if (match) {
-        const definition = parseDirective(line, match[1] ?? '');
-        if (line.startsWith('@@unique')) current.compoundUniques.push(definition);
+      const isUnique = line.startsWith('@@unique');
+      const definition = parseDirective(line, isUnique ? '@@unique' : '@@index');
+      if (definition) {
+        if (isUnique) current.compoundUniques.push(definition);
         else current.indexes.push(definition);
       }
       continue;
@@ -187,17 +268,19 @@ export function parsePushSchema(text: string, provider: Provider): PushSchema {
 
     // The type is kept as written (upper-cased) because that is what the database
     // is told; which types exist is what `resolveFieldType` just checked.
+    const uniqueArgs = attributeArgs(line, '@unique');
     current.fields.push({
       name: head.name,
       sqlType: head.type.toUpperCase(),
       isOptional: head.isOptional,
-      isId: line.includes('@id'),
-      isUnique: line.includes('@unique'),
+      isId: hasAttribute(line, '@id'),
+      isUnique: hasAttribute(line, '@unique'),
+      ...(uniqueArgs ? { uniqueName: stringOption(uniqueArgs, 'map') } : {}),
       // The expression rather than SQL: `uuid()` and `autoincrement()` are spelled
       // differently per provider, and only the dialect knows how. `@updatedAt` is
       // `now()` under another name.
-      defaultExpr: line.match(/@default\((.*)\)/)?.[1]
-        ?? (line.includes('@updatedAt') ? 'now()' : undefined),
+      defaultExpr: attributeArgs(line, '@default')
+        ?? (hasAttribute(line, '@updatedAt') ? 'now()' : undefined),
     });
   }
 
@@ -216,8 +299,42 @@ export function parsePushSchema(text: string, provider: Provider): PushSchema {
     }
   }
 
+  for (const view of views) {
+    if (view.declaredSchema === 'dbo' && provider !== 'mssql') {
+      issues.push({
+        path: view.name,
+        message:
+          `schema "dbo" does not exist in ${provider}; remove the @@schema directive or set it ` +
+          'to the schema this database uses',
+      });
+    }
+    if (!view.sql.trim()) {
+      issues.push({ path: view.name, message: 'a view needs @@sql("SELECT ...")' });
+    }
+  }
+
+  // A `@unique` without `map:` must still get the deterministic name `db:migrate`
+  // expects, or push leaves a database-named constraint that the next diff cannot
+  // recognise and adds a second one for the same column.
+  for (const model of models) {
+    const table = safeIdentifierName(model.tableName);
+    for (const field of model.fields) {
+      if (field.isUnique && !field.isId && !field.uniqueName) {
+        field.uniqueName = `UQ_${table}_${safeIdentifierName(field.name)}`;
+      }
+    }
+  }
+
   const modelNames = models.map((model) => model.name);
+  const viewNames = new Set(views.map((view) => view.name));
   for (const ref of modelRefs) {
+    if (viewNames.has(ref.type)) {
+      issues.push({
+        path: `${ref.model}.${ref.field}`,
+        message: `"${ref.type}" is a view and cannot be the target of a relation; select from it directly instead`,
+      });
+      continue;
+    }
     if (!modelNames.includes(ref.type)) {
       issues.push({
         path: `${ref.model}.${ref.field}`,
@@ -225,8 +342,14 @@ export function parsePushSchema(text: string, provider: Provider): PushSchema {
       });
     }
   }
+  for (const ref of viewRefs) {
+    issues.push({
+      path: `${ref.view}.${ref.field}`,
+      message: unknownFieldTypeMessage(ref.type, provider, modelNames),
+    });
+  }
 
-  return { models, issues };
+  return { models, views, issues };
 }
 
 /**
@@ -247,4 +370,9 @@ export function safeIdentifierName(raw: string): string {
 
 export function qualifiedTableName(model: PushModel): string {
   return model.schema ? `${model.schema}.${model.tableName}` : model.tableName;
+}
+
+/** The view name to create, qualified only when the view declared a schema. */
+export function qualifiedViewName(view: PushView): string {
+  return view.schema ? `${view.schema}.${view.viewName}` : view.viewName;
 }

@@ -58,7 +58,7 @@ async function push() {
     }
   }
 
-  const { models, issues } = parsePushSchema(schemaText, provider);
+  const { models, views, issues } = parsePushSchema(schemaText, provider);
   if (issues.length > 0) throw new FieldTypeError(provider, issues);
 
   console.log(`🚀 Pushing schema to database (${PROVIDER_LABELS[provider]})...`);
@@ -69,12 +69,13 @@ async function push() {
       await (await getDb()).$executeRawUnsafe(sql);
     },
     log: (message) => console.log(message),
-  });
+  }, views);
 
   if (result.tablesCreated > 0) console.log(`   ${result.tablesCreated} table(s) created.`);
   if (result.columnsAdded > 0) console.log(`   ${result.columnsAdded} column(s) added.`);
   if (result.uniqueConstraintsAdded > 0) console.log(`   ${result.uniqueConstraintsAdded} unique(s) added.`);
   if (result.indexesCreated > 0) console.log(`   ${result.indexesCreated} index(es) created.`);
+  if (result.viewsApplied > 0) console.log(`   ${result.viewsApplied} view(s) created or replaced.`);
 
   console.log("✅ Database push completed.");
   process.exit(0);

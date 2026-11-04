@@ -8,8 +8,17 @@
  * The database is two functions rather than the adapter, which keeps this testable
  * and keeps the driver out of the decision making.
  */
-import { PushDialect } from './dialect';
-import { PushIndex, PushModel, directiveName, qualifiedTableName, safeIdentifierName } from './push-schema';
+import { PushDialect, normalizeViewSql } from './dialect';
+import {
+  PushIndex,
+  PushModel,
+  PushView,
+  directiveName,
+  qualifiedTableName,
+  qualifiedViewName,
+  safeIdentifierName,
+} from './push-schema';
+import { orderViewsByDependency } from './view-order';
 
 /** The two things this needs from a database connection. */
 export interface PushDatabase {
@@ -28,6 +37,8 @@ export interface ApplyResult {
   columnsAdded: number;
   indexesCreated: number;
   uniqueConstraintsAdded: number;
+  /** How many views were created or replaced. */
+  viewsApplied: number;
 }
 
 /**
@@ -41,6 +52,7 @@ export async function applySchema(
   models: readonly PushModel[],
   dialect: PushDialect,
   db: PushDatabase,
+  views: readonly PushView[] = [],
 ): Promise<ApplyResult> {
   const result: ApplyResult = {
     tablesCreated: 0,
@@ -48,6 +60,7 @@ export async function applySchema(
     columnsAdded: 0,
     indexesCreated: 0,
     uniqueConstraintsAdded: 0,
+    viewsApplied: 0,
   };
 
   for (const model of models) {
@@ -89,7 +102,9 @@ export async function applySchema(
         // A new `@unique` column needs its unique too, and on SQLite that cannot
         // ride along with the ADD COLUMN — SQLite refuses to add a UNIQUE column.
         if (field.isUnique && !field.isId && !dialect.supportsUniqueInlineOnAddColumn) {
-          const indexName = `UQ_${safeName}_${field.name}`;
+          // The same name `db:migrate` expects for this column's unique, so the
+          // next diff sees push's artifact instead of adding another one.
+          const indexName = field.uniqueName ?? `UQ_${safeName}_${field.name}`;
           const quoted = dialect.quote(indexName);
           if ((await db.query(dialect.uniqueConstraintExists(tableName, indexName))).length === 0) {
             db.log(`Creating unique index ${quoted} on table ${sqlTableName}...`);
@@ -112,7 +127,6 @@ export async function applySchema(
         db.log(`Creating unique index ${quoted} on table ${sqlTableName}...`);
         await db.execute(dialect.createUniqueIndex(quoted, sqlTableName, quoteFields(entry.fields)));
         result.indexesCreated += 1;
-        result.uniqueConstraintsAdded += 1;
       }
       result.uniqueConstraintsAdded += 1;
     }
@@ -122,9 +136,52 @@ export async function applySchema(
       if ((await db.query(dialect.indexExists(tableName, name))).length > 0) continue;
       const quoted = dialect.quote(name);
       db.log(`Creating index ${quoted} on table ${sqlTableName}...`);
-      await db.execute(dialect.createIndex(quoted, sqlTableName, quoteFields(directive.fields)));
+      await db.execute(
+        dialect.createIndex(quoted, sqlTableName, quoteFields(directive.fields), {
+          includeFields: directive.includeFields ? quoteFields(directive.includeFields) : undefined,
+          filter: directive.filter,
+          options: directive.options,
+        }),
+      );
       result.indexesCreated += 1;
     }
+  }
+
+  // Views are applied after every table: a view may select from a table this same
+  // push created, and SQL Server validates the reference while compiling it.
+  // Within the views, a dependent view has to come after the one it reads.
+  const orderedViews = orderViewsByDependency(
+    views.map((view) => ({
+      view,
+      names: [qualifiedViewName(view), view.viewName],
+      sql: view.sql,
+    })),
+  );
+  if (orderedViews.cyclic) {
+    // The definitions cannot all exist at once; the database reports which one
+    // is missing, which is more useful than a generic ordering error here.
+    db.log('Warning: view definitions reference each other in a cycle; keeping schema order.');
+  }
+
+  for (const { view } of orderedViews.ordered) {
+    const viewName = qualifiedViewName(view);
+    const sqlViewName = dialect.quoteTable(viewName);
+    db.log(`Processing view ${sqlViewName}...`);
+
+    const rows = await db.query(dialect.viewDefinition(viewName));
+    const existing = rows[0] as { definition?: string | null } | undefined;
+    if (existing && normalizeViewSql(existing.definition) === normalizeViewSql(view.sql)) {
+      // The catalog and the schema agree; recreating would just churn dependencies.
+      continue;
+    }
+
+    if (existing && !dialect.supportsCreateOrReplaceView) {
+      db.log(`Dropping view ${sqlViewName} before recreating it...`);
+      await db.execute(dialect.dropView(sqlViewName));
+    }
+    db.log(`Creating view ${sqlViewName}...`);
+    await db.execute(dialect.createView(sqlViewName, view.sql));
+    result.viewsApplied += 1;
   }
 
   return result;

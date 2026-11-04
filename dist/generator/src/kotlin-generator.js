@@ -664,6 +664,47 @@ class ModelClient<T : Any>(
 }
 
 /**
+ * A read-only, typed client for one view.
+ *
+ * It mirrors [ModelClient]'s read methods and stops there, so a write to a view does
+ * not compile. The runtime's read-only client does the actual work.
+ */
+class ViewClient<T : Any>(
+    private val delegate: an5.adapters.ViewClient,
+    private val read: (Row) -> T,
+) {
+
+    /** The view this client reads. */
+    val name: String get() = delegate.name
+
+    fun findMany(): List<T> = delegate.findMany().map(read)
+
+    fun findMany(block: QueryBuilder.() -> Unit): List<T> = delegate.findMany(block).map(read)
+
+    fun findFirst(filter: Where): T? = delegate.findFirst(filter)?.let(read)
+
+    fun findUnique(filter: Where): T? = delegate.findUnique(filter)?.let(read)
+
+    fun count(filter: Where? = null): Long = delegate.count(filter)
+
+    /** One row of aggregate values, keyed \`_count\`, \`_sum_<field>\` and so on. */
+    fun aggregate(block: AggregateBuilder.() -> Unit): Row = delegate.aggregate(block)
+
+    /** One row per group, each carrying the group's count and aggregates. */
+    fun groupBy(vararg by: String, block: AggregateBuilder.() -> Unit = {}): List<Row> =
+        delegate.groupBy(*by, block = block)
+
+    /** The rows nearest [vector]. */
+    fun vectorSearch(
+        vector: DoubleArray,
+        take: Int = 10,
+        filter: Where? = null,
+        vectorField: String = "embedding",
+        metric: DistanceMetric = DistanceMetric.COSINE,
+    ): List<T> = delegate.vectorSearch(vector, take, filter, vectorField, metric).map(read)
+}
+
+/**
  * The AN5 entry point: one typed client per model, over one connection.
  *
  * \`\`\`
@@ -687,6 +728,16 @@ class An5Db internal constructor(private val an5: An5) : AutoCloseable {
             if (seen.has(property))
                 continue;
             seen.add(property);
+            if (model.isView) {
+                content += `    /** Reads for \`${model.name}\`. */
+`;
+                content += `    val ${property}: ViewClient<${model.name}> =
+`;
+                content += `        ViewClient(an5.view("${model.name}"), ${model.name}::fromRow)
+
+`;
+                continue;
+            }
             content += `    /** Queries for \`${model.name}\`. */
 `;
             content += `    val ${property}: ModelClient<${model.name}> =

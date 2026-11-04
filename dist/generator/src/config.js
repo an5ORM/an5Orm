@@ -270,8 +270,8 @@ function resolveConnectionString(config, env = process.env, command = 'this comm
  *
  * Falls back to SQL Server when the scheme is unknown — it is the default
  * provider, and ADO-style strings (`Server=...;Database=...`) have no scheme to
- * read. `sqlite://`, a bare path ending in `.sqlite`, `.sqlite3` or `.db` — the same
- * list `An5Adapter` uses.
+ * read. `:memory:`, any `sqlite:` URI (`sqlite://`, `sqlite::memory:`) and a bare
+ * path ending in `.sqlite`, `.sqlite3` or `.db` — the same list `An5Adapter` uses.
  */
 function detectProvider(connectionString) {
     // Lower-cased: a URI scheme is case-insensitive, so `MySQL://` is the same
@@ -287,8 +287,9 @@ function detectProvider(connectionString) {
         return 'postgres';
     if (cs.startsWith('mysql://') || cs.startsWith('mariadb://'))
         return 'mysql';
-    if (SQLITE_FILE_SUFFIXES.some((suffix) => cs.endsWith(suffix)))
+    if (cs === ':memory:' || cs.startsWith('sqlite:') || SQLITE_FILE_SUFFIXES.some((suffix) => cs.endsWith(suffix))) {
         return 'sqlite';
+    }
     return field_types_1.DEFAULT_PROVIDER;
 }
 /** File extensions that mean SQLite when there is no scheme to read. */

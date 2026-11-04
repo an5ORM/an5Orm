@@ -9,7 +9,7 @@
  * and keeps the driver out of the decision making.
  */
 import { PushDialect } from './dialect';
-import { PushModel } from './push-schema';
+import { PushModel, PushView } from './push-schema';
 /** The two things this needs from a database connection. */
 export interface PushDatabase {
     /** Runs a query and returns its rows; existence checks are `length > 0`. */
@@ -26,6 +26,8 @@ export interface ApplyResult {
     columnsAdded: number;
     indexesCreated: number;
     uniqueConstraintsAdded: number;
+    /** How many views were created or replaced. */
+    viewsApplied: number;
 }
 /**
  * Creates whatever the schema has and the database does not.
@@ -34,4 +36,4 @@ export interface ApplyResult {
  * constraints and indexes — a unique over a column that does not exist yet fails.
  * Everything is checked before it is created, so running it twice changes nothing.
  */
-export declare function applySchema(models: readonly PushModel[], dialect: PushDialect, db: PushDatabase): Promise<ApplyResult>;
+export declare function applySchema(models: readonly PushModel[], dialect: PushDialect, db: PushDatabase, views?: readonly PushView[]): Promise<ApplyResult>;

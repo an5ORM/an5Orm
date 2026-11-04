@@ -36,6 +36,16 @@ export interface Model {
   relations: Relation[];
   compoundUniques?: string[][];
   description?: string;
+  /**
+   * A `view` block rather than a `model`.
+   *
+   * Views are described with the same field syntax so generated clients can type
+   * their rows, but they are read-only and their DDL comes from `viewSql` rather
+   * than from the fields.
+   */
+  isView?: boolean;
+  /** The `SELECT` body of `@@sql("...")`; required for a view. */
+  viewSql?: string;
 }
 
 /**

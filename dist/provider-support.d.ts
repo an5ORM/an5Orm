@@ -24,4 +24,3 @@ export declare const SQL_SERVER_ONLY_COMMANDS: Record<string, string>;
  * thing it exists to say.
  */
 export declare function sqlServerOnlyError(provider: Provider, command: string): string | null;
-//# sourceMappingURL=provider-support.d.ts.map

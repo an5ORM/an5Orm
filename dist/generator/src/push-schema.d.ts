@@ -1,12 +1,3 @@
-/**
- * Reading `.an5` files for `db:push`.
- *
- * `SchemaParser` and `parseSchemaText` cover the generators and `db:migrate`;
- * this is the third reader, and it exists because push needs a shape of its own:
- * raw `@default` expressions rather than rendered SQL, and the schema a table
- * lands in. It is kept here rather than inline in `push.ts` so the mapping from
- * schema text to a column can be tested without a database.
- */
 import { FieldTypeIssue, Provider } from './field-types';
 /** A column, as push needs it: the type as written plus what the dialect renders. */
 export interface PushField {
@@ -15,6 +6,8 @@ export interface PushField {
     isOptional: boolean;
     isId: boolean;
     isUnique: boolean;
+    /** `@unique(map: "…")`, so push and migrate create the same artifact name. */
+    uniqueName?: string | undefined;
     /** The `@default(...)` expression, not SQL: only the dialect knows the spelling. */
     defaultExpr?: string | undefined;
 }
@@ -30,6 +23,21 @@ export interface PushModel {
     compoundUniques: PushIndex[];
     /** `@@index([a, b])`, as field lists. */
     indexes: PushIndex[];
+}
+/**
+ * A `view` block, as push needs it.
+ *
+ * `fields` describe the view's result columns for validation and generated
+ * clients; the DDL itself is `sql`, the `@@sql("...")` body.
+ */
+export interface PushView {
+    name: string;
+    /** The database view name; `@@map` may rename it independently. */
+    viewName: string;
+    schema: string;
+    declaredSchema?: string | undefined;
+    fields: PushField[];
+    sql: string;
 }
 /**
  * The schema a model lands in when the schema file does not say: none, for every
@@ -58,6 +66,8 @@ export interface PushIndex {
 }
 export interface PushSchema {
     models: PushModel[];
+    /** `view` blocks, applied after the tables they read from. */
+    views: PushView[];
     /** Field types the provider does not have; empty when the schema is valid. */
     issues: FieldTypeIssue[];
 }
@@ -91,3 +101,5 @@ export declare function parsePushSchema(text: string, provider: Provider): PushS
  */
 export declare function safeIdentifierName(raw: string): string;
 export declare function qualifiedTableName(model: PushModel): string;
+/** The view name to create, qualified only when the view declared a schema. */
+export declare function qualifiedViewName(view: PushView): string;

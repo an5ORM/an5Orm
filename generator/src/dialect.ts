@@ -24,7 +24,7 @@ function objectName(raw: string): string {
 function splitQualified(raw: string): { schema: string | undefined; name: string } {
   const parts = raw.replace(/[\[\]"`]/g, '').split('.').filter(Boolean);
   if (parts.length >= 2) {
-    return { schema: parts[parts.length - 2], name: parts[parts.length - 1] };
+    return { schema: parts[parts.length - 2], name: parts[parts.length - 1]! };
   }
   return { schema: undefined, name: parts[0] ?? raw };
 }
@@ -50,8 +50,23 @@ export interface ColumnSpec {
   isId: boolean;
   isUnique: boolean;
   isOptional: boolean;
+  /** `@unique(map: "…")`: the constraint name both push and migrate must use. */
+  uniqueName?: string | undefined;
   /** The raw `@default(...)` expression, e.g. `now()` or `"draft"`. */
   defaultExpr?: string | undefined;
+}
+
+/**
+ * The extra clauses `@@index(..., include:, filter:, options:)` asks for.
+ *
+ * Field names are already quoted by the caller. `options` is SQL Server syntax
+ * (`WITH (FILLFACTOR = 90, ONLINE = ON)`); other providers either support the
+ * standard subset (`include`, `filter`) or ignore what they cannot express.
+ */
+export interface IndexOptions {
+  includeFields?: string[] | undefined;
+  filter?: string | undefined;
+  options?: string | undefined;
 }
 
 export interface PushDialect {
@@ -80,6 +95,16 @@ export interface PushDialect {
   readonly supportsUniqueInlineOnAddColumn: boolean;
   /** Query returning one row when the table exists. */
   tableExists(raw: string): string;
+  /** Query returning one row when a view exists. */
+  viewExists(raw: string): string;
+  /**
+   * Query returning the stored view definition in a single `definition` column.
+   *
+   * Used to skip a push that would recreate an unchanged view. The value may be
+   * the body alone (PostgreSQL/MySQL) or the full `CREATE VIEW` text (SQL
+   * Server/SQLite); `normalizeViewSql` compares either form.
+   */
+  viewDefinition(raw: string): string;
   /** Query returning one row when the column exists. */
   columnExists(raw: string, column: string): string;
   /** Query returning one row when the unique constraint exists. */
@@ -89,7 +114,17 @@ export interface PushDialect {
   /** One column definition, as it appears inside `CREATE TABLE`. */
   columnDefinition(column: ColumnSpec): string;
   createTable(quotedTable: string, columnDefs: string[]): string;
-  createIndex(quotedName: string, quotedTable: string, quotedFields: string[]): string;
+  /**
+   * Whether `CREATE OR REPLACE VIEW` (or `CREATE OR ALTER VIEW`) is available.
+   *
+   * SQLite has neither, so a changed view needs `DROP VIEW` first; see `dropView`.
+   */
+  readonly supportsCreateOrReplaceView: boolean;
+  /** `CREATE [OR REPLACE|OR ALTER] VIEW ... AS <select>`. */
+  createView(quotedView: string, selectSql: string): string;
+  /** `DROP VIEW IF EXISTS`, for providers without create-or-replace. */
+  dropView(quotedView: string): string;
+  createIndex(quotedName: string, quotedTable: string, quotedFields: string[], options?: IndexOptions): string;
   createUniqueIndex(quotedName: string, quotedTable: string, quotedFields: string[]): string;
   /** `ALTER TABLE ... ADD <column>`, nullability included. */
   addColumn(quotedTable: string, column: ColumnSpec): string;
@@ -152,6 +187,86 @@ function buildTableExists(provider: Provider): (raw: string) => string {
         return '';
     }
   };
+}
+
+/**
+ * Where a view's existence and definition are recorded.
+ *
+ * SQL Server keeps both in `sys.views`/`OBJECT_DEFINITION`; PostgreSQL and MySQL
+ * expose the body through their catalogs; SQLite stores the original statement in
+ * `sqlite_master`. The returned definition is compared with `normalizeViewSql`,
+ * which accepts either a full `CREATE VIEW` statement or a bare `SELECT`.
+ */
+function buildViewExists(provider: Provider): (raw: string) => string {
+  return (raw) => {
+    const { schema, name } = splitQualified(raw);
+    switch (provider) {
+      case 'mssql':
+        return `SELECT name FROM sys.views WHERE object_id = OBJECT_ID(${sqlLiteral(objectName(raw))})`;
+      case 'postgres':
+        return `SELECT viewname FROM pg_views WHERE schemaname = ${schema ? sqlLiteral(schema) : defaultSchema(provider, undefined)} AND viewname = ${sqlLiteral(name)}`;
+      case 'mysql':
+        return (
+          `SELECT table_name FROM information_schema.views WHERE table_schema = ${schema ? sqlLiteral(schema) : 'DATABASE()'} ` +
+          `AND table_name = ${sqlLiteral(name)}`
+        );
+      case 'sqlite':
+        return `SELECT name FROM sqlite_master WHERE type = 'view' AND name = ${sqlLiteral(name)}`;
+      default:
+        return '';
+    }
+  };
+}
+
+function buildViewDefinition(provider: Provider): (raw: string) => string {
+  return (raw) => {
+    const { schema, name } = splitQualified(raw);
+    switch (provider) {
+      case 'mssql':
+        return `SELECT OBJECT_DEFINITION(OBJECT_ID(${sqlLiteral(objectName(raw))})) AS definition FROM sys.views WHERE object_id = OBJECT_ID(${sqlLiteral(objectName(raw))})`;
+      case 'postgres':
+        return (
+          `SELECT definition FROM pg_views WHERE schemaname = ${schema ? sqlLiteral(schema) : defaultSchema(provider, undefined)} ` +
+          `AND viewname = ${sqlLiteral(name)}`
+        );
+      case 'mysql':
+        return (
+          `SELECT view_definition AS definition FROM information_schema.views WHERE table_schema = ` +
+          `${schema ? sqlLiteral(schema) : 'DATABASE()'} AND table_name = ${sqlLiteral(name)}`
+        );
+      case 'sqlite':
+        return `SELECT sql AS definition FROM sqlite_master WHERE type = 'view' AND name = ${sqlLiteral(name)}`;
+      default:
+        return '';
+    }
+  };
+}
+
+/**
+ * The `SELECT` body of a view definition.
+ *
+ * Catalogs return a full `CREATE VIEW ... AS ...` statement or the bare body,
+ * depending on the provider (and on whether `OBJECT_DEFINITION` is available).
+ * `@@sql` wants the body alone, so both forms reduce to the same text.
+ */
+export function viewSqlBody(sql: string | null | undefined): string {
+  if (!sql) return '';
+  let body = sql.trim();
+  const create = body.match(/^\s*CREATE\s+(?:OR\s+(?:ALTER|REPLACE)\s+)?VIEW\b[\s\S]*?\sAS\b\s*([\s\S]*)$/i);
+  if (create?.[1] !== undefined) body = create[1];
+  return body.replace(/;\s*$/, '').trim();
+}
+
+/**
+ * Normalizes a view definition for comparison.
+ *
+ * A catalog may return `CREATE VIEW [x] AS SELECT ...` while the schema holds
+ * only `SELECT ...`. Whitespace and case are not meaningful here either, so both
+ * forms reduce to the same string; comparing the raw text would make every push
+ * think the view changed.
+ */
+export function normalizeViewSql(sql: string | null | undefined): string {
+  return viewSqlBody(sql).replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function buildColumnExists(provider: Provider): (raw: string, column: string) => string {
@@ -281,6 +396,47 @@ function identityKeyword(column: ColumnSpec, provider: Provider): string {
   }
 }
 
+/**
+ * Renders `CREATE [UNIQUE] INDEX`, carrying the `@@index` options where the
+ * provider understands them.
+ *
+ * SQL Server writes `INCLUDE (...) WHERE <filter> WITH (<options>)`; PostgreSQL
+ * shares the standard `INCLUDE`/`WHERE` subset; SQLite has partial indexes but no
+ * covering indexes; MySQL has neither, so the base index is the whole statement.
+ * Dropping an unsupported clause keeps the index valid — it only means the engine
+ * cannot use it for a narrower scan.
+ */
+function createIndexSql(
+  kind: 'INDEX' | 'UNIQUE INDEX',
+  quotedName: string,
+  quotedTable: string,
+  quotedFields: string[],
+  options: IndexOptions | undefined,
+  provider: Provider,
+): string {
+  const statement = kind === 'INDEX' ? 'CREATE INDEX' : 'CREATE UNIQUE INDEX';
+  const base = `${statement} ${quotedName} ON ${quotedTable} (${quotedFields.join(', ')})`;
+  if (!options) return base;
+
+  const include = options.includeFields && options.includeFields.length > 0
+    ? ` INCLUDE (${options.includeFields.join(', ')})`
+    : '';
+  const filter = options.filter ? ` WHERE ${options.filter}` : '';
+  const withClause = options.options ? ` WITH (${options.options})` : '';
+
+  switch (provider) {
+    case 'mssql':
+      return `${base}${include}${filter}${withClause}`;
+    case 'postgres':
+      return `${base}${include}${filter}`;
+    case 'sqlite':
+      return `${base}${filter}`;
+    default:
+      // MySQL alone: no INCLUDE, no partial indexes and no WITH options.
+      return base;
+  }
+}
+
 function createDialect(provider: Provider, quote: (name: string) => string): PushDialect {
   const supportsUniqueInlineOnAddColumn = provider !== 'sqlite';
   const quoteTable = (raw: string): string => {
@@ -303,7 +459,14 @@ function createDialect(provider: Provider, quote: (name: string) => string): Pus
       ? `${quote(column.name)} ${sqlType} ${identity}`
       : `${quote(column.name)} ${sqlType}`;
     const nullable = column.isOptional ? '' : ' NOT NULL';
-    const unique = column.isUnique && !column.isId ? ' UNIQUE' : '';
+    // Without `map:` the database names the constraint; with it, push has to use
+    // the schema's name so the next migration recognises the artifact instead of
+    // trying to add a second unique for the same column.
+    const unique = column.isUnique && !column.isId
+      ? column.uniqueName
+        ? ` CONSTRAINT ${quote(column.uniqueName)} UNIQUE`
+        : ' UNIQUE'
+      : '';
     const defaultSql = defaultClause(column.defaultExpr, provider);
     const defaultPart = defaultSql ? ` ${defaultSql}` : '';
 
@@ -321,14 +484,29 @@ function createDialect(provider: Provider, quote: (name: string) => string): Pus
     quoteTable,
     supportsNamedUniqueConstraint: provider !== 'sqlite',
     supportsUniqueInlineOnAddColumn,
+    supportsCreateOrReplaceView: provider !== 'sqlite',
     tableExists: buildTableExists(provider),
+    viewExists: buildViewExists(provider),
+    viewDefinition: buildViewDefinition(provider),
     columnExists: buildColumnExists(provider),
     uniqueConstraintExists: buildUniqueConstraintExists(provider),
     indexExists: buildIndexExists(provider),
     columnDefinition,
     createTable: (table, columnDefs) => `CREATE TABLE ${table} (\n  ${columnDefs.join(',\n  ')}\n)`,
-    createIndex: (name, table, fields) => `CREATE INDEX ${name} ON ${table} (${list(fields)})`,
-    createUniqueIndex: (name, table, fields) => `CREATE UNIQUE INDEX ${name} ON ${table} (${list(fields)})`,
+    createView: (view, selectSql) => {
+      // `@@sql` is the SELECT body, but a definition pasted from a catalog may
+      // still carry its `CREATE VIEW ... AS` header; dropping it here means such a
+      // schema produces one statement instead of `CREATE VIEW ... AS CREATE VIEW`.
+      const body = viewSqlBody(selectSql).trim();
+      if (provider === 'mssql') return `CREATE OR ALTER VIEW ${view} AS\n${body}`;
+      if (provider === 'sqlite') return `CREATE VIEW ${view} AS\n${body}`;
+      return `CREATE OR REPLACE VIEW ${view} AS\n${body}`;
+    },
+    dropView: (view) => `DROP VIEW IF EXISTS ${view}`,
+    createIndex: (name, table, fields, options) =>
+      createIndexSql('INDEX', name, table, fields, options, provider),
+    createUniqueIndex: (name, table, fields) =>
+      createIndexSql('UNIQUE INDEX', name, table, fields, undefined, provider),
     addColumn: (table, column) => {
       // SQLite refuses "Cannot add a UNIQUE column", so the unique is left out here
       // and added as a separate index by the caller — silently dropping it instead
@@ -354,12 +532,17 @@ const SHEETS_DIALECT: PushDialect = {
   quoteTable: (raw) => objectName(raw),
   supportsNamedUniqueConstraint: false,
   supportsUniqueInlineOnAddColumn: false,
+  supportsCreateOrReplaceView: false,
   tableExists: () => '',
+  viewExists: () => '',
+  viewDefinition: () => '',
   columnExists: () => '',
   uniqueConstraintExists: () => '',
   indexExists: () => '',
   columnDefinition: () => '',
   createTable: () => '',
+  createView: () => '',
+  dropView: () => '',
   createIndex: () => '',
   createUniqueIndex: () => '',
   addColumn: () => '',

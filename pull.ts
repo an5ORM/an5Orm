@@ -4,6 +4,7 @@ import path from "path";
 import { An5Adapter } from "@an5/adapters";
 import { loadConfig, providerFromConfig, resolveConnectionString } from "./generator/src/config";
 import { Provider } from "./generator/src/field-types";
+import { blockNameForObject, blockRange, buildViewBlock, qualifiedBlockKey, sqlServerTypeForColumn } from "./generator/src/pull-schema";
 import { sqlServerOnlyError } from "./provider-support";
 
 const rootDir = process.cwd();
@@ -33,8 +34,13 @@ function refuseIfNotSqlServer(provider: Provider, command: string): void {
   process.exit(1);
 }
 
-function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.slice(1);
+/**
+ * The block name `db:pull` used before it split snake_case and protected singular
+ * words (`Order_item`, `User_statu`). Kept only to match a schema that already
+ * contains those blocks.
+ */
+function legacyBlockName(objectName: string): string {
+  return objectName.charAt(0).toUpperCase() + objectName.slice(1).replace(/s$/, "");
 }
 
 async function pull() {
@@ -57,6 +63,8 @@ async function pull() {
   const fileContents: Record<string, string> = {};
   const modelToFileMap: Record<string, string> = {}; // modelName -> fileName
   const tableToFileMap: Record<string, string> = {}; // tableName -> fileName
+  const viewToFileMap: Record<string, string> = {}; // view name (bare and qualified) -> fileName
+  const existingViewNames: Record<string, string> = {}; // view key -> block name
 
   if (fs.existsSync(schemaDir)) {
     const files = fs.readdirSync(schemaDir).filter(f => f.endsWith(".an5"));
@@ -84,6 +92,28 @@ async function pull() {
           tableToFileMap[defaultTableName] = file;
         }
       }
+
+      // Views are tracked separately: a model and a view may share a name, and a
+      // view without @@map is identified by its block name.
+      const viewHeaderRegex = /view\s+(\w+)\s*\{/g;
+      while ((match = viewHeaderRegex.exec(text)) !== null) {
+        const blockName = match[1];
+        const range = blockRange(text, "view", blockName);
+        const block = range ? text.slice(range.start, range.end) : "";
+        const mapMatch = block.match(/@@map\("(.+)"\)/);
+        const objectName = mapMatch ? mapMatch[1] : blockName.toLowerCase() + "s";
+        const schemaMatch = block.match(/@@schema\("(.*)"\)/);
+
+        for (const key of new Set([
+          blockName,
+          objectName,
+          qualifiedBlockKey(blockName, schemaMatch?.[1]),
+          qualifiedBlockKey(objectName, schemaMatch?.[1]),
+        ])) {
+          viewToFileMap[key] = file;
+          existingViewNames[key] = blockName;
+        }
+      }
     }
   } else {
     fs.mkdirSync(schemaDir, { recursive: true });
@@ -99,12 +129,12 @@ async function pull() {
   const generatedModels: Record<string, string> = {};
 
   for (const table of tables) {
-    const { tableName } = table;
+    const { tableName, schemaName } = table;
     console.log(`Introspecting table [${tableName}]...`);
 
     // Get columns
     const columns = await (await getDb()).$queryRawUnsafe<any>(`
-      SELECT 
+      SELECT
           c.name AS columnName,
           ty.name AS dataType,
           c.max_length AS maxLength,
@@ -129,7 +159,7 @@ async function pull() {
 
     // Get indexes
     const indexes = await (await getDb()).$queryRawUnsafe<any>(`
-      SELECT 
+      SELECT
           i.name AS indexName,
           i.is_unique AS isUnique,
           i.is_primary_key AS isPrimaryKey,
@@ -189,7 +219,11 @@ async function pull() {
     }
 
     if (!modelName) {
-      modelName = tableName.charAt(0).toUpperCase() + tableName.slice(1).replace(/s$/, "");
+      // A schema pulled before `blockNameForObject` learned to split snake_case
+      // has a block named `Order_item`; keep matching it rather than adding a
+      // second block for the same table.
+      const legacy = legacyBlockName(tableName);
+      modelName = modelToFileMap[legacy] ? legacy : blockNameForObject(tableName);
     }
 
     // Parse existing model fields from file for merging
@@ -229,20 +263,8 @@ async function pull() {
     for (const col of columns) {
       const { columnName, dataType, isNullable, isPrimaryKey, isIdentity, defaultValue } = col;
 
-      // Generate SQL Server type directly
-      let sqlType = dataType.toUpperCase();
+      const sqlType = sqlServerTypeForColumn(col);
       const dt = dataType.toLowerCase();
-
-      // Add length/precision params
-      if (dt === "nvarchar" || dt === "varchar") {
-        sqlType = col.maxLength === -1 ? `${sqlType.toUpperCase()}(MAX)` : `${sqlType.toUpperCase()}(${col.maxLength / 2})`;
-      } else if (dt === "char" || dt === "nchar") {
-        sqlType = `${sqlType.toUpperCase()}(${col.maxLength / 2})`;
-      } else if (dt === "varbinary" || dt === "binary") {
-        sqlType = col.maxLength === -1 ? `${sqlType.toUpperCase()}(MAX)` : `${sqlType.toUpperCase()}(${col.maxLength})`;
-      } else if (dt === "decimal" || dt === "numeric") {
-        sqlType = `${sqlType.toUpperCase()}(${col.precision}, ${col.scale})`;
-      }
 
       const optional = isNullable ? "?" : "";
       let attributes = "";
@@ -318,9 +340,63 @@ async function pull() {
     if (tableName !== modelName.toLowerCase() + "s") {
       modelStr += `\n  @@map("${tableName}")\n`;
     }
+    // A table outside `dbo` is only the same object when the schema travels with
+    // it; without this, pushing the pulled schema created it in the connection's
+    // default schema.
+    if (schemaName && schemaName.toLowerCase() !== "dbo") {
+      modelStr += `${tableName === modelName.toLowerCase() + "s" ? "\n" : ""}  @@schema("${schemaName}")\n`;
+    }
     modelStr += "}";
 
     generatedModels[modelName] = modelStr;
+  }
+
+  // Views are pulled after the tables, for the same reason push creates them
+  // after the tables: they may read a table this schema declares.
+  const views = await (await getDb()).$queryRawUnsafe<any>(`
+    SELECT s.name AS schemaName, v.name AS viewName, OBJECT_DEFINITION(v.object_id) AS definition
+    FROM sys.views v
+    JOIN sys.schemas s ON v.schema_id = s.schema_id
+    WHERE v.is_ms_shipped = 0
+    ORDER BY s.name, v.name
+  `);
+
+  const generatedViews: Record<string, { block: string; file: string }> = {};
+
+  for (const view of views) {
+    const { viewName, schemaName, definition } = view;
+    const key = qualifiedBlockKey(viewName, schemaName);
+    // The name a previous pull would have chosen, kept so the block is updated
+    // in place instead of a duplicate appearing beside it.
+    const legacy = legacyBlockName(viewName);
+    const modelName = existingViewNames[key] ?? existingViewNames[viewName]
+      ?? (existingViewNames[legacy] ? legacy : blockNameForObject(viewName));
+    const targetFile = viewToFileMap[modelName] ?? viewToFileMap[key] ?? viewToFileMap[viewName] ?? defaultFile;
+
+    console.log(`Introspecting view [${key}]...`);
+    const columns = await (await getDb()).$queryRawUnsafe<any>(`
+      SELECT
+          c.name AS columnName,
+          ty.name AS dataType,
+          c.max_length AS maxLength,
+          c.precision AS precision,
+          c.scale AS scale,
+          c.is_nullable AS isNullable
+      FROM sys.columns c
+      JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+      WHERE c.object_id = OBJECT_ID(@p_0)
+      ORDER BY c.column_id
+    `, key);
+
+    const block = buildViewBlock({ modelName, viewName, schemaName, columns, definition });
+    if (block === null) {
+      // Without a definition there is nothing to put in `@@sql`, and a view block
+      // without one is rejected by push and migrate. Keep the database object and
+      // tell the user why it is the only one not in the schema.
+      console.warn(`⚠️ Skipped view [${key}]: its definition could not be read (VIEW DEFINITION permission?).`);
+      continue;
+    }
+    generatedViews[modelName] = { block, file: targetFile };
   }
 
   for (const [modelName, modelStr] of Object.entries(generatedModels)) {
@@ -334,6 +410,19 @@ async function pull() {
     } else {
       fileContents[targetFile] = fileContent.trim() + "\n\n" + modelStr + "\n";
       console.log(`➕ Added model [${modelName}] to file [${targetFile}]`);
+    }
+  }
+
+  for (const [viewName, entry] of Object.entries(generatedViews)) {
+    const fileContent = fileContents[entry.file];
+    const range = blockRange(fileContent, "view", viewName);
+
+    if (range) {
+      fileContents[entry.file] = fileContent.slice(0, range.start) + entry.block + fileContent.slice(range.end);
+      console.log(`✏️ Updated view [${viewName}] in file [${entry.file}]`);
+    } else {
+      fileContents[entry.file] = fileContent.trim() + "\n\n" + entry.block + "\n";
+      console.log(`➕ Added view [${viewName}] to file [${entry.file}]`);
     }
   }
 
