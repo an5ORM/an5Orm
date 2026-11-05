@@ -23,7 +23,17 @@ const dialect_1 = require("./dialect");
 function sqlServerTypeForColumn(col) {
     let sqlType = col.dataType.toUpperCase();
     const dt = col.dataType.toLowerCase();
-    if (dt === 'nvarchar' || dt === 'varchar') {
+    if (dt === 'vector') {
+        if (col.vectorDimensions && col.vectorDimensions > 0) {
+            const baseType = col.vectorBaseType?.toLowerCase();
+            if (baseType && baseType !== 'float32') {
+                return `VECTOR(${col.vectorDimensions}, ${baseType})`;
+            }
+            return `VECTOR(${col.vectorDimensions})`;
+        }
+        return 'VECTOR';
+    }
+    else if (dt === 'nvarchar' || dt === 'varchar') {
         sqlType = col.maxLength === -1 ? `${sqlType.toUpperCase()}(MAX)` : `${sqlType.toUpperCase()}(${col.maxLength / 2})`;
     }
     else if (dt === 'char' || dt === 'nchar') {

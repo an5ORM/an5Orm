@@ -668,6 +668,16 @@ test('db:pull names a new block from the object without mangling singular words'
   assertEq(blockNameForObject('analysis'), 'Analysis');
 });
 
+test('sqlServerTypeForColumn formats standard and native vector columns', () => {
+  assertEq(sqlServerTypeForColumn({ columnName: 'name', dataType: 'nvarchar', maxLength: 200, precision: 0, scale: 0, isNullable: false }), 'NVARCHAR(100)');
+  assertEq(sqlServerTypeForColumn({ columnName: 'body', dataType: 'varchar', maxLength: -1, precision: 0, scale: 0, isNullable: true }), 'VARCHAR(MAX)');
+  assertEq(sqlServerTypeForColumn({ columnName: 'price', dataType: 'decimal', maxLength: 9, precision: 10, scale: 2, isNullable: false }), 'DECIMAL(10, 2)');
+  assertEq(sqlServerTypeForColumn({ columnName: 'embedding', dataType: 'vector', maxLength: 6000, precision: 0, scale: 0, isNullable: true }), 'VECTOR');
+  assertEq(sqlServerTypeForColumn({ columnName: 'embedding', dataType: 'vector', maxLength: 6000, precision: 0, scale: 0, isNullable: true, vectorDimensions: 1536 }), 'VECTOR(1536)');
+  assertEq(sqlServerTypeForColumn({ columnName: 'embedding', dataType: 'vector', maxLength: 6000, precision: 0, scale: 0, isNullable: true, vectorDimensions: 1536, vectorBaseType: 'float32' }), 'VECTOR(1536)');
+  assertEq(sqlServerTypeForColumn({ columnName: 'embedding', dataType: 'vector', maxLength: 6000, precision: 0, scale: 0, isNullable: true, vectorDimensions: 3072, vectorBaseType: 'float16' }), 'VECTOR(3072, float16)');
+});
+
 test('a model field cannot point at a view as a relation', () => {
   assert.throws(
     () => parseSchemaText(`

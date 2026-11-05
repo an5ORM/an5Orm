@@ -49,7 +49,20 @@ async function pull() {
     // nothing about the connection string being wrong.
     refuseIfNotSqlServer((0, config_1.providerFromConfig)(config, process.env), "db:pull");
     console.log("🔍 Pulling schema from database...");
-    const tables = await (await getDb()).$queryRawUnsafe(`
+    const db = await getDb();
+    // Safely detect if the SQL Server catalog supports native VECTOR metadata columns
+    let hasVectorCatalog = false;
+    try {
+        const vecCheck = await db.$queryRawUnsafe(`SELECT COL_LENGTH('sys.columns', 'vector_dimensions') AS hasVec`);
+        hasVectorCatalog = !!(vecCheck?.[0]?.hasVec);
+    }
+    catch {
+        hasVectorCatalog = false;
+    }
+    const vectorColumnSelect = hasVectorCatalog
+        ? ",\n          c.vector_dimensions AS vectorDimensions,\n          c.vector_base_type_desc AS vectorBaseType"
+        : "";
+    const tables = await db.$queryRawUnsafe(`
     SELECT s.name AS schemaName, t.name AS tableName
     FROM sys.tables t
     JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -123,7 +136,7 @@ async function pull() {
         const { tableName, schemaName } = table;
         console.log(`Introspecting table [${tableName}]...`);
         // Get columns
-        const columns = await (await getDb()).$queryRawUnsafe(`
+        const columns = await db.$queryRawUnsafe(`
       SELECT
           c.name AS columnName,
           ty.name AS dataType,
@@ -133,7 +146,7 @@ async function pull() {
           c.is_nullable AS isNullable,
           c.is_identity AS isIdentity,
           pk.is_primary_key AS isPrimaryKey,
-          d.definition AS defaultValue
+          d.definition AS defaultValue${vectorColumnSelect}
       FROM sys.columns c
       JOIN sys.types ty ON c.user_type_id = ty.user_type_id
       LEFT JOIN (
@@ -351,14 +364,14 @@ async function pull() {
             ?? (existingViewNames[legacy] ? legacy : (0, pull_schema_1.blockNameForObject)(viewName));
         const targetFile = viewToFileMap[modelName] ?? viewToFileMap[key] ?? viewToFileMap[viewName] ?? defaultFile;
         console.log(`Introspecting view [${key}]...`);
-        const columns = await (await getDb()).$queryRawUnsafe(`
+        const columns = await db.$queryRawUnsafe(`
       SELECT
           c.name AS columnName,
           ty.name AS dataType,
           c.max_length AS maxLength,
           c.precision AS precision,
           c.scale AS scale,
-          c.is_nullable AS isNullable
+          c.is_nullable AS isNullable${vectorColumnSelect}
       FROM sys.columns c
       JOIN sys.types ty ON c.user_type_id = ty.user_type_id
       WHERE c.object_id = OBJECT_ID(@p_0)

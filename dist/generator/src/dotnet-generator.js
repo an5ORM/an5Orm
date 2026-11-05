@@ -402,6 +402,19 @@ namespace An5Orm
             // \`float[]\` does not convert to it.
             if (value is float[] floats) return FormatVector(floats.Select(v => (double)v));
             if (value is double[] doubles) return FormatVector(doubles);
+            if (value is ReadOnlyMemory<float> rom) return FormatVector(rom.ToArray().Select(v => (double)v));
+            if (value is Memory<float> mem) return FormatVector(mem.ToArray().Select(v => (double)v));
+            if (value is ReadOnlyMemory<double> romD) return FormatVector(romD.ToArray());
+            if (value is Memory<double> memD) return FormatVector(memD.ToArray());
+            if (value != null && value.GetType().Name.StartsWith("SqlVector"))
+            {
+                var memProp = value.GetType().GetProperty("Memory");
+                if (memProp != null)
+                {
+                    var memVal = memProp.GetValue(value);
+                    if (memVal != null) return Bindable(memVal);
+                }
+            }
             return value;
         }
 
@@ -1094,6 +1107,31 @@ namespace An5Orm
                 var fromDouble = new float[asDouble.Length];
                 for (int i = 0; i < asDouble.Length; i++) fromDouble[i] = (float)asDouble[i];
                 return fromDouble;
+            }
+            if (value is ReadOnlyMemory<float> rom) return rom.ToArray();
+            if (value is Memory<float> mem) return mem.ToArray();
+            if (value is ReadOnlyMemory<double> romD)
+            {
+                var arr = romD.ToArray();
+                var fromDouble = new float[arr.Length];
+                for (int i = 0; i < arr.Length; i++) fromDouble[i] = (float)arr[i];
+                return fromDouble;
+            }
+            if (value is Memory<double> memD)
+            {
+                var arr = memD.ToArray();
+                var fromDouble = new float[arr.Length];
+                for (int i = 0; i < arr.Length; i++) fromDouble[i] = (float)arr[i];
+                return fromDouble;
+            }
+            if (value != null && value.GetType().Name.StartsWith("SqlVector"))
+            {
+                var memProp = value.GetType().GetProperty("Memory");
+                if (memProp != null)
+                {
+                    var memVal = memProp.GetValue(value);
+                    if (memVal != null) return DecodeVectorColumn(memVal);
+                }
             }
 
             string text = value as string;

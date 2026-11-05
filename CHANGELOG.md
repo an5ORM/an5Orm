@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.5] - 2026-11-05
+
+### Added
+- **Native SQL Server `VECTOR` catalog introspection in `db:pull`** — `sqlServerTypeForColumn` now formats introspected SQL Server 2025 vector columns with their defined dimensions (e.g., `VECTOR(1536)`) and half-precision base types (e.g., `VECTOR(3072, float16)`), preserving schema compatibility when running `db:push`.
+- **Safe catalog discovery for `vector_dimensions`** — `pull.ts` probes `COL_LENGTH('sys.columns', 'vector_dimensions')` before selecting vector metadata columns, ensuring introspection succeeds across both SQL Server 2025 and older SQL Server instances (2019/2022).
+- **Generated .NET client support for `ReadOnlyMemory` and `SqlVector<T>`** — `dotnet-generator` now generates `Bindable` and `DecodeVectorColumn` implementations that recognize `ReadOnlyMemory<float>`, `Memory<float>`, `ReadOnlyMemory<double>`, `Memory<double>`, and struct wrappers exposing `.Memory` such as `Microsoft.Data.SqlTypes.SqlVector<float>`.
+
+### Fixed
+- **Vector dimension validation for `float16`** — extended maximum vector dimension limit validation in runtime search from 1,998 to 3,996 when `elementType` is `float16`.
+
 ## [1.3.4] - 2026-11-05
 
 ### Added

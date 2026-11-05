@@ -51,7 +51,23 @@ async function pull() {
 
   console.log("🔍 Pulling schema from database...");
 
-  const tables = await (await getDb()).$queryRawUnsafe<any>(`
+  const db = await getDb();
+
+  // Safely detect if the SQL Server catalog supports native VECTOR metadata columns
+  let hasVectorCatalog = false;
+  try {
+    const vecCheck = await db.$queryRawUnsafe<any>(
+      `SELECT COL_LENGTH('sys.columns', 'vector_dimensions') AS hasVec`
+    );
+    hasVectorCatalog = !!(vecCheck?.[0]?.hasVec);
+  } catch {
+    hasVectorCatalog = false;
+  }
+  const vectorColumnSelect = hasVectorCatalog
+    ? ",\n          c.vector_dimensions AS vectorDimensions,\n          c.vector_base_type_desc AS vectorBaseType"
+    : "";
+
+  const tables = await db.$queryRawUnsafe<any>(`
     SELECT s.name AS schemaName, t.name AS tableName
     FROM sys.tables t
     JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -133,7 +149,7 @@ async function pull() {
     console.log(`Introspecting table [${tableName}]...`);
 
     // Get columns
-    const columns = await (await getDb()).$queryRawUnsafe<any>(`
+    const columns = await db.$queryRawUnsafe<any>(`
       SELECT
           c.name AS columnName,
           ty.name AS dataType,
@@ -143,7 +159,7 @@ async function pull() {
           c.is_nullable AS isNullable,
           c.is_identity AS isIdentity,
           pk.is_primary_key AS isPrimaryKey,
-          d.definition AS defaultValue
+          d.definition AS defaultValue${vectorColumnSelect}
       FROM sys.columns c
       JOIN sys.types ty ON c.user_type_id = ty.user_type_id
       LEFT JOIN (
@@ -374,14 +390,14 @@ async function pull() {
     const targetFile = viewToFileMap[modelName] ?? viewToFileMap[key] ?? viewToFileMap[viewName] ?? defaultFile;
 
     console.log(`Introspecting view [${key}]...`);
-    const columns = await (await getDb()).$queryRawUnsafe<any>(`
+    const columns = await db.$queryRawUnsafe<any>(`
       SELECT
           c.name AS columnName,
           ty.name AS dataType,
           c.max_length AS maxLength,
           c.precision AS precision,
           c.scale AS scale,
-          c.is_nullable AS isNullable
+          c.is_nullable AS isNullable${vectorColumnSelect}
       FROM sys.columns c
       JOIN sys.types ty ON c.user_type_id = ty.user_type_id
       WHERE c.object_id = OBJECT_ID(@p_0)

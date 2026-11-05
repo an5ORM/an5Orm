@@ -806,8 +806,9 @@ class TableClient {
             const vectorJson = JSON.stringify(finalArgs.vector);
             const col = (0, sql_utils_1.quoteIdentifier)(field);
             try {
-                if (dim > 1998) {
-                    throw new Error("Vector dimension exceeds SQL Server limit of 1998");
+                const maxDim = elementType === 'float16' ? 3996 : 1998;
+                if (dim > maxDim) {
+                    throw new Error(`Vector dimension ${dim} exceeds SQL Server limit of ${maxDim} for ${elementType}`);
                 }
                 let sqlText = `SELECT TOP (${take}) *, `;
                 sqlText += `VECTOR_DISTANCE('${metric}', CAST(${col} AS VECTOR(${dim}, ${elementType})), CAST(@query_vector AS VECTOR(${dim}, ${elementType}))) AS distance `;
@@ -845,6 +846,7 @@ class TableClient {
                     msg.includes("not a recognized built-in function") ||
                     msg.includes("not a defined system type") ||
                     msg.includes("limit of 1998") ||
+                    msg.includes("limit of 3996") ||
                     err?.number === 195 ||
                     err?.number === 102 ||
                     err?.number === 319 ||

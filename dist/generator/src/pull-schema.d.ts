@@ -6,6 +6,8 @@ export interface PulledColumn {
     precision: number;
     scale: number;
     isNullable: boolean | number;
+    vectorDimensions?: number | null;
+    vectorBaseType?: string | null;
 }
 /**
  * The schema type of an introspected SQL Server column.
