@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.6] - 2026-11-07
+
+### Added
+- **Aggregate and GroupBy generation for .NET and Go** — code generators now emit type-safe `Aggregate` and `GroupBy` methods across .NET `An5DbContext` and Go `TableClient`.
+- **PyPI publication workflow** — add automated PyPI release step using `PYPI_TOKEN`.
+
+### Fixed
+- **Python relation map registration** — import and register `RELATION_MAP` in `set_adapter_metadata` so related queries resolve model associations properly.
+- **Python TypedDict row completeness** — include all model fields in `_<Model>Required` to prevent Pylance `reportTypedDictNotRequiredAccess` diagnostics on fetched rows.
+- **Scalar column filtering in .NET** — filter out navigation relations from `Create` and `Update` parameter maps in generated .NET clients.
+- **Go UpdateMany where clauses** — correctly serialize where arguments and filters for Go bulk update calls.
+
 ## [1.3.5] - 2026-11-05
 
 ### Added
