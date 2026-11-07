@@ -1071,6 +1071,98 @@ namespace An5Orm
             return output;
         }
 
+        public Dictionary<string, object> Aggregate(
+            string whereClause = null,
+            Dictionary<string, object> parameters = null,
+            bool count = false,
+            List<string> sum = null,
+            List<string> avg = null,
+            List<string> min = null,
+            List<string> max = null)
+        {
+            var selectParts = new List<string>();
+            if (count) selectParts.Add("COUNT(*) AS _count");
+            if (sum != null) foreach (var col in sum) selectParts.Add($"SUM({An5Provider.Quote(col, Dialect)}) AS _sum_{col}");
+            if (avg != null) foreach (var col in avg) selectParts.Add($"AVG({An5Provider.Quote(col, Dialect)}) AS _avg_{col}");
+            if (min != null) foreach (var col in min) selectParts.Add($"MIN({An5Provider.Quote(col, Dialect)}) AS _min_{col}");
+            if (max != null) foreach (var col in max) selectParts.Add($"MAX({An5Provider.Quote(col, Dialect)}) AS _max_{col}");
+            if (selectParts.Count == 0) selectParts.Add("COUNT(*) AS _count");
+
+            var query = $"SELECT {string.Join(", ", selectParts)} FROM {TableName}";
+            if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
+
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using var cmd = CreateCommand(conn, query);
+                if (parameters != null)
+                {
+                    foreach (var kvp in parameters) An5Provider.Bind(cmd, kvp.Key, kvp.Value);
+                }
+                using var reader = cmd.ExecuteReader();
+                var result = new Dictionary<string, object>();
+                if (reader.Read())
+                {
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        var name = reader.GetName(i);
+                        var val = reader[i];
+                        result[name] = val != DBNull.Value ? val : null;
+                    }
+                }
+                return result;
+            }
+            finally { if (!isTx) conn.Dispose(); }
+        }
+
+        public List<Dictionary<string, object>> GroupBy(
+            List<string> by,
+            string whereClause = null,
+            Dictionary<string, object> parameters = null,
+            List<string> sum = null,
+            List<string> avg = null,
+            List<string> min = null,
+            List<string> max = null)
+        {
+            if (by == null || by.Count == 0) throw new ArgumentException("GroupBy requires at least one column in 'by'");
+            var byCols = by.Select(c => An5Provider.Quote(c, Dialect)).ToList();
+            var selectParts = new List<string>(byCols);
+            selectParts.Add("COUNT(*) AS _count");
+            if (sum != null) foreach (var col in sum) selectParts.Add($"SUM({An5Provider.Quote(col, Dialect)}) AS _sum_{col}");
+            if (avg != null) foreach (var col in avg) selectParts.Add($"AVG({An5Provider.Quote(col, Dialect)}) AS _avg_{col}");
+            if (min != null) foreach (var col in min) selectParts.Add($"MIN({An5Provider.Quote(col, Dialect)}) AS _min_{col}");
+            if (max != null) foreach (var col in max) selectParts.Add($"MAX({An5Provider.Quote(col, Dialect)}) AS _max_{col}");
+
+            var query = $"SELECT {string.Join(", ", selectParts)} FROM {TableName}";
+            if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
+            query += $" GROUP BY {string.Join(", ", byCols)}";
+
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using var cmd = CreateCommand(conn, query);
+                if (parameters != null)
+                {
+                    foreach (var kvp in parameters) An5Provider.Bind(cmd, kvp.Key, kvp.Value);
+                }
+                using var reader = cmd.ExecuteReader();
+                var rows = new List<Dictionary<string, object>>();
+                while (reader.Read())
+                {
+                    var row = new Dictionary<string, object>();
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        var name = reader.GetName(i);
+                        var val = reader[i];
+                        row[name] = val != DBNull.Value ? val : null;
+                    }
+                    rows.Add(row);
+                }
+                return rows;
+            }
+            finally { if (!isTx) conn.Dispose(); }
+        }
+
         private static List<double> ParseDoubleArray(string json)
         {
             var clean = json.Trim('[', ']');
@@ -1271,6 +1363,26 @@ namespace An5Orm
 
         public List<T> VectorSearch(List<double> vector, int take = 10, string whereClause = null, Dictionary<string, object> parameters = null, string vectorField = "Embedding", string distanceMetric = "cosine")
             => _table.VectorSearch(vector, take, whereClause, parameters, vectorField, distanceMetric);
+
+        public Dictionary<string, object> Aggregate(
+            string whereClause = null,
+            Dictionary<string, object> parameters = null,
+            bool count = false,
+            List<string> sum = null,
+            List<string> avg = null,
+            List<string> min = null,
+            List<string> max = null)
+            => _table.Aggregate(whereClause, parameters, count, sum, avg, min, max);
+
+        public List<Dictionary<string, object>> GroupBy(
+            List<string> by,
+            string whereClause = null,
+            Dictionary<string, object> parameters = null,
+            List<string> sum = null,
+            List<string> avg = null,
+            List<string> min = null,
+            List<string> max = null)
+            => _table.GroupBy(by, whereClause, parameters, sum, avg, min, max);
     }
 }
 `;

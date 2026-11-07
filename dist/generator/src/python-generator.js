@@ -305,9 +305,9 @@ class PythonGenerator {
         content += `from an5_adapter import An5Adapter, AdapterTableClient${hasViews ? ', ViewClient' : ''}, create_an5_adapter, set_adapter_metadata\n\n`;
         const metadataModule = this.metadataModule();
         content += 'try:\n';
-        content += `    from .${metadataModule} import MODEL_TO_TABLE, MODEL_FIELDS\n`;
+        content += `    from .${metadataModule} import MODEL_TO_TABLE, MODEL_FIELDS, RELATION_MAP\n`;
         content += 'except ImportError:\n';
-        content += `    from ${metadataModule} import MODEL_TO_TABLE, MODEL_FIELDS\n\n`;
+        content += `    from ${metadataModule} import MODEL_TO_TABLE, MODEL_FIELDS, RELATION_MAP\n\n`;
         if (models.length > 0) {
             content += 'if TYPE_CHECKING:\n';
             for (const m of models) {
@@ -332,7 +332,7 @@ class PythonGenerator {
         content += '        conn_str = (connection_string or \n';
         content += '                    os.getenv("DATABASE_URL") or \n';
         content += '                    "Server=localhost;Database=master;Trusted_Connection=True;TrustServerCertificate=True;")\n';
-        content += '        set_adapter_metadata({"model_to_table": MODEL_TO_TABLE, "model_fields": MODEL_FIELDS})\n';
+        content += '        set_adapter_metadata({"model_to_table": MODEL_TO_TABLE, "model_fields": MODEL_FIELDS, "relation_map": RELATION_MAP})\n';
         content += '        self.adapter: An5Adapter = create_an5_adapter(conn_str)\n\n';
         for (const model of models) {
             const propName = this.toSnakeCase(model.name) + 's';

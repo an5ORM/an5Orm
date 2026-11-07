@@ -266,14 +266,34 @@ type BoolFilter struct {
 
 // DateTimeFilter provides type-safe datetime field filtering options.
 type DateTimeFilter struct {
-\tEquals *time.Time
-\tNot    *time.Time
-\tIn     []time.Time
-\tNotIn  []time.Time
-\tGt     *time.Time
-\tGte    *time.Time
-\tLt     *time.Time
-\tLte    *time.Time
+	Equals *time.Time
+	Not    *time.Time
+	In     []time.Time
+	NotIn  []time.Time
+	Gt     *time.Time
+	Gte    *time.Time
+	Lt     *time.Time
+	Lte    *time.Time
+}
+
+// AggregateArgs configures an aggregate query.
+type AggregateArgs struct {
+	Where interface{}
+	Count bool
+	Sum   []string
+	Avg   []string
+	Min   []string
+	Max   []string
+}
+
+// GroupByArgs configures a GroupBy query.
+type GroupByArgs struct {
+	By    []string
+	Where interface{}
+	Sum   []string
+	Avg   []string
+	Min   []string
+	Max   []string
 }
 
 // Dialect identifies the database engine in use.
@@ -440,6 +460,16 @@ func (c *ViewClient[T]) QueryRaw(ctx context.Context, query string, args ...inte
 // VectorSearch searches a vector column of the view.
 func (c *ViewClient[T]) VectorSearch(ctx context.Context, vector []float64, opts ...VectorSearchOptions) ([]T, error) {
 \treturn c.table.VectorSearch(ctx, vector, opts...)
+}
+
+// Aggregate returns aggregate calculations on the view.
+func (c *ViewClient[T]) Aggregate(ctx context.Context, args AggregateArgs) (map[string]interface{}, error) {
+\treturn c.table.Aggregate(ctx, args)
+}
+
+// GroupBy groups view rows by specified columns and computes aggregates.
+func (c *ViewClient[T]) GroupBy(ctx context.Context, args GroupByArgs) ([]map[string]interface{}, error) {
+\treturn c.table.GroupBy(ctx, args)
 }
 
 `;
@@ -1036,6 +1066,122 @@ func (c *TableClient[T]) Transaction(ctx context.Context, fn func(tx *sql.Tx) er
 \t\treturn err
 \t}
 \treturn tx.Commit()
+}
+
+// Aggregate returns aggregate calculations (count, sum, avg, min, max).
+func (c *TableClient[T]) Aggregate(ctx context.Context, args AggregateArgs) (map[string]interface{}, error) {
+\tclause, _, _, _, _, queryArgs := c.parseArgs(args.Where)
+\tvar selectParts []string
+\tif args.Count || (len(args.Sum) == 0 && len(args.Avg) == 0 && len(args.Min) == 0 && len(args.Max) == 0) {
+\t\tselectParts = append(selectParts, "COUNT(*) AS _count")
+\t}
+\tfor _, col := range args.Sum {
+\t\tselectParts = append(selectParts, fmt.Sprintf("SUM(%s) AS _sum_%s", c.quoteName(col), col))
+\t}
+\tfor _, col := range args.Avg {
+\t\tselectParts = append(selectParts, fmt.Sprintf("AVG(%s) AS _avg_%s", c.quoteName(col), col))
+\t}
+\tfor _, col := range args.Min {
+\t\tselectParts = append(selectParts, fmt.Sprintf("MIN(%s) AS _min_%s", c.quoteName(col), col))
+\t}
+\tfor _, col := range args.Max {
+\t\tselectParts = append(selectParts, fmt.Sprintf("MAX(%s) AS _max_%s", c.quoteName(col), col))
+\t}
+
+\tquery := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), c.quoteTable())
+\tif clause != "" {
+\t\tquery += " WHERE " + clause
+\t}
+
+\trows, err := c.DB.QueryContext(ctx, query, queryArgs...)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tdefer rows.Close()
+
+\tcols, err := rows.Columns()
+\tif err != nil {
+\t\treturn nil, err
+\t}
+
+\tres := make(map[string]interface{})
+\tif rows.Next() {
+\t\tcolVals := make([]interface{}, len(cols))
+\t\tcolPtrs := make([]interface{}, len(cols))
+\t\tfor i := range colVals {
+\t\t\tcolPtrs[i] = &colVals[i]
+\t\t}
+\t\tif err := rows.Scan(colPtrs...); err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t\tfor i, name := range cols {
+\t\t\tres[name] = colVals[i]
+\t\t}
+\t}
+\treturn res, nil
+}
+
+// GroupBy groups records by specified columns and computes aggregates.
+func (c *TableClient[T]) GroupBy(ctx context.Context, args GroupByArgs) ([]map[string]interface{}, error) {
+\tif len(args.By) == 0 {
+\t\treturn nil, fmt.Errorf("GroupBy requires at least one column in 'By'")
+\t}
+\tclause, _, _, _, _, queryArgs := c.parseArgs(args.Where)
+\tbyCols := make([]string, len(args.By))
+\tfor i, col := range args.By {
+\t\tbyCols[i] = c.quoteName(col)
+\t}
+
+\tselectParts := make([]string, len(byCols))
+\tcopy(selectParts, byCols)
+\tselectParts = append(selectParts, "COUNT(*) AS _count")
+\tfor _, col := range args.Sum {
+\t\tselectParts = append(selectParts, fmt.Sprintf("SUM(%s) AS _sum_%s", c.quoteName(col), col))
+\t}
+\tfor _, col := range args.Avg {
+\t\tselectParts = append(selectParts, fmt.Sprintf("AVG(%s) AS _avg_%s", c.quoteName(col), col))
+\t}
+\tfor _, col := range args.Min {
+\t\tselectParts = append(selectParts, fmt.Sprintf("MIN(%s) AS _min_%s", c.quoteName(col), col))
+\t}
+\tfor _, col := range args.Max {
+\t\tselectParts = append(selectParts, fmt.Sprintf("MAX(%s) AS _max_%s", c.quoteName(col), col))
+\t}
+
+\tquery := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), c.quoteTable())
+\tif clause != "" {
+\t\tquery += " WHERE " + clause
+\t}
+\tquery += " GROUP BY " + strings.Join(byCols, ", ")
+
+\trows, err := c.DB.QueryContext(ctx, query, queryArgs...)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tdefer rows.Close()
+
+\tcols, err := rows.Columns()
+\tif err != nil {
+\t\treturn nil, err
+\t}
+
+\tvar results []map[string]interface{}
+\tfor rows.Next() {
+\t\tcolVals := make([]interface{}, len(cols))
+\t\tcolPtrs := make([]interface{}, len(cols))
+\t\tfor i := range colVals {
+\t\t\tcolPtrs[i] = &colVals[i]
+\t\t}
+\t\tif err := rows.Scan(colPtrs...); err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t\trowMap := make(map[string]interface{})
+\t\tfor i, name := range cols {
+\t\t\trowMap[name] = colVals[i]
+\t\t}
+\t\tresults = append(results, rowMap)
+\t}
+\treturn results, nil
 }
 
 // parseArgs is the generic where/orderBy/take/skip extractor.
