@@ -1006,7 +1006,7 @@ func (c *TableClient[T]) UpdateMany(ctx context.Context, whereArgs interface{}, 
 \t\tsets = append(sets, c.quoteName(col)+" = "+c.ph(len(execArgs)))
 \t}
 
-\tclause, _, _, _, _, whereQueryArgs := c.parseArgs(whereArgs)
+\tclause, _, _, _, _, whereQueryArgs := c.parseArgsWithOffset(whereArgs, len(execArgs)+1)
 \texecArgs = append(execArgs, whereQueryArgs...)
 \tquery := fmt.Sprintf("UPDATE %s SET %s", c.quoteTable(), strings.Join(sets, ", "))
 \tif clause != "" {
@@ -1210,6 +1210,10 @@ func (c *TableClient[T]) GroupBy(ctx context.Context, args GroupByArgs) ([]map[s
 // parseArgs is the generic where/orderBy/take/skip extractor.
 // It uses reflection to read WhereClause, OrderBy, Take, Skip, Select from any args struct.
 func (c *TableClient[T]) parseArgs(args interface{}) (whereClause string, orderBy string, take int, skip int, selectCols []string, queryArgs []interface{}) {
+\treturn c.parseArgsWithOffset(args, 1)
+}
+
+func (c *TableClient[T]) parseArgsWithOffset(args interface{}, offset int) (whereClause string, orderBy string, take int, skip int, selectCols []string, queryArgs []interface{}) {
 \tif args == nil {
 \t\treturn
 \t}
@@ -1226,10 +1230,18 @@ func (c *TableClient[T]) parseArgs(args interface{}) (whereClause string, orderB
 
 \t// Where
 \twhereField := v.FieldByName("Where")
-\tif whereField.IsValid() && !whereField.IsNil() {
-\t\t// where is a pointer to a model-specific WhereInput struct
-\t\t// Delegate to buildWhereFromStruct
-\t\twc, wa := c.buildWhereFromStruct(whereField.Elem(), 1)
+\tif whereField.IsValid() {
+\t\tif !whereField.IsNil() {
+\t\t\telem := whereField
+\t\t\tif elem.Kind() == reflect.Ptr {
+\t\t\t\telem = elem.Elem()
+\t\t\t}
+\t\t\twc, wa := c.buildWhereFromStruct(elem, offset)
+\t\t\twhereClause = wc
+\t\t\tqueryArgs = wa
+\t\t}
+\t} else {
+\t\twc, wa := c.buildWhereFromStruct(v, offset)
 \t\twhereClause = wc
 \t\tqueryArgs = wa
 \t}
