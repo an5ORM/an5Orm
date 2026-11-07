@@ -238,26 +238,23 @@ class PythonGenerator {
             content += '\n';
             // TypedDict row shape: mirrors what the runtime actually returns
             // (plain dicts), so `AdapterTableClient["<Model>Row"]` delegates
-            // type-check. Required keys stay required via a total=True base;
-            // everything else is optional (total=False), keeping partial
-            // selects valid without extra dependencies.
-            const rowRequired = model.fields.filter(f => !f.isOptional && !f.hasDefault);
-            const rowOptional = model.fields.filter(f => f.isOptional || f.hasDefault);
+            // type-check. All table columns are guaranteed keys in fetched rows
+            // (nullable columns take Optional[...] values); relations stay
+            // optional keys (total=False) because they are only present when
+            // joined/included.
             content += `class _${model.name}Required(TypedDict):\n`;
             content += `    """Required keys of a ${model.name} row."""\n`;
-            if (rowRequired.length === 0) {
+            if (model.fields.length === 0) {
                 content += '    pass\n';
             }
-            for (const f of rowRequired) {
-                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
+            for (const f of model.fields) {
+                const pyType = f.isOptional ? `Optional[${this.mapPyType(f)}]` : this.mapPyType(f);
+                content += `    ${this.toSnakeCase(f.name)}: ${pyType}\n`;
             }
             content += `\nclass ${model.name}Row(_${model.name}Required, total=False):\n`;
             content += `    """Row shape returned for ${model.name} queries."""\n`;
-            if (rowOptional.length === 0 && model.relations.length === 0) {
+            if (model.relations.length === 0) {
                 content += '    pass\n';
-            }
-            for (const f of rowOptional) {
-                content += `    ${this.toSnakeCase(f.name)}: ${this.mapPyType(f)}\n`;
             }
             for (const rel of model.relations) {
                 const relName = this.toSnakeCase(rel.name);
