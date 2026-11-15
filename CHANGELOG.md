@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.7] - 2026-11-15
+
+### Added
+- **`an5 init` & `an5 dev` zero-config local sandbox**: Initialize a SQLite sandbox (`basic`, `rag-vector`, or `api` starter templates) and sync schema + generated client in one command.
+- **`push --dry-run` / `--preview` & SQLite auto-snapshots**: Preview DDL statements without modifying the database and automatically save timestamped SQLite backups under `.an5/snapshots/` before pushing.
+- **Actionable push error hints**: Surface clear next-step advice when configuration or `DATABASE_URL` is missing.
+
 ## [1.3.6] - 2026-11-07
 
 ### Added

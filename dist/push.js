@@ -27,6 +27,40 @@ async function getDb() {
     }
     return _adapter;
 }
+const args = process.argv.slice(2);
+const dryRun = args.includes('--dry-run') || args.includes('--preview');
+const skipSnapshot = args.includes('--no-snapshot');
+function snapshotSqliteIfNeeded(connectionString) {
+    if (dryRun || skipSnapshot)
+        return undefined;
+    const match = connectionString.match(/^(?:sqlite|file):(?:\/\/)?(.+)$/i);
+    if (!match)
+        return undefined;
+    const rawTarget = match[1].trim();
+    if (!rawTarget || rawTarget === ':memory:')
+        return undefined;
+    const dbPath = path_1.default.isAbsolute(rawTarget) ? rawTarget : path_1.default.resolve(rootDir, rawTarget);
+    if (!fs_1.default.existsSync(dbPath))
+        return undefined;
+    const snapDir = path_1.default.join(rootDir, '.an5', 'snapshots');
+    fs_1.default.mkdirSync(snapDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const snapPath = path_1.default.join(snapDir, `${path_1.default.basename(dbPath)}.${stamp}.bak`);
+    fs_1.default.copyFileSync(dbPath, snapPath);
+    // Keep only the 5 most recent snapshots for this database file.
+    const prefix = `${path_1.default.basename(dbPath)}.`;
+    const existing = fs_1.default.readdirSync(snapDir)
+        .filter(f => f.startsWith(prefix) && f.endsWith('.bak'))
+        .sort()
+        .reverse();
+    for (const old of existing.slice(5)) {
+        try {
+            fs_1.default.unlinkSync(path_1.default.join(snapDir, old));
+        }
+        catch { /* ignore cleanup error */ }
+    }
+    return path_1.default.relative(rootDir, snapPath);
+}
 async function push() {
     const dialect = (0, dialect_1.dialectFor)(provider);
     // Google Sheets is a grid of cells, not tables: there is no DDL to send and
@@ -58,14 +92,29 @@ async function push() {
     const { models, views, issues } = (0, push_schema_1.parsePushSchema)(schemaText, provider);
     if (issues.length > 0)
         throw new field_types_1.FieldTypeError(provider, issues);
-    console.log(`🚀 Pushing schema to database (${field_types_1.PROVIDER_LABELS[provider]})...`);
+    console.log(`${dryRun ? '🔍 Previewing schema changes (dry-run)' : '🚀 Pushing schema to database'} (${field_types_1.PROVIDER_LABELS[provider]})...`);
+    const connStr = (0, config_1.resolveConnectionString)(config, process.env, 'db:push');
+    const snapshotRel = snapshotSqliteIfNeeded(connStr);
+    if (snapshotRel) {
+        console.log(`💾 Saved SQLite snapshot: ${snapshotRel}`);
+    }
+    let dryRunCount = 0;
     const result = await (0, push_apply_1.applySchema)(models, dialect, {
         query: async (sql) => (await getDb()).$queryRawUnsafe(sql),
         execute: async (sql) => {
+            if (dryRun) {
+                dryRunCount++;
+                console.log(`[dry-run] ${sql}`);
+                return;
+            }
             await (await getDb()).$executeRawUnsafe(sql);
         },
         log: (message) => console.log(message),
     }, views);
+    if (dryRun) {
+        console.log(`✅ Dry-run preview complete (${dryRunCount} statement(s) would be applied).`);
+        process.exit(0);
+    }
     if (result.tablesCreated > 0)
         console.log(`   ${result.tablesCreated} table(s) created.`);
     if (result.columnsAdded > 0)
@@ -87,7 +136,11 @@ push().catch((err) => {
         console.error((0, config_1.formatIssues)(err.issues));
     }
     else {
-        console.error(`❌ Push failed: ${err instanceof Error ? err.message : err}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`❌ Push failed: ${msg}`);
+        if (/connectionString|DATABASE_URL|connection/i.test(msg)) {
+            console.error('💡 Tip: Run "npx @an5/orm init" for a zero-config SQLite sandbox, or set DATABASE_URL in .env.');
+        }
     }
     process.exit(1);
 });

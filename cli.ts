@@ -2,6 +2,7 @@
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { runDev, runInit } from './init';
 
 function printHelp(): void {
   console.log(`AN5 ORM CLI
@@ -11,8 +12,11 @@ Usage:
   npx @an5/orm <command> [options]
 
 Commands:
+  init [--template <name>]   Initialize a zero-config SQLite sandbox project
+                             Templates: basic (default), rag-vector, api
+  dev                        Initialize if needed, push schema, and generate client
   generate, codegen          Generate client code from .an5 schemas
-  db:push, push              Push schema directly to database
+  db:push, push [--dry-run]  Push schema directly to database (or preview DDL)
   db:pull, pull              Pull database schema into .an5 files
   db:migrate, migrate        Manage database migrations:
     diff                       Show differences between schema and database
@@ -101,6 +105,26 @@ export function main(rawArgs: string[] = process.argv.slice(2)): void {
   }
 
   switch (firstArg) {
+    case 'init': {
+      try {
+        runInit(rest);
+      } catch (err) {
+        console.error(`❌ ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+      break;
+    }
+
+    case 'dev': {
+      try {
+        runDev(rest, process.cwd(), resolveCommandScript);
+      } catch (err) {
+        console.error(`❌ ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+      break;
+    }
+
     case 'generate':
     case 'codegen':
     case 'g': {

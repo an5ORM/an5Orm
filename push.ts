@@ -27,6 +27,35 @@ async function getDb(): Promise<An5Adapter> {
   return _adapter;
 }
 
+const args = process.argv.slice(2);
+const dryRun = args.includes('--dry-run') || args.includes('--preview');
+const skipSnapshot = args.includes('--no-snapshot');
+
+function snapshotSqliteIfNeeded(connectionString: string): string | undefined {
+  if (dryRun || skipSnapshot) return undefined;
+  const match = connectionString.match(/^(?:sqlite|file):(?:\/\/)?(.+)$/i);
+  if (!match) return undefined;
+  const rawTarget = match[1].trim();
+  if (!rawTarget || rawTarget === ':memory:') return undefined;
+  const dbPath = path.isAbsolute(rawTarget) ? rawTarget : path.resolve(rootDir, rawTarget);
+  if (!fs.existsSync(dbPath)) return undefined;
+  const snapDir = path.join(rootDir, '.an5', 'snapshots');
+  fs.mkdirSync(snapDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const snapPath = path.join(snapDir, `${path.basename(dbPath)}.${stamp}.bak`);
+  fs.copyFileSync(dbPath, snapPath);
+  // Keep only the 5 most recent snapshots for this database file.
+  const prefix = `${path.basename(dbPath)}.`;
+  const existing = fs.readdirSync(snapDir)
+    .filter(f => f.startsWith(prefix) && f.endsWith('.bak'))
+    .sort()
+    .reverse();
+  for (const old of existing.slice(5)) {
+    try { fs.unlinkSync(path.join(snapDir, old)); } catch { /* ignore cleanup error */ }
+  }
+  return path.relative(rootDir, snapPath);
+}
+
 async function push() {
   const dialect = dialectFor(provider);
 
@@ -61,15 +90,32 @@ async function push() {
   const { models, views, issues } = parsePushSchema(schemaText, provider);
   if (issues.length > 0) throw new FieldTypeError(provider, issues);
 
-  console.log(`🚀 Pushing schema to database (${PROVIDER_LABELS[provider]})...`);
+  console.log(`${dryRun ? '🔍 Previewing schema changes (dry-run)' : '🚀 Pushing schema to database'} (${PROVIDER_LABELS[provider]})...`);
 
+  const connStr = resolveConnectionString(config, process.env, 'db:push');
+  const snapshotRel = snapshotSqliteIfNeeded(connStr);
+  if (snapshotRel) {
+    console.log(`💾 Saved SQLite snapshot: ${snapshotRel}`);
+  }
+
+  let dryRunCount = 0;
   const result = await applySchema(models, dialect, {
     query: async (sql) => (await getDb()).$queryRawUnsafe(sql),
     execute: async (sql) => {
+      if (dryRun) {
+        dryRunCount++;
+        console.log(`[dry-run] ${sql}`);
+        return;
+      }
       await (await getDb()).$executeRawUnsafe(sql);
     },
     log: (message) => console.log(message),
   }, views);
+
+  if (dryRun) {
+    console.log(`✅ Dry-run preview complete (${dryRunCount} statement(s) would be applied).`);
+    process.exit(0);
+  }
 
   if (result.tablesCreated > 0) console.log(`   ${result.tablesCreated} table(s) created.`);
   if (result.columnsAdded > 0) console.log(`   ${result.columnsAdded} column(s) added.`);
@@ -88,7 +134,11 @@ push().catch((err) => {
     console.error(`❌ ${err.message}:`);
     console.error(formatIssues(err.issues));
   } else {
-    console.error(`❌ Push failed: ${err instanceof Error ? err.message : err}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`❌ Push failed: ${msg}`);
+    if (/connectionString|DATABASE_URL|connection/i.test(msg)) {
+      console.error('💡 Tip: Run "npx @an5/orm init" for a zero-config SQLite sandbox, or set DATABASE_URL in .env.');
+    }
   }
   process.exit(1);
 });
