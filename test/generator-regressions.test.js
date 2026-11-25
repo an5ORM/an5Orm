@@ -758,6 +758,49 @@ model Post {
   assertIncludes(kotlinMeta, '"author" to relation("Author", "one", "authorId", "id")');
 });
 
+test("Go generator emits ListRelationFilter, RelationFilter, BoolFilter.Not, and RelationMap metadata", async () => {
+  const models = await parse('go-relations', `
+model Author {
+  id       NVARCHAR(64) @id @default(uuid())
+  email    NVARCHAR(255) @unique
+  isActive BOOLEAN @default(true)
+  posts    Post[]
+  @@map("authors")
+}
+
+model Post {
+  id       NVARCHAR(64) @id @default(uuid())
+  authorId NVARCHAR(64)
+  title    NVARCHAR(255)
+  author   Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'sqlite');
+
+  const goDir = path.join(tmpRoot, 'go-relations');
+  new GolangGenerator(goDir).generate(models);
+
+  const clientGo = fs.readFileSync(path.join(goDir, 'client.go'), 'utf8');
+  assertIncludes(clientGo, 'type ListRelationFilter[T any] struct');
+  assertIncludes(clientGo, 'type RelationFilter[T any] struct');
+  assertIncludes(clientGo, 'type BoolFilter struct {\n\tEquals *bool\n\tNot    *bool\n}');
+  assertIncludes(clientGo, 'buildWhereFromStructWithContext');
+  assertIncludes(clientGo, 'resolveModelRelation(modelName, name)');
+
+  const authorGo = fs.readFileSync(path.join(goDir, 'Author.go'), 'utf8');
+  assertIncludes(authorGo, 'Posts *ListRelationFilter[PostWhereInput]');
+  assertIncludes(authorGo, 'IsActive *BoolFilter');
+
+  const postGo = fs.readFileSync(path.join(goDir, 'Post.go'), 'utf8');
+  assertIncludes(postGo, 'Author *RelationFilter[AuthorWhereInput]');
+
+  const metaGo = fs.readFileSync(path.join(goDir, 'metadata.go'), 'utf8');
+  assertIncludes(metaGo, 'var RelationMap = map[string]map[string]RelationDef');
+  assertIncludes(metaGo, 'var ModelFields = map[string]map[string]bool');
+  assertIncludes(metaGo, '"posts": {ModelName: "Post", RelationType: "many", ForeignKey: "author_id", LocalKey: "id"}');
+  assertIncludes(metaGo, '"author": {ModelName: "Author", RelationType: "one", ForeignKey: "author_id", LocalKey: "id"}');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()
