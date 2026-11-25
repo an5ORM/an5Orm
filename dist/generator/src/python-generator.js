@@ -54,19 +54,29 @@ class PythonGenerator {
             default: return 'StringFilter';
         }
     }
+    getPyWhereFieldType(field) {
+        switch ((0, type_kinds_1.fieldKind)(field, this.provider)) {
+            case 'date': return 'Union[datetime, str, DateTimeFilter]';
+            case 'bool': return 'Union[bool, BoolFilter]';
+            case 'int':
+            case 'bigint': return 'Union[int, IntFilter]';
+            case 'float': return 'Union[float, NumberFilter]';
+            default: return 'Union[str, StringFilter]';
+        }
+    }
     generateOrmTypes(models, outputDir) {
         let content = '# This file is auto-generated. Do not edit directly.\n';
-        content += '"""\nAN5 ORM typed filter/args dataclasses.\n\nThese describe the filter shapes the Python client accepts. The adapter reads plain\ndicts, not these dataclasses, and it quotes every key verbatim, so use the schema\nfield names (`createdAt`, not `created_at`):\n\n    db.user.find_many(where={"name": {"contains": "John"}},\n                      order_by={"createdAt": "desc"},\n                      take=10)\n"""\n';
+        content += '"""\nAN5 ORM typed filter/args dataclasses.\n\nThe Python adapter accepts both these dataclasses (`UserWhereInput`, `StringFilter`,\n`UserOrderByInput`, `UserFindManyArgs`, etc.) and plain dicts with either schema\nfield names (`createdAt`) or snake_case aliases (`created_at`):\n\n    db.user.find_many(where=UserWhereInput(name=StringFilter(contains="John")),\n                      order_by=UserOrderByInput(created_at="desc"),\n                      take=10)\n\n    db.user.find_many(where={"name": {"contains": "John"}},\n                      order_by={"created_at": "desc"},\n                      take=10)\n"""\n';
         content += 'from __future__ import annotations\n';
         content += 'from dataclasses import dataclass, field\n';
-        content += 'from typing import List, Optional, Any\n';
+        content += 'from typing import Dict, List, Optional, Any, Union\n';
         content += 'from datetime import datetime\n\n';
         // Base filter types
         content += '# ─── Base filter types ────────────────────────────────────────────────────────\n\n';
         content += `@dataclass\nclass StringFilter:\n    """Type-safe filter for string fields."""\n    equals: Optional[str] = None\n    not_: Optional[str] = None\n    contains: Optional[str] = None\n    starts_with: Optional[str] = None\n    ends_with: Optional[str] = None\n    in_: Optional[List[str]] = None\n    not_in: Optional[List[str]] = None\n    gt: Optional[str] = None\n    gte: Optional[str] = None\n    lt: Optional[str] = None\n    lte: Optional[str] = None\n\n`;
         content += `@dataclass\nclass IntFilter:\n    """Type-safe filter for integer fields."""\n    equals: Optional[int] = None\n    not_: Optional[int] = None\n    in_: Optional[List[int]] = None\n    not_in: Optional[List[int]] = None\n    gt: Optional[int] = None\n    gte: Optional[int] = None\n    lt: Optional[int] = None\n    lte: Optional[int] = None\n\n`;
         content += `@dataclass\nclass NumberFilter:\n    """Type-safe filter for float/decimal fields."""\n    equals: Optional[float] = None\n    not_: Optional[float] = None\n    in_: Optional[List[float]] = None\n    not_in: Optional[List[float]] = None\n    gt: Optional[float] = None\n    gte: Optional[float] = None\n    lt: Optional[float] = None\n    lte: Optional[float] = None\n\n`;
-        content += `@dataclass\nclass BoolFilter:\n    """Type-safe filter for boolean fields."""\n    equals: Optional[bool] = None\n\n`;
+        content += `@dataclass\nclass BoolFilter:\n    """Type-safe filter for boolean fields."""\n    equals: Optional[bool] = None\n    not_: Optional[bool] = None\n\n`;
         content += `@dataclass\nclass DateTimeFilter:\n    """Type-safe filter for datetime fields."""\n    equals: Optional[datetime] = None\n    not_: Optional[datetime] = None\n    in_: Optional[List[datetime]] = None\n    not_in: Optional[List[datetime]] = None\n    gt: Optional[datetime] = None\n    gte: Optional[datetime] = None\n    lt: Optional[datetime] = None\n    lte: Optional[datetime] = None\n\n`;
         // Per-model types
         for (const model of models) {
@@ -76,10 +86,17 @@ class PythonGenerator {
             content += `@dataclass\nclass ${name}WhereInput:\n    """Type-safe WHERE filter for ${name} queries."""\n`;
             content += `    AND: Optional[List['${name}WhereInput']] = None\n`;
             content += `    OR: Optional[List['${name}WhereInput']] = None\n`;
-            content += `    NOT: Optional['${name}WhereInput'] = None\n`;
+            content += `    NOT: Optional[Union['${name}WhereInput', List['${name}WhereInput']]] = None\n`;
+            const scalarSnakeNames = new Set(model.fields.map(f => this.toSnakeCase(f.name)));
             for (const f of model.fields) {
-                const ft = this.getPyFilterType(f);
+                const ft = this.getPyWhereFieldType(f);
                 content += `    ${this.toSnakeCase(f.name)}: Optional[${ft}] = None\n`;
+            }
+            for (const rel of model.relations) {
+                const relSnake = this.toSnakeCase(rel.name);
+                if (!scalarSnakeNames.has(relSnake)) {
+                    content += `    ${relSnake}: Optional[Dict[str, Any]] = None\n`;
+                }
             }
             content += '\n';
             // OrderByInput
@@ -117,12 +134,14 @@ class PythonGenerator {
             content += `    order_by: Optional[${name}OrderByInput] = None\n`;
             content += `    take: Optional[int] = None\n`;
             content += `    skip: int = 0\n`;
-            content += `    select: Optional[List[str]] = None\n\n`;
+            content += `    select: Optional[Union[List[str], Dict[str, Any]]] = None\n`;
+            content += `    include: Optional[Dict[str, Any]] = None\n\n`;
             // FindFirstArgs
             content += `@dataclass\nclass ${name}FindFirstArgs:\n    """ORM-style args for ${name}.find_first()."""\n`;
             content += `    where: Optional[${name}WhereInput] = None\n`;
             content += `    order_by: Optional[${name}OrderByInput] = None\n`;
-            content += `    select: Optional[List[str]] = None\n\n`;
+            content += `    select: Optional[Union[List[str], Dict[str, Any]]] = None\n`;
+            content += `    include: Optional[Dict[str, Any]] = None\n\n`;
         }
         fs_1.default.writeFileSync(path_1.default.join(outputDir, 'an5_orm_types.py'), content);
     }
@@ -317,11 +336,11 @@ class PythonGenerator {
         }
         content += 'class An5Client:\n';
         content += '    """AN5 Python ORM Client - type-safe database access.\n\n';
-        content += '    Query keys are schema field names, used verbatim: the SQL builder quotes a key\n';
-        content += '    as-is, so `createdAt` reaches the database and `created_at` does not.\n\n';
+        content += '    Accepts both schema field names (`createdAt`) and snake_case aliases (`created_at`),\n';
+        content += '    as well as typed filter/input dataclasses from `an5_orm_types`.\n\n';
         content += '    Usage:\n';
         content += '        db = An5Client()\n';
-        content += '        users = db.user.find_many(where={"name": {"contains": "John"}}, order_by={"createdAt": "asc"}, take=10)\n';
+        content += '        users = db.user.find_many(where={"name": {"contains": "John"}}, order_by={"created_at": "asc"}, take=10)\n';
         content += '        user  = db.user.find_first(where={"id": "abc"})\n';
         content += '        new   = db.user.create(data={"name": "Alice", "email": "alice@example.com"})\n';
         content += '    """\n';

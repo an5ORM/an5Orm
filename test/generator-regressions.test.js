@@ -599,6 +599,47 @@ model Asset {
   assertIncludes(asset, 'Embedding *[]float32');
 });
 
+test("Python generator emits typed filter unions, BoolFilter.not_, relations, and updated docstrings", async () => {
+  const outDir = path.join(tmpRoot, 'python-typed-filters');
+  const models = await parse('python-typed-filters', `
+model Author {
+  id        NVARCHAR(64) @id @default(uuid())
+  email     NVARCHAR(255) @unique
+  isActive  BIT @default(true)
+  createdAt DATETIME2 @default(now())
+  posts     Post[]
+  @@map("authors")
+}
+
+model Post {
+  id        NVARCHAR(64) @id @default(uuid())
+  authorId  NVARCHAR(64)
+  title     NVARCHAR(255)
+  author    Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'mssql');
+
+  new PythonGenerator(path.join(outDir, 'an5_metadata.py')).generate(models);
+
+  const types = fs.readFileSync(path.join(outDir, 'an5_orm_types.py'), 'utf8');
+  assertIncludes(types, 'from typing import Dict, List, Optional, Any, Union');
+  assertIncludes(types, 'class BoolFilter:');
+  assertIncludes(types, '    not_: Optional[bool] = None');
+  assertIncludes(types, '    NOT: Optional[Union[\'AuthorWhereInput\', List[\'AuthorWhereInput\']]] = None');
+  assertIncludes(types, '    email: Optional[Union[str, StringFilter]] = None');
+  assertIncludes(types, '    is_active: Optional[Union[bool, BoolFilter]] = None');
+  assertIncludes(types, '    created_at: Optional[Union[datetime, str, DateTimeFilter]] = None');
+  assertIncludes(types, '    posts: Optional[Dict[str, Any]] = None');
+  assertIncludes(types, '    select: Optional[Union[List[str], Dict[str, Any]]] = None');
+  assertIncludes(types, '    include: Optional[Dict[str, Any]] = None');
+  assertIncludes(types, 'UserWhereInput(name=StringFilter(contains="John"))');
+
+  const client = fs.readFileSync(path.join(outDir, 'an5_client.py'), 'utf8');
+  assertIncludes(client, 'snake_case aliases');
+  assertIncludes(client, 'an5_orm_types');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()

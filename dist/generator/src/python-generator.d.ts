@@ -15,6 +15,7 @@ export declare class PythonGenerator {
     private provider;
     generate(models: Model[]): void;
     private getPyFilterType;
+    private getPyWhereFieldType;
     private generateOrmTypes;
     private generateMetadata;
     /**
