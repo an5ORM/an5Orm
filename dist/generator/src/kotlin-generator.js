@@ -409,23 +409,66 @@ object An5Orm {
         map.block()
         return map
     }
+
+    /** Common interface implemented by generated model \`WHERE\` builders. */
+    interface WhereBuilder {
+        fun build(): Where
+    }
+
+    /** A filter on a to-many relation (\`some\`, \`none\`, \`every\`). */
+    class ListRelationFilter<T : WhereBuilder> private constructor(
+        private val operators: Map<String, Any?> = emptyMap(),
+    ) {
+        fun some(filter: T? = null) = ListRelationFilter<T>(operators + ("some" to (filter?.build() ?: emptyMap<String, Any?>())))
+        fun none(filter: T? = null) = ListRelationFilter<T>(operators + ("none" to (filter?.build() ?: emptyMap<String, Any?>())))
+        fun every(filter: T) = ListRelationFilter<T>(operators + ("every" to filter.build()))
+        fun build(): Where = LinkedHashMap(operators)
+
+        companion object {
+            fun <T : WhereBuilder> some(filter: T? = null) = ListRelationFilter<T>().some(filter)
+            fun <T : WhereBuilder> none(filter: T? = null) = ListRelationFilter<T>().none(filter)
+            fun <T : WhereBuilder> every(filter: T) = ListRelationFilter<T>().every(filter)
+        }
+    }
+
+    /** A filter on a to-one relation (\`is\`, \`isNot\`). */
+    class RelationFilter<T : WhereBuilder> private constructor(
+        private val operators: Map<String, Any?> = emptyMap(),
+    ) {
+        fun \`is\`(filter: T?) = RelationFilter<T>(operators + ("is" to filter?.build()))
+        fun isNot(filter: T?) = RelationFilter<T>(operators + ("isNot" to filter?.build()))
+        fun build(): Where = LinkedHashMap(operators)
+
+        companion object {
+            fun <T : WhereBuilder> \`is\`(filter: T?) = RelationFilter<T>().\`is\`(filter)
+            fun <T : WhereBuilder> isNot(filter: T?) = RelationFilter<T>().isNot(filter)
+        }
+    }
 `;
         for (const model of models) {
             const name = model.name;
+            const whereParams = [
+                ...model.fields.map((field) => `        val ${this.property(field.name)}: ${this.filterType(field)}? = null,`),
+                ...model.relations.map((rel) => `        val ${this.property(rel.name)}: ${rel.isArray ? `ListRelationFilter<${rel.type}Where>` : `RelationFilter<${rel.type}Where>`}? = null,`),
+            ];
+            const buildLines = [
+                ...model.fields.map((field) => `            ${this.property(field.name)}?.let { put("${field.name}", it.build()) }`),
+                ...model.relations.map((rel) => `            ${this.property(rel.name)}?.let { put("${rel.name}", it.build()) }`),
+            ];
             content += `
     /** A \`WHERE\` for ${name}. Unset filters are left out. */
     data class ${name}Where(
         val and: List<${name}Where>? = null,
         val or: List<${name}Where>? = null,
         val not: List<${name}Where>? = null,
-${model.fields.map((field) => `        val ${this.property(field.name)}: ${this.filterType(field)}? = null,`).join('\n')}
-    ) {
+${whereParams.join('\n')}
+    ) : WhereBuilder {
         /** The filter tree as the runtime reads it. */
-        fun build(): Where = operatorMap {
+        override fun build(): Where = operatorMap {
             and?.let { put("AND", it.map { clause -> clause.build() }) }
             or?.let { put("OR", it.map { clause -> clause.build() }) }
             not?.let { put("NOT", it.map { clause -> clause.build() }) }
-${model.fields.map((field) => `            ${this.property(field.name)}?.let { put("${field.name}", it.build()) }`).join('\n')}
+${buildLines.join('\n')}
         }
 
         companion object {
@@ -493,7 +536,7 @@ ${models
             .filter((model) => model.relations.length > 0)
             .map((model) => `        "${model.name}" to linkedMapOf(
 ${model.relations
-            .map((rel) => `            "${rel.name}" to relation("${rel.type}", "${rel.relationName}", "${rel.foreignKey}", "${rel.localKey}")`)
+            .map((rel) => `            "${rel.name}" to relation("${rel.type}", "${rel.isArray ? 'many' : 'one'}", "${rel.foreignKey || 'id'}", "${rel.localKey || 'id'}")`)
             .join(',\n')}
         ),`)
             .join('\n')}

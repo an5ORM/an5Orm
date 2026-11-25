@@ -681,6 +681,41 @@ public final class An5OrmTypes {
       return filter;
     }
 
+    /** At least one related record matches \`clause\`. */
+    public static Map<String, Object> some(Map<String, Object> clause) {
+      return operator("some", clause == null ? new LinkedHashMap<String, Object>() : clause);
+    }
+
+    /** At least one related record exists. */
+    public static Map<String, Object> some() {
+      return some(null);
+    }
+
+    /** No related record matches \`clause\`. */
+    public static Map<String, Object> none(Map<String, Object> clause) {
+      return operator("none", clause == null ? new LinkedHashMap<String, Object>() : clause);
+    }
+
+    /** Zero related records exist. */
+    public static Map<String, Object> none() {
+      return none(null);
+    }
+
+    /** Every related record matches \`clause\`. */
+    public static Map<String, Object> every(Map<String, Object> clause) {
+      return operator("every", clause == null ? new LinkedHashMap<String, Object>() : clause);
+    }
+
+    /** To-one related record matches \`clause\`, or does not exist when \`null\`. */
+    public static Map<String, Object> is(Map<String, Object> clause) {
+      return operator("is", clause);
+    }
+
+    /** To-one related record does not match \`clause\`, or exists when \`null\`. */
+    public static Map<String, Object> isNot(Map<String, Object> clause) {
+      return operator("isNot", clause);
+    }
+
     private static Map<String, Object> operator(String name, Object value) {
       Map<String, Object> filter = new LinkedHashMap<String, Object>();
       filter.put(name, value);
@@ -851,6 +886,90 @@ public final class An5OrmTypes {
     // as "match NULL", so an unset filter has to be absent from the map entirely.
     if (value != null) filter.put(name, value);
   }
+
+  /** Common interface implemented by generated model \`WHERE\` builders. */
+  public interface WhereBuilder {
+    Map<String, Object> toMap();
+  }
+
+  /** Type-safe filter for to-many relations (\`some\`, \`none\`, \`every\`). */
+  public static final class ListRelationFilter<T extends WhereBuilder> {
+    private final Map<String, Object> operators = new LinkedHashMap<String, Object>();
+
+    public static <T extends WhereBuilder> ListRelationFilter<T> some(T filter) {
+      return new ListRelationFilter<T>().withSome(filter);
+    }
+
+    public static <T extends WhereBuilder> ListRelationFilter<T> some() {
+      return some(null);
+    }
+
+    public static <T extends WhereBuilder> ListRelationFilter<T> none(T filter) {
+      return new ListRelationFilter<T>().withNone(filter);
+    }
+
+    public static <T extends WhereBuilder> ListRelationFilter<T> none() {
+      return none(null);
+    }
+
+    public static <T extends WhereBuilder> ListRelationFilter<T> every(T filter) {
+      return new ListRelationFilter<T>().withEvery(filter);
+    }
+
+    public ListRelationFilter<T> withSome(T filter) {
+      operators.put("some", filter == null ? new LinkedHashMap<String, Object>() : filter.toMap());
+      return this;
+    }
+
+    public ListRelationFilter<T> withNone(T filter) {
+      operators.put("none", filter == null ? new LinkedHashMap<String, Object>() : filter.toMap());
+      return this;
+    }
+
+    public ListRelationFilter<T> withEvery(T filter) {
+      operators.put("every", filter == null ? new LinkedHashMap<String, Object>() : filter.toMap());
+      return this;
+    }
+
+    public Map<String, Object> toMap() {
+      return operators;
+    }
+  }
+
+  /** Type-safe filter for to-one relations (\`is\`, \`isNot\`). */
+  public static final class RelationFilter<T extends WhereBuilder> {
+    private final Map<String, Object> operators = new LinkedHashMap<String, Object>();
+
+    public static <T extends WhereBuilder> RelationFilter<T> is(T filter) {
+      return new RelationFilter<T>().withIs(filter);
+    }
+
+    public static <T extends WhereBuilder> RelationFilter<T> isNull() {
+      return is(null);
+    }
+
+    public static <T extends WhereBuilder> RelationFilter<T> isNot(T filter) {
+      return new RelationFilter<T>().withIsNot(filter);
+    }
+
+    public static <T extends WhereBuilder> RelationFilter<T> isNotNull() {
+      return isNot(null);
+    }
+
+    public RelationFilter<T> withIs(T filter) {
+      operators.put("is", filter == null ? null : filter.toMap());
+      return this;
+    }
+
+    public RelationFilter<T> withIsNot(T filter) {
+      operators.put("isNot", filter == null ? null : filter.toMap());
+      return this;
+    }
+
+    public Map<String, Object> toMap() {
+      return operators;
+    }
+  }
 `;
 
     for (const model of models) {
@@ -859,13 +978,19 @@ public final class An5OrmTypes {
   // ── ${name} ─────────────────────────────────────────────────────────────────────
 
   /** Type-safe \`WHERE\` for ${name}. Unset filters are left out. */
-  public static final class ${name}Where {
+  public static final class ${name}Where implements WhereBuilder {
     public List<${name}Where> and;
     public List<${name}Where> or;
     public ${name}Where not;
 `;
       for (const field of model.fields) {
         content += `    public ${this.getFilterType(field)} ${this.fieldName(field.name)};\n`;
+      }
+      for (const rel of model.relations) {
+        const relType = rel.isArray
+          ? `ListRelationFilter<${rel.type}Where>`
+          : `RelationFilter<${rel.type}Where>`;
+        content += `    public ${relType} ${this.fieldName(rel.name)};\n`;
       }
       content += `
     public ${name}Where and(${name}Where... clauses) {
@@ -884,6 +1009,7 @@ public final class An5OrmTypes {
     }
 
     /** The filter as the adapter reads it, with every unset condition left out. */
+    @Override
     public Map<String, Object> toMap() {
       Map<String, Object> filter = new LinkedHashMap<String, Object>();
       if (and != null) filter.put("AND", toMapValues(and));
@@ -893,6 +1019,10 @@ public final class An5OrmTypes {
       for (const field of model.fields) {
         const property = this.fieldName(field.name);
         content += `      if (${property} != null) filter.put("${field.name}", ${property}.toMap());\n`;
+      }
+      for (const rel of model.relations) {
+        const property = this.fieldName(rel.name);
+        content += `      if (${property} != null) filter.put("${rel.name}", ${property}.toMap());\n`;
       }
       content += `      return filter;
     }
@@ -1003,7 +1133,7 @@ public final class An5Metadata {
         content += `        new LinkedHashMap<String, Map<String, String>>();\n`;
         for (const rel of model.relations) {
           content += `    ${lowerFirst(model.name)}Relations.put("${rel.name}",\n`;
-          content += `        relation("${rel.type}", "${rel.relationName}", "${rel.foreignKey}", "${rel.localKey}"));\n`;
+          content += `        relation("${rel.type}", "${rel.isArray ? 'many' : 'one'}", "${rel.foreignKey || 'id'}", "${rel.localKey || 'id'}"));\n`;
         }
         content += `    relations.put("${model.name}", ${lowerFirst(model.name)}Relations);\n`;
       }
@@ -1040,10 +1170,10 @@ public final class An5Metadata {
   }
 
   private static Map<String, String> relation(
-      String modelName, String relationName, String foreignKey, String localKey) {
+      String modelName, String relationType, String foreignKey, String localKey) {
     Map<String, String> relation = new LinkedHashMap<String, String>();
     relation.put("modelName", modelName);
-    relation.put("relationType", relationName);
+    relation.put("relationType", relationType);
     relation.put("foreignKey", foreignKey);
     relation.put("localKey", localKey);
     return relation;

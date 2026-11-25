@@ -714,6 +714,50 @@ model Post {
   assertIncludes(meta, '"author": ["modelName": "Author", "relationType": "one", "foreignKey": "authorId", "localKey": "id"]');
 });
 
+test("Java and Kotlin generators emit ListRelationFilter, RelationFilter, and relationType metadata", async () => {
+  const models = await parse('jvm-relations', `
+model Author {
+  id    NVARCHAR(64) @id @default(uuid())
+  email NVARCHAR(255) @unique
+  posts Post[]
+  @@map("authors")
+}
+
+model Post {
+  id       NVARCHAR(64) @id @default(uuid())
+  authorId NVARCHAR(64)
+  title    NVARCHAR(255)
+  author   Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'sqlite');
+
+  const javaDir = path.join(tmpRoot, 'java-relations');
+  new JavaGenerator(javaDir).generate(models);
+  const javaTypes = fs.readFileSync(path.join(javaDir, 'An5OrmTypes.java'), 'utf8');
+  assertIncludes(javaTypes, 'public interface WhereBuilder');
+  assertIncludes(javaTypes, 'public static final class ListRelationFilter<T extends WhereBuilder>');
+  assertIncludes(javaTypes, 'public static final class RelationFilter<T extends WhereBuilder>');
+  assertIncludes(javaTypes, 'public static final class AuthorWhere implements WhereBuilder');
+  assertIncludes(javaTypes, 'public ListRelationFilter<PostWhere> Posts;');
+  assertIncludes(javaTypes, 'public RelationFilter<AuthorWhere> Author;');
+  const javaMeta = fs.readFileSync(path.join(javaDir, 'An5Metadata.java'), 'utf8');
+  assertIncludes(javaMeta, 'relation("Post", "many", "authorId", "id")');
+  assertIncludes(javaMeta, 'relation("Author", "one", "authorId", "id")');
+
+  const kotlinDir = path.join(tmpRoot, 'kotlin-relations');
+  new KotlinGenerator(kotlinDir).generate(models);
+  const kotlinTypes = fs.readFileSync(path.join(kotlinDir, 'An5OrmTypes.kt'), 'utf8');
+  assertIncludes(kotlinTypes, 'interface WhereBuilder');
+  assertIncludes(kotlinTypes, 'class ListRelationFilter<T : WhereBuilder>');
+  assertIncludes(kotlinTypes, 'class RelationFilter<T : WhereBuilder>');
+  assertIncludes(kotlinTypes, 'val posts: ListRelationFilter<PostWhere>? = null');
+  assertIncludes(kotlinTypes, 'val author: RelationFilter<AuthorWhere>? = null');
+  const kotlinMeta = fs.readFileSync(path.join(kotlinDir, 'An5Metadata.kt'), 'utf8');
+  assertIncludes(kotlinMeta, '"posts" to relation("Post", "many", "authorId", "id")');
+  assertIncludes(kotlinMeta, '"author" to relation("Author", "one", "authorId", "id")');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()
