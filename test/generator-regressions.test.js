@@ -679,6 +679,41 @@ model Post {
   assertIncludes(client, 'relation_map: relations');
 });
 
+test("Swift generator emits ListRelationFilter, RelationFilter, relationType metadata, and NSNull equality", async () => {
+  const outDir = path.join(tmpRoot, 'swift-relations');
+  const models = await parse('swift-relations', `
+model Author {
+  id    NVARCHAR(64) @id @default(uuid())
+  email NVARCHAR(255) @unique
+  posts Post[]
+  @@map("authors")
+}
+
+model Post {
+  id       NVARCHAR(64) @id @default(uuid())
+  authorId NVARCHAR(64)
+  title    NVARCHAR(255)
+  author   Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'sqlite');
+
+  new SwiftGenerator(outDir).generate(models);
+
+  const types = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5OrmTypes.swift'), 'utf8');
+  assertIncludes(types, 'public protocol WhereBuilder');
+  assertIncludes(types, 'public struct ListRelationFilter<Target: WhereBuilder>');
+  assertIncludes(types, 'public struct RelationFilter<Target: WhereBuilder>');
+  assertIncludes(types, 'public struct AuthorWhere: WhereBuilder');
+  assertIncludes(types, 'public var posts: ListRelationFilter<PostWhere>?');
+  assertIncludes(types, 'public var author: RelationFilter<AuthorWhere>?');
+  assertIncludes(types, 'filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()');
+
+  const meta = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5Metadata.swift'), 'utf8');
+  assertIncludes(meta, '"posts": ["modelName": "Post", "relationType": "many", "foreignKey": "authorId", "localKey": "id"]');
+  assertIncludes(meta, '"author": ["modelName": "Author", "relationType": "one", "foreignKey": "authorId", "localKey": "id"]');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()

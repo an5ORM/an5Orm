@@ -280,13 +280,13 @@ public enum An5Orm {
 
         public static func \`is\`(_ value: String?) -> StringFilter {
             var filter = StringFilter()
-            filter.operators["equals"] = value
+            filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
         public static func isNot(_ value: String?) -> StringFilter {
             var filter = StringFilter()
-            filter.operators["not"] = value
+            filter.operators["not"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
@@ -330,31 +330,31 @@ public enum An5Orm {
 
         public static func \`is\`(_ value: Double?) -> NumberFilter {
             var filter = NumberFilter()
-            filter.operators["equals"] = value
+            filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
         public static func atLeast(_ value: Double?) -> NumberFilter {
             var filter = NumberFilter()
-            filter.operators["gte"] = value
+            if let value { filter.operators["gte"] = value }
             return filter
         }
 
         public static func atMost(_ value: Double?) -> NumberFilter {
             var filter = NumberFilter()
-            filter.operators["lte"] = value
+            if let value { filter.operators["lte"] = value }
             return filter
         }
 
         public static func greater(_ value: Double?) -> NumberFilter {
             var filter = NumberFilter()
-            filter.operators["gt"] = value
+            if let value { filter.operators["gt"] = value }
             return filter
         }
 
         public static func less(_ value: Double?) -> NumberFilter {
             var filter = NumberFilter()
-            filter.operators["lt"] = value
+            if let value { filter.operators["lt"] = value }
             return filter
         }
 
@@ -374,7 +374,7 @@ public enum An5Orm {
 
         public static func \`is\`(_ value: Bool?) -> BoolFilter {
             var filter = BoolFilter()
-            filter.operators["equals"] = value
+            filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
@@ -388,33 +388,137 @@ public enum An5Orm {
 
         public static func \`is\`(_ value: Date?) -> DateFilter {
             var filter = DateFilter()
-            filter.operators["equals"] = value
+            filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
         public static func atLeast(_ value: Date?) -> DateFilter {
             var filter = DateFilter()
-            filter.operators["gte"] = value
+            if let value { filter.operators["gte"] = value }
             return filter
         }
 
         public static func atMost(_ value: Date?) -> DateFilter {
             var filter = DateFilter()
-            filter.operators["lte"] = value
+            if let value { filter.operators["lte"] = value }
             return filter
         }
 
         /// The filter as the runtime reads it.
         public func build() -> Where { operators }
     }
+
+    /// Common interface for generated per-model \`WHERE\` builders.
+    public protocol WhereBuilder {
+        init()
+        func build() -> Where
+    }
+
+    /// A filter on a to-many relation (\`some\`, \`none\`, \`every\`).
+    public struct ListRelationFilter<Target: WhereBuilder> {
+        private var operators: Where = [:]
+
+        public init() {}
+
+        public static func some(_ filter: Target = Target()) -> ListRelationFilter {
+            var relation = ListRelationFilter()
+            relation.operators["some"] = filter.build()
+            return relation
+        }
+
+        public static func none(_ filter: Target = Target()) -> ListRelationFilter {
+            var relation = ListRelationFilter()
+            relation.operators["none"] = filter.build()
+            return relation
+        }
+
+        public static func every(_ filter: Target) -> ListRelationFilter {
+            var relation = ListRelationFilter()
+            relation.operators["every"] = filter.build()
+            return relation
+        }
+
+        public func some(_ filter: Target = Target()) -> ListRelationFilter {
+            var relation = self
+            relation.operators["some"] = filter.build()
+            return relation
+        }
+
+        public func none(_ filter: Target = Target()) -> ListRelationFilter {
+            var relation = self
+            relation.operators["none"] = filter.build()
+            return relation
+        }
+
+        public func every(_ filter: Target) -> ListRelationFilter {
+            var relation = self
+            relation.operators["every"] = filter.build()
+            return relation
+        }
+
+        /// The relation filter as the runtime reads it.
+        public func build() -> Where { operators }
+    }
+
+    /// A filter on a to-one relation (\`is\`, \`isNot\`).
+    public struct RelationFilter<Target: WhereBuilder> {
+        private var operators: Where = [:]
+
+        public init() {}
+
+        public static func \`is\`(_ filter: Target?) -> RelationFilter {
+            var relation = RelationFilter()
+            let payload: Any = filter.map { $0.build() as Any } ?? NSNull()
+            relation.operators["is"] = payload
+            return relation
+        }
+
+        public static func isNot(_ filter: Target?) -> RelationFilter {
+            var relation = RelationFilter()
+            let payload: Any = filter.map { $0.build() as Any } ?? NSNull()
+            relation.operators["isNot"] = payload
+            return relation
+        }
+
+        public func \`is\`(_ filter: Target?) -> RelationFilter {
+            var relation = self
+            let payload: Any = filter.map { $0.build() as Any } ?? NSNull()
+            relation.operators["is"] = payload
+            return relation
+        }
+
+        public func isNot(_ filter: Target?) -> RelationFilter {
+            var relation = self
+            let payload: Any = filter.map { $0.build() as Any } ?? NSNull()
+            relation.operators["isNot"] = payload
+            return relation
+        }
+
+        /// The relation filter as the runtime reads it.
+        public func build() -> Where { operators }
+    }
 `;
         for (const model of models) {
             const name = model.name;
+            const whereProps = [
+                ...model.fields.map((field) => `        public var ${this.property(field.name)}: ${this.filterType(field)}?`),
+                ...model.relations.map((rel) => `        public var ${this.property(rel.name)}: ${rel.isArray ? `ListRelationFilter<${rel.type}Where>` : `RelationFilter<${rel.type}Where>`}?`),
+            ];
+            const buildLines = [
+                ...model.fields.map((field) => {
+                    const property = this.property(field.name);
+                    return `            if let ${property} = ${property} { filter["${field.name}"] = ${property}.build() }`;
+                }),
+                ...model.relations.map((rel) => {
+                    const property = this.property(rel.name);
+                    return `            if let ${property} = ${property} { filter["${rel.name}"] = ${property}.build() }`;
+                }),
+            ];
             content += `
     /// A \`WHERE\` for ${name}. Unset filters are left out.
-    public struct ${name}Where {
+    public struct ${name}Where: WhereBuilder {
         private var operators: Where = [:]
-${model.fields.map((field) => `        public var ${this.property(field.name)}: ${this.filterType(field)}?`).join('\n')}
+${whereProps.join('\n')}
 
         /// Creates a filter with every column unset; assign the ones you want to match.
         public init() {}
@@ -444,12 +548,7 @@ ${model.fields.map((field) => `        public var ${this.property(field.name)}: 
         /// an error — it is a filter that quietly matches every row.
         public func build() -> Where {
             var filter = operators
-${model.fields
-                .map((field) => {
-                const property = this.property(field.name);
-                return `            if let ${property} = ${property} { filter["${field.name}"] = ${property}.build() }`;
-            })
-                .join('\n')}
+${buildLines.join('\n')}
             return filter
         }
     }
@@ -517,7 +616,7 @@ ${models.some((model) => model.relations.length > 0)
                 .filter((model) => model.relations.length > 0)
                 .map((model) => `        "${model.name}": [
 ${model.relations
-                .map((rel) => `            "${rel.name}": ["modelName": "${rel.type}", "relationType": "${rel.relationName}", "foreignKey": "${rel.foreignKey}", "localKey": "${rel.localKey}"],`)
+                .map((rel) => `            "${rel.name}": ["modelName": "${rel.type}", "relationType": "${rel.isArray ? 'many' : 'one'}", "foreignKey": "${rel.foreignKey || 'id'}", "localKey": "${rel.localKey || 'id'}"],`)
                 .join('\n')}
         ],`)
                 .join('\n') + '\n    ]'
