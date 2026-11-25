@@ -839,6 +839,46 @@ model Post {
   assertIncludes(ctxCs, 'public List<T> FindMany(object args)');
 });
 
+test("TypeScript generator emits QueryMode, StringFilter.mode, ListRelationFilter, and RelationFilter", async () => {
+  const models = await parse('ts-relations', `
+model Author {
+  id    NVARCHAR(64) @id @default(uuid())
+  email NVARCHAR(255) @unique
+  name  NVARCHAR(255)?
+  posts Post[]
+  @@map("authors")
+}
+
+model Post {
+  id       NVARCHAR(64) @id @default(uuid())
+  authorId NVARCHAR(64)
+  title    NVARCHAR(255)
+  author   Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'sqlite');
+
+  const tsDir = path.join(tmpRoot, 'ts-relations');
+  new CodeGenerator(tsDir).generate(models);
+
+  const baseTs = fs.readFileSync(path.join(tsDir, 'base.ts'), 'utf8');
+  assertIncludes(baseTs, "export type QueryMode = 'default' | 'insensitive';");
+  assertIncludes(baseTs, 'mode?: QueryMode;');
+  assertIncludes(baseTs, 'export type ListRelationFilter<T> = { some?: T; none?: T; every?: T; };');
+  assertIncludes(baseTs, 'export type RelationFilter<T> = { is?: T | null; isNot?: T | null; };');
+
+  const authorTs = fs.readFileSync(path.join(tsDir, 'Author.ts'), 'utf8');
+  assertIncludes(authorTs, 'posts?: An5.ListRelationFilter<PostWhereInput>;');
+
+  const postTs = fs.readFileSync(path.join(tsDir, 'Post.ts'), 'utf8');
+  assertIncludes(postTs, 'author?: An5.RelationFilter<AuthorWhereInput>;');
+
+  const indexTs = fs.readFileSync(path.join(tsDir, 'index.ts'), 'utf8');
+  assertIncludes(indexTs, 'export type QueryMode = BaseAn5.QueryMode;');
+  assertIncludes(indexTs, 'export type ListRelationFilter<T> = BaseAn5.ListRelationFilter<T>;');
+  assertIncludes(indexTs, 'export type RelationFilter<T> = BaseAn5.RelationFilter<T>;');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()

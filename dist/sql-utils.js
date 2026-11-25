@@ -77,11 +77,45 @@ function toNonNegativeInt(value, fallback = 0) {
     const n = Number.parseInt(String(value), 10);
     return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
-const OPERATOR_KEYS = ["equals", "in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt"];
+const OPERATOR_KEYS = ["equals", "in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt", "mode"];
+const OPERATOR_KEY_SET = new Set(OPERATOR_KEYS);
+const RELATION_OPERATOR_KEYS = new Set(["some", "none", "every", "is", "isNot", "is_not"]);
+function isPlainObject(value) {
+    if (value === null || typeof value !== "object")
+        return false;
+    if (Array.isArray(value) || value instanceof Date || value instanceof RegExp)
+        return false;
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer)
+        return false;
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+}
 function isOperatorValue(value) {
-    if (!value || typeof value !== "object" || value instanceof Date)
+    if (!isPlainObject(value))
         return false;
     return OPERATOR_KEYS.some((op) => op in value);
+}
+function isRelationOperatorObject(value) {
+    if (!isPlainObject(value))
+        return false;
+    return Object.keys(value).some((k) => RELATION_OPERATOR_KEYS.has(k));
+}
+function resolveModelEntry(map, modelName) {
+    if (!map || !modelName)
+        return undefined;
+    if (Object.prototype.hasOwnProperty.call(map, modelName))
+        return map[modelName];
+    const camel = modelName.charAt(0).toLowerCase() + modelName.slice(1);
+    if (Object.prototype.hasOwnProperty.call(map, camel))
+        return map[camel];
+    const lower = modelName.toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(map, lower))
+        return map[lower];
+    for (const [k, v] of Object.entries(map)) {
+        if (k.toLowerCase() === lower)
+            return v;
+    }
+    return undefined;
 }
 function buildOrderBy(orderBy) {
     if (!orderBy)
@@ -104,25 +138,46 @@ function buildOrderBy(orderBy) {
  * interpolated directly, and they are run through {@link quoteIdentifier}.
  */
 function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
-    if (!where)
+    if (where === null || where === undefined)
         return "";
+    if (!isPlainObject(where)) {
+        throw new Error("Where clause must be a plain object");
+    }
     const conditions = [];
     const relationMap = ctx.relationMap || {};
     const modelToTable = ctx.modelToTable || {};
+    const modelRelations = resolveModelEntry(relationMap, modelName) || {};
     const cleanWhere = {};
     for (const [key, value] of Object.entries(where)) {
-        if (key.includes("_") && value && typeof value === "object" && !(value instanceof Date) && !isOperatorValue(value)) {
-            Object.assign(cleanWhere, value);
+        if (key !== "OR" &&
+            key !== "AND" &&
+            key !== "NOT" &&
+            key.includes("_") &&
+            !modelRelations[key] &&
+            isPlainObject(value) &&
+            !isOperatorValue(value) &&
+            !isRelationOperatorObject(value)) {
+            const subKeys = Object.keys(value).filter((sk) => value[sk] !== undefined);
+            if (subKeys.length > 0 && subKeys.every((sk) => key.includes(sk))) {
+                Object.assign(cleanWhere, value);
+                continue;
+            }
         }
-        else {
-            cleanWhere[key] = value;
-        }
+        cleanWhere[key] = value;
     }
     for (const [key, value] of Object.entries(cleanWhere)) {
         if (value === undefined)
             continue;
-        if (key === "OR" && Array.isArray(value)) {
-            const orConditions = value.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}or_${idx}_`, ctx) || "1=1");
+        if (key === "OR") {
+            if (!Array.isArray(value)) {
+                throw new Error("OR filter must be an array of filter objects");
+            }
+            const orConditions = value.map((subWhere, idx) => {
+                if (!isPlainObject(subWhere)) {
+                    throw new Error("OR filter entries must be plain objects");
+                }
+                return parseWhere(modelName, subWhere, params, `${prefix}or_${idx}_`, ctx) || "1=1";
+            });
             const filtered = orConditions.filter(Boolean);
             if (filtered.length > 0) {
                 conditions.push(`(${filtered.join(" OR ")})`);
@@ -133,7 +188,12 @@ function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
         }
         else if (key === "AND") {
             const andItems = Array.isArray(value) ? value : [value];
-            const andConditions = andItems.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}and_${idx}_`, ctx));
+            const andConditions = andItems.map((subWhere, idx) => {
+                if (!isPlainObject(subWhere)) {
+                    throw new Error("AND filter must be a plain object or an array of plain objects");
+                }
+                return parseWhere(modelName, subWhere, params, `${prefix}and_${idx}_`, ctx);
+            });
             const filtered = andConditions.filter(Boolean);
             if (filtered.length > 0) {
                 conditions.push(`(${filtered.join(" AND ")})`);
@@ -141,114 +201,204 @@ function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
         }
         else if (key === "NOT") {
             const notItems = Array.isArray(value) ? value : [value];
-            const notConditions = notItems.map((subWhere, idx) => parseWhere(modelName, subWhere, params, `${prefix}not_${idx}_`, ctx) || "1=1");
+            const notConditions = notItems.map((subWhere, idx) => {
+                if (!isPlainObject(subWhere)) {
+                    throw new Error("NOT filter must be a plain object or an array of plain objects");
+                }
+                return parseWhere(modelName, subWhere, params, `${prefix}not_${idx}_`, ctx) || "1=1";
+            });
             const filtered = notConditions.filter(Boolean);
             if (filtered.length > 0) {
                 conditions.push(`NOT (${filtered.join(" OR ")})`);
             }
         }
         else {
-            const modelRelations = relationMap[modelName];
-            const relation = modelRelations?.[key];
+            const relation = modelRelations[key];
             if (relation) {
-                const relationTable = quoteTableIdentifier(modelToTable[relation.modelName] || relation.modelName);
-                const subParams = {};
-                let subWhere = value;
-                let op = "some";
-                if (value && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date)) {
-                    if (value.some) {
-                        subWhere = value.some;
-                        op = "some";
-                    }
-                    else if (value.none) {
-                        subWhere = value.none;
-                        op = "none";
-                    }
-                    else if (value.every) {
-                        subWhere = value.every;
-                        op = "every";
-                    }
+                if (!isPlainObject(value)) {
+                    throw new Error(`Relation filter for '${key}' on '${modelName}' must be a plain object`);
                 }
-                const subWhereSql = parseWhere(relation.modelName, subWhere, subParams, `${prefix}${key}_`, ctx);
-                Object.assign(params, subParams);
+                const relationTable = quoteTableIdentifier(resolveModelEntry(modelToTable, relation.modelName) || relation.modelName);
                 const fk = quoteIdentifier(relation.foreignKey);
                 const lk = quoteIdentifier(relation.localKey);
                 const outerKey = relation.relationType === "one" ? fk : lk;
                 const innerKey = relation.relationType === "one" ? lk : fk;
-                if (op === "every") {
-                    if (subWhereSql) {
-                        conditions.push(`${outerKey} NOT IN (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK) WHERE NOT (${subWhereSql}))`);
-                    }
-                    else {
-                        conditions.push("1 = 1");
+                if (relation.relationType === "many") {
+                    const opEntries = Object.entries(value).filter(([, v]) => v !== undefined);
+                    for (const [rawOp, opVal] of opEntries) {
+                        if (rawOp !== "some" && rawOp !== "none" && rawOp !== "every") {
+                            throw new Error(`Unsupported relation filter operator '${rawOp}' for to-many relation '${key}' on '${modelName}'`);
+                        }
+                        if (!isPlainObject(opVal)) {
+                            throw new Error(`Relation filter '${rawOp}' on '${key}' must be a plain object`);
+                        }
+                        const subPrefix = opEntries.length === 1 ? `${prefix}${key}_` : `${prefix}${key}_${rawOp}_`;
+                        const subParams = {};
+                        const subWhereSql = parseWhere(relation.modelName, opVal, subParams, subPrefix, ctx);
+                        Object.assign(params, subParams);
+                        if (rawOp === "every") {
+                            if (subWhereSql) {
+                                conditions.push(`${outerKey} NOT IN (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK) WHERE NOT (${subWhereSql}))`);
+                            }
+                            else {
+                                conditions.push("1 = 1");
+                            }
+                        }
+                        else {
+                            const relationPredicate = subWhereSql ? ` WHERE ${subWhereSql}` : "";
+                            const operator = rawOp === "none" ? "NOT IN" : "IN";
+                            conditions.push(`${outerKey} ${operator} (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK)${relationPredicate})`);
+                        }
                     }
                 }
                 else {
-                    const relationPredicate = subWhereSql ? ` WHERE ${subWhereSql}` : "";
-                    const operator = op === "none" ? "NOT IN" : "IN";
-                    conditions.push(`${outerKey} ${operator} (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK)${relationPredicate})`);
+                    const definedEntries = Object.entries(value).filter(([, v]) => v !== undefined);
+                    const hasRelOps = definedEntries.some(([k]) => RELATION_OPERATOR_KEYS.has(k));
+                    if (hasRelOps) {
+                        const normalized = {};
+                        for (const [rawOp, opVal] of definedEntries) {
+                            const canonical = rawOp === "is_not" ? "isNot" : rawOp;
+                            if (canonical !== "is" && canonical !== "isNot") {
+                                throw new Error(`Unsupported relation filter operator '${rawOp}' for to-one relation '${key}' on '${modelName}'`);
+                            }
+                            if (Object.prototype.hasOwnProperty.call(normalized, canonical)) {
+                                throw new Error(`Duplicate relation filter operator '${rawOp}' for relation '${key}' on '${modelName}'`);
+                            }
+                            normalized[canonical] = opVal;
+                        }
+                        const opList = Object.entries(normalized);
+                        for (const [op, opVal] of opList) {
+                            const subPrefix = opList.length === 1 ? `${prefix}${key}_` : `${prefix}${key}_${op}_`;
+                            if (opVal === null) {
+                                const sqlOp = op === "is" ? "NOT IN" : "IN";
+                                conditions.push(`${outerKey} ${sqlOp} (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK))`);
+                            }
+                            else if (!isPlainObject(opVal)) {
+                                throw new Error(`Relation filter '${op}' on '${key}' must be a plain object or null`);
+                            }
+                            else {
+                                const subParams = {};
+                                const subWhereSql = parseWhere(relation.modelName, opVal, subParams, subPrefix, ctx);
+                                Object.assign(params, subParams);
+                                const relationPredicate = subWhereSql ? ` WHERE ${subWhereSql}` : "";
+                                const sqlOp = op === "is" ? "IN" : "NOT IN";
+                                conditions.push(`${outerKey} ${sqlOp} (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK)${relationPredicate})`);
+                            }
+                        }
+                    }
+                    else {
+                        const subParams = {};
+                        const subWhereSql = parseWhere(relation.modelName, value, subParams, `${prefix}${key}_`, ctx);
+                        Object.assign(params, subParams);
+                        const relationPredicate = subWhereSql ? ` WHERE ${subWhereSql}` : "";
+                        conditions.push(`${outerKey} IN (SELECT ${innerKey} FROM ${relationTable} WITH (NOLOCK)${relationPredicate})`);
+                    }
                 }
             }
             else {
+                if (Array.isArray(value)) {
+                    throw new Error(`Invalid array filter value for field '${key}'; use { in: [...] } instead`);
+                }
                 const col = quoteIdentifier(key);
                 const paramName = sanitizeParamName(`${prefix}${key}`);
-                if (value && typeof value === "object" && !(value instanceof Date)) {
-                    const ops = Object.entries(value);
+                if (isPlainObject(value)) {
+                    const ops = Object.entries(value).filter(([, opVal]) => opVal !== undefined);
+                    for (const [op] of ops) {
+                        if (RELATION_OPERATOR_KEYS.has(op)) {
+                            throw new Error(`Relation filter operator '${op}' cannot be used on scalar field '${key}'`);
+                        }
+                        if (!OPERATOR_KEY_SET.has(op)) {
+                            throw new Error(`Unknown filter operator '${op}' on field '${key}'`);
+                        }
+                    }
+                    if (value.mode !== undefined && value.mode !== "default" && value.mode !== "insensitive") {
+                        throw new Error(`Invalid filter mode '${String(value.mode)}' on field '${key}'; expected 'default' or 'insensitive'`);
+                    }
+                    const insensitive = value.mode === "insensitive";
                     for (const [op, opVal] of ops) {
+                        if (op === "mode")
+                            continue;
                         if (op === "equals") {
                             if (opVal === null) {
                                 conditions.push(`${col} IS NULL`);
                             }
+                            else if (Array.isArray(opVal) || isPlainObject(opVal)) {
+                                throw new Error(`Filter operator 'equals' on field '${key}' must be a scalar value or null`);
+                            }
                             else {
-                                conditions.push(`${col} = @${paramName}_equals`);
-                                params[`${paramName}_equals`] = opVal;
+                                const pName = `${paramName}_equals`;
+                                params[pName] = opVal;
+                                conditions.push(insensitive && typeof opVal === "string" ? `LOWER(${col}) = LOWER(@${pName})` : `${col} = @${pName}`);
                             }
                         }
-                        else if (op === "in" && Array.isArray(opVal)) {
+                        else if (op === "in") {
+                            if (!Array.isArray(opVal)) {
+                                throw new Error(`Filter operator 'in' on field '${key}' must be an array`);
+                            }
                             if (opVal.length === 0) {
                                 conditions.push("1 = 0");
                             }
                             else {
+                                const lower = insensitive && opVal.some((item) => typeof item === "string");
                                 const inParams = [];
                                 opVal.forEach((item, idx) => {
                                     const inParamName = `${paramName}_in_${idx}`;
-                                    inParams.push(`@${inParamName}`);
                                     params[inParamName] = item;
+                                    inParams.push(lower && typeof item === "string" ? `LOWER(@${inParamName})` : `@${inParamName}`);
                                 });
-                                conditions.push(`${col} IN (${inParams.join(", ")})`);
+                                conditions.push(`${lower ? `LOWER(${col})` : col} IN (${inParams.join(", ")})`);
                             }
                         }
-                        else if (op === "notIn" && Array.isArray(opVal)) {
+                        else if (op === "notIn") {
+                            if (!Array.isArray(opVal)) {
+                                throw new Error(`Filter operator 'notIn' on field '${key}' must be an array`);
+                            }
                             if (opVal.length === 0) {
                                 conditions.push("1 = 1");
                             }
                             else {
+                                const lower = insensitive && opVal.some((item) => typeof item === "string");
                                 const inParams = [];
                                 opVal.forEach((item, idx) => {
                                     const inParamName = `${paramName}_notin_${idx}`;
-                                    inParams.push(`@${inParamName}`);
                                     params[inParamName] = item;
+                                    inParams.push(lower && typeof item === "string" ? `LOWER(@${inParamName})` : `@${inParamName}`);
                                 });
-                                conditions.push(`${col} NOT IN (${inParams.join(", ")})`);
+                                conditions.push(`${lower ? `LOWER(${col})` : col} NOT IN (${inParams.join(", ")})`);
                             }
                         }
                         else if (op === "contains") {
-                            conditions.push(`${col} LIKE @${paramName}_contains`);
-                            params[`${paramName}_contains`] = `%${opVal}%`;
+                            if (typeof opVal !== "string") {
+                                throw new Error(`Filter operator 'contains' on field '${key}' must be a string`);
+                            }
+                            const pName = `${paramName}_contains`;
+                            params[pName] = `%${opVal}%`;
+                            conditions.push(insensitive ? `LOWER(${col}) LIKE LOWER(@${pName})` : `${col} LIKE @${pName}`);
                         }
                         else if (op === "startsWith") {
-                            conditions.push(`${col} LIKE @${paramName}_startsWith`);
-                            params[`${paramName}_startsWith`] = `${opVal}%`;
+                            if (typeof opVal !== "string") {
+                                throw new Error(`Filter operator 'startsWith' on field '${key}' must be a string`);
+                            }
+                            const pName = `${paramName}_startsWith`;
+                            params[pName] = `${opVal}%`;
+                            conditions.push(insensitive ? `LOWER(${col}) LIKE LOWER(@${pName})` : `${col} LIKE @${pName}`);
                         }
                         else if (op === "endsWith") {
-                            conditions.push(`${col} LIKE @${paramName}_endsWith`);
-                            params[`${paramName}_endsWith`] = `%${opVal}`;
+                            if (typeof opVal !== "string") {
+                                throw new Error(`Filter operator 'endsWith' on field '${key}' must be a string`);
+                            }
+                            const pName = `${paramName}_endsWith`;
+                            params[pName] = `%${opVal}`;
+                            conditions.push(insensitive ? `LOWER(${col}) LIKE LOWER(@${pName})` : `${col} LIKE @${pName}`);
                         }
                         else if (op === "not") {
                             if (opVal === null) {
                                 conditions.push(`${col} IS NOT NULL`);
                             }
-                            else if (opVal && typeof opVal === "object" && !(opVal instanceof Date) && !Array.isArray(opVal)) {
+                            else if (Array.isArray(opVal)) {
+                                throw new Error(`Filter operator 'not' on field '${key}' cannot be an array; use 'notIn' instead`);
+                            }
+                            else if (isPlainObject(opVal)) {
                                 const nestedParams = {};
                                 const nestedSql = parseWhere(modelName, { [key]: opVal }, nestedParams, `${prefix}${key}_not_`, ctx);
                                 Object.assign(params, nestedParams);
@@ -256,27 +406,23 @@ function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
                                     conditions.push(`NOT (${nestedSql})`);
                             }
                             else {
-                                conditions.push(`${col} <> @${paramName}_not`);
-                                params[`${paramName}_not`] = opVal;
+                                const pName = `${paramName}_not`;
+                                params[pName] = opVal;
+                                conditions.push(insensitive && typeof opVal === "string" ? `LOWER(${col}) <> LOWER(@${pName})` : `${col} <> @${pName}`);
                             }
                         }
-                        else if (op === "gte") {
-                            conditions.push(`${col} >= @${paramName}_gte`);
-                            params[`${paramName}_gte`] = opVal;
-                        }
-                        else if (op === "lte") {
-                            conditions.push(`${col} <= @${paramName}_lte`);
-                            params[`${paramName}_lte`] = opVal;
-                        }
-                        else if (op === "gt") {
-                            conditions.push(`${col} > @${paramName}_gt`);
-                            params[`${paramName}_gt`] = opVal;
-                        }
-                        else if (op === "lt") {
-                            conditions.push(`${col} < @${paramName}_lt`);
-                            params[`${paramName}_lt`] = opVal;
+                        else if (op === "gte" || op === "lte" || op === "gt" || op === "lt") {
+                            if (opVal === null || Array.isArray(opVal) || isPlainObject(opVal)) {
+                                throw new Error(`Filter operator '${op}' on field '${key}' must be a scalar comparison value`);
+                            }
+                            const sqlOp = op === "gte" ? ">=" : op === "lte" ? "<=" : op === "gt" ? ">" : "<";
+                            conditions.push(`${col} ${sqlOp} @${paramName}_${op}`);
+                            params[`${paramName}_${op}`] = opVal;
                         }
                     }
+                }
+                else if (typeof value === "function" || typeof value === "symbol" || value instanceof RegExp) {
+                    throw new Error(`Invalid filter value for field '${key}'`);
                 }
                 else {
                     if (value === null) {

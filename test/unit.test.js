@@ -424,6 +424,36 @@ test('many relation every empty object is vacuously true', () => {
   assertEq(sql, '1 = 1');
 });
 
+test('one-to-one relation is/isNot/is_not operators and validation', () => {
+  const params1 = {};
+  const sqlIs = parseWhere('order', { customer: { is: { name: 'Son' } } }, params1, '', relationCtx);
+  assertIncludes(sqlIs, '[userId] IN (SELECT [id] FROM [dbo].[users] WITH (NOLOCK) WHERE [name] = @customer_name)');
+
+  const params2 = {};
+  const sqlIsNot = parseWhere('order', { customer: { is_not: null } }, params2, '', relationCtx);
+  assertEq(sqlIsNot, '[userId] IN (SELECT [id] FROM [dbo].[users] WITH (NOLOCK))');
+
+  const params3 = {};
+  const sqlIsNull = parseWhere('order', { customer: { is: null } }, params3, '', relationCtx);
+  assertEq(sqlIsNull, '[userId] NOT IN (SELECT [id] FROM [dbo].[users] WITH (NOLOCK))');
+
+  assert.throws(() => parseWhere('user', { name: { bogus: 'x' } }, {}), /Unknown filter operator 'bogus'/);
+  assert.throws(() => parseWhere('user', { name: { some: {} } }, {}), /Relation filter operator 'some'/);
+  assert.throws(() => parseWhere('user', { name: { in: 'abc' } }, {}), /must be an array/);
+  assert.throws(() => parseWhere('user', { name: { contains: 123 } }, {}), /must be a string/);
+  assert.throws(() => parseWhere('user', { name: { contains: 'a', mode: 'fuzzy' } }, {}), /Invalid filter mode/);
+  assert.throws(() => parseWhere('user', { OR: { name: 'x' } }, {}), /OR filter must be an array/);
+  assert.throws(() => parseWhere('order', { items: { is: { qty: 1 } } }, {}, '', relationCtx), /Unsupported relation filter operator 'is'/);
+  assert.throws(() => parseWhere('order', { customer: { some: { name: 'Son' } } }, {}, '', relationCtx), /Unsupported relation filter operator 'some'/);
+});
+
+test('parseWhere supports mode insensitive in sql-utils', () => {
+  const params = {};
+  const sql = parseWhere('user', { name: { contains: 'Son', mode: 'insensitive' } }, params);
+  assertEq(sql, 'LOWER([name]) LIKE LOWER(@name_contains)');
+  assertEq(params.name_contains, '%Son%');
+});
+
 // ─── buildOrderBy tests ──────────────────────────────────────────────────────
 
 console.log('\nbuildOrderBy:');

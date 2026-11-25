@@ -34,8 +34,11 @@ export namespace An5 {
   export const An5ClientKnownRequestError: typeof An5KnownError = An5KnownError;
   export type An5ClientKnownRequestError = An5KnownError;
   export type SortOrder = 'asc' | 'desc';
-  export type StringFilter = { equals?: string; in?: string[]; notIn?: string[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; not?: string | StringFilter; };
-  export type StringNullableFilter = { equals?: string | null; in?: (string | null)[]; notIn?: (string | null)[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; not?: string | StringNullableFilter | null; };
+  export type QueryMode = 'default' | 'insensitive';
+  export type StringFilter = { equals?: string; in?: string[]; notIn?: string[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; not?: string | StringFilter; mode?: QueryMode; };
+  export type StringNullableFilter = { equals?: string | null; in?: (string | null)[]; notIn?: (string | null)[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; not?: string | StringNullableFilter | null; mode?: QueryMode; };
+  export type ListRelationFilter<T> = { some?: T; none?: T; every?: T; };
+  export type RelationFilter<T> = { is?: T | null; isNot?: T | null; };
   export type NumberFilter = { equals?: number; in?: number[]; notIn?: number[]; lt?: number; lte?: number; gt?: number; gte?: number; not?: number | NumberFilter; };
   export type IntFieldUpdateOperationsInput = { set?: number; increment?: number; decrement?: number; multiply?: number; divide?: number; };
   export type FloatFieldUpdateOperationsInput = { set?: number; increment?: number; decrement?: number; multiply?: number; divide?: number; };
@@ -110,10 +113,10 @@ export interface ViewClient<T, WhereInput = any, _Select = any, Include = any, F
         }
         for (const rel of model.relations) {
             if (rel.isArray) {
-                content += `  ${rel.name}?: { some?: ${rel.type}WhereInput; none?: ${rel.type}WhereInput; every?: ${rel.type}WhereInput; };\n`;
+                content += `  ${rel.name}?: An5.ListRelationFilter<${rel.type}WhereInput>;\n`;
             }
             else {
-                content += `  ${rel.name}?: ${rel.type}WhereInput${rel.isOptional ? ' | null' : ''};\n`;
+                content += `  ${rel.name}?: An5.RelationFilter<${rel.type}WhereInput>;\n`;
             }
         }
         if (model.compoundUniques) {
@@ -173,8 +176,11 @@ export interface ViewClient<T, WhereInput = any, _Select = any, Include = any, F
         }
         content += `\nexport namespace An5 {\n`;
         content += `  export type SortOrder = BaseAn5.SortOrder;\n`;
+        content += `  export type QueryMode = BaseAn5.QueryMode;\n`;
         content += `  export type StringFilter = BaseAn5.StringFilter;\n`;
         content += `  export type StringNullableFilter = BaseAn5.StringNullableFilter;\n`;
+        content += `  export type ListRelationFilter<T> = BaseAn5.ListRelationFilter<T>;\n`;
+        content += `  export type RelationFilter<T> = BaseAn5.RelationFilter<T>;\n`;
         content += `  export type NumberFilter = BaseAn5.NumberFilter;\n`;
         content += `  export type NumberNullableFilter = BaseAn5.NumberNullableFilter;\n`;
         content += `  export type BooleanFilter = BaseAn5.BooleanFilter;\n`;
