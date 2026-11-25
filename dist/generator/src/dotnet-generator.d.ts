@@ -17,5 +17,8 @@ export declare class DotnetGenerator {
     private mapType;
     private generateEntityClass;
     private generateDbContext;
+    private getAllPropertyVariations;
     private capitalize;
+    private toCamelCase;
+    private toSnakeCase;
 }

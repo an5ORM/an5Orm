@@ -801,6 +801,44 @@ model Post {
   assertIncludes(metaGo, '"author": {ModelName: "Author", RelationType: "one", ForeignKey: "author_id", LocalKey: "id"}');
 });
 
+test(".NET generator emits ListRelationFilter, RelationFilter, BoolFilter.Not, An5ClientMetadata, and An5WhereBuilder", async () => {
+  const models = await parse('dotnet-relations', `
+model Author {
+  id       NVARCHAR(64) @id @default(uuid())
+  email    NVARCHAR(255) @unique
+  isActive BOOLEAN @default(true)
+  posts    Post[]
+  @@map("authors")
+}
+
+model Post {
+  id       NVARCHAR(64) @id @default(uuid())
+  authorId NVARCHAR(64)
+  title    NVARCHAR(255)
+  author   Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'sqlite');
+
+  const dotnetDir = path.join(tmpRoot, 'dotnet-relations');
+  new DotnetGenerator(dotnetDir).generate(models);
+
+  const typesCs = fs.readFileSync(path.join(dotnetDir, 'An5OrmTypes.cs'), 'utf8');
+  assertIncludes(typesCs, 'public class ListRelationFilter<T> : IListRelationFilter');
+  assertIncludes(typesCs, 'public class RelationFilter<T> : IRelationFilter');
+  assertIncludes(typesCs, 'public class BoolFilter\n    {\n        public new bool? Equals { get; set; }\n        public bool? Not { get; set; }\n    }');
+  assertIncludes(typesCs, 'public ListRelationFilter<PostWhereInput> Posts { get; set; }');
+  assertIncludes(typesCs, 'public RelationFilter<AuthorWhereInput> Author { get; set; }');
+
+  const ctxCs = fs.readFileSync(path.join(dotnetDir, 'An5DbContext.cs'), 'utf8');
+  assertIncludes(ctxCs, 'public static class An5ClientMetadata');
+  assertIncludes(ctxCs, 'public static readonly Dictionary<string, Dictionary<string, An5RelationDef>> RelationMap');
+  assertIncludes(ctxCs, '{ "posts", new An5RelationDef { ModelName = "Post", RelationType = "many", ForeignKey = "authorId", LocalKey = "id" } }');
+  assertIncludes(ctxCs, '{ "author", new An5RelationDef { ModelName = "Author", RelationType = "one", ForeignKey = "authorId", LocalKey = "id" } }');
+  assertIncludes(ctxCs, 'internal static class An5WhereBuilder');
+  assertIncludes(ctxCs, 'public List<T> FindMany(object args)');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()

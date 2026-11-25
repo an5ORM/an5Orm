@@ -68,6 +68,7 @@ namespace An5Orm
         public string Gte { get; set; }
         public string Lt { get; set; }
         public string Lte { get; set; }
+        public string Mode { get; set; } // "default" | "insensitive"
     }
 
     /// <summary>Type-safe filter for integer fields.</summary>
@@ -100,6 +101,7 @@ namespace An5Orm
     public class BoolFilter
     {
         public new bool? Equals { get; set; }
+        public bool? Not { get; set; }
     }
 
     /// <summary>Type-safe filter for DateTime fields.</summary>
@@ -115,6 +117,51 @@ namespace An5Orm
         public DateTime? Lte { get; set; }
     }
 
+    internal interface IAn5WhereInput { }
+
+    internal interface IAn5QueryArgs { }
+
+    internal interface IListRelationFilter
+    {
+        object SomeTarget { get; }
+        object NoneTarget { get; }
+        object EveryTarget { get; }
+    }
+
+    internal interface IRelationFilter
+    {
+        object IsTarget { get; }
+        bool IsNull { get; }
+        object IsNotTarget { get; }
+        bool IsNotNull { get; }
+    }
+
+    /// <summary>Type-safe correlated filter for to-many relations.</summary>
+    public class ListRelationFilter<T> : IListRelationFilter
+    {
+        public T Some { get; set; }
+        public T None { get; set; }
+        public T Every { get; set; }
+
+        object IListRelationFilter.SomeTarget => Some;
+        object IListRelationFilter.NoneTarget => None;
+        object IListRelationFilter.EveryTarget => Every;
+    }
+
+    /// <summary>Type-safe correlated filter for to-one relations.</summary>
+    public class RelationFilter<T> : IRelationFilter
+    {
+        public T Is { get; set; }
+        public bool IsNull { get; set; }
+        public T IsNot { get; set; }
+        public bool IsNotNull { get; set; }
+
+        object IRelationFilter.IsTarget => Is;
+        bool IRelationFilter.IsNull => IsNull;
+        object IRelationFilter.IsNotTarget => IsNot;
+        bool IRelationFilter.IsNotNull => IsNotNull;
+    }
+
 `;
 
     for (const model of models) {
@@ -125,13 +172,20 @@ namespace An5Orm
 
       // WhereInput
       content += `    /// <summary>Type-safe WHERE filter for ${name} queries.</summary>\n`;
-      content += `    public class ${name}WhereInput\n    {\n`;
+      content += `    public class ${name}WhereInput : IAn5WhereInput\n    {\n`;
       content += `        public List<${name}WhereInput> AND { get; set; }\n`;
       content += `        public List<${name}WhereInput> OR { get; set; }\n`;
       content += `        public ${name}WhereInput NOT { get; set; }\n`;
       for (const f of model.fields) {
         const ft = this.getCsFilterType(f, f.isOptional);
         content += `        public ${ft} ${this.capitalize(f.name)} { get; set; }\n`;
+      }
+      for (const rel of model.relations) {
+        const targetWhere = `${this.capitalize(rel.type)}WhereInput`;
+        const relFilterType = rel.isArray
+          ? `ListRelationFilter<${targetWhere}>`
+          : `RelationFilter<${targetWhere}>`;
+        content += `        public ${relFilterType} ${this.capitalize(rel.name)} { get; set; }\n`;
       }
       content += `    }\n\n`;
 
@@ -168,7 +222,7 @@ namespace An5Orm
 
       // FindManyArgs
       content += `    /// <summary>ORM-style args for ${name}.FindMany().</summary>\n`;
-      content += `    public class ${name}FindManyArgs\n    {\n`;
+      content += `    public class ${name}FindManyArgs : IAn5QueryArgs\n    {\n`;
       content += `        public ${name}WhereInput Where { get; set; }\n`;
       content += `        public ${name}OrderByInput OrderBy { get; set; }\n`;
       content += `        public int? Take { get; set; }\n`;
@@ -178,7 +232,7 @@ namespace An5Orm
 
       // FindFirstArgs
       content += `    /// <summary>ORM-style args for ${name}.FindFirst().</summary>\n`;
-      content += `    public class ${name}FindFirstArgs\n    {\n`;
+      content += `    public class ${name}FindFirstArgs : IAn5QueryArgs\n    {\n`;
       content += `        public ${name}WhereInput Where { get; set; }\n`;
       content += `        public ${name}OrderByInput OrderBy { get; set; }\n`;
       content += `        public List<string> Select { get; set; }\n`;
@@ -186,21 +240,21 @@ namespace An5Orm
 
       // FindUniqueArgs
       content += `    /// <summary>ORM-style args for ${name}.FindUnique().</summary>\n`;
-      content += `    public class ${name}FindUniqueArgs\n    {\n`;
+      content += `    public class ${name}FindUniqueArgs : IAn5QueryArgs\n    {\n`;
       content += `        public ${name}WhereInput Where { get; set; }\n`;
       content += `    }\n\n`;
 
       // DeleteManyArgs
       if (!model.isView) {
         content += `    /// <summary>ORM-style args for ${name}.DeleteMany().</summary>\n`;
-        content += `    public class ${name}DeleteManyArgs\n    {\n`;
+        content += `    public class ${name}DeleteManyArgs : IAn5QueryArgs\n    {\n`;
         content += `        public ${name}WhereInput Where { get; set; }\n`;
         content += `    }\n\n`;
       }
 
       // CountArgs
       content += `    /// <summary>ORM-style args for ${name}.Count().</summary>\n`;
-      content += `    public class ${name}CountArgs\n    {\n`;
+      content += `    public class ${name}CountArgs : IAn5QueryArgs\n    {\n`;
       content += `        public ${name}WhereInput Where { get; set; }\n`;
       content += `    }\n\n`;
     }
@@ -448,10 +502,33 @@ namespace An5Orm
         /// <summary>Quotes an identifier for the dialect.</summary>
         public static string Quote(string name, An5Dialect dialect)
         {
-            if (name.StartsWith("[") || name.StartsWith("\\"")) return name;
+            var raw = StripSegmentWrapping(name);
             if (dialect == An5Dialect.Mssql)
-                return "[" + name.Replace("]", "]]") + "]";
-            return "\\"" + name.Replace("\\"", "\\"\\"") + "\\"";
+                return "[" + raw.Replace("]", "]]") + "]";
+            return "\\"" + raw.Replace("\\"", "\\"\\"") + "\\"";
+        }
+
+        private static string StripSegmentWrapping(string name)
+        {
+            var s = (name ?? "").Trim();
+            if (s.Length >= 2 && ((s[0] == '[' && s[s.Length - 1] == ']') || (s[0] == '"' && s[s.Length - 1] == '"') || (s[0] == (char)96 && s[s.Length - 1] == (char)96)))
+                return s.Substring(1, s.Length - 2);
+            return s;
+        }
+
+        public static string QuoteTable(string tableName, An5Dialect dialect)
+        {
+            var rawParts = (tableName ?? "").Split('.');
+            var cleaned = new List<string>(rawParts.Length);
+            foreach (var part in rawParts)
+            {
+                var seg = StripSegmentWrapping(part);
+                if (seg.Length > 0) cleaned.Add(seg);
+            }
+            if (cleaned.Count == 0) return Quote(tableName ?? "", dialect);
+            if (dialect == An5Dialect.Sqlite && cleaned.Count == 2 && cleaned[0].Equals("dbo", StringComparison.OrdinalIgnoreCase))
+                cleaned.RemoveAt(0);
+            return string.Join(".", cleaned.ConvertAll(p => Quote(p, dialect)));
         }
 
         /// <summary>Schema-less engines have no dbo prefix on the generated table names.</summary>
@@ -461,6 +538,812 @@ namespace An5Orm
             if (tableName.StartsWith("dbo.", StringComparison.OrdinalIgnoreCase))
                 return tableName.Substring(4);
             return tableName;
+        }
+    }
+
+    /// <summary>Relation definition emitted from schema metadata.</summary>
+    public class An5RelationDef
+    {
+        public string ModelName { get; set; }
+        public string RelationType { get; set; }
+        public string ForeignKey { get; set; }
+        public string LocalKey { get; set; }
+    }
+
+    /// <summary>Generated model-to-table, field, and relation metadata.</summary>
+    public static class An5ClientMetadata
+    {
+        public static readonly Dictionary<string, string> ModelToTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+${(() => {
+  const seen = new Set<string>();
+  return models.flatMap(m => {
+    const fullTable = dottedTableName(m);
+    return this.getAllPropertyVariations(m.name)
+      .filter(prop => { const l = prop.toLowerCase(); if (seen.has(l)) return false; seen.add(l); return true; })
+      .map(prop => `            { "${prop}", "${fullTable}" },`);
+  }).join('\n');
+})()}
+        };
+
+        public static readonly Dictionary<string, Dictionary<string, string>> ModelFields = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase)
+        {
+${(() => {
+  const seenModel = new Set<string>();
+  return models.flatMap(m => {
+    const fieldPairs: string[] = [];
+    const seen = new Set<string>();
+    for (const f of m.fields) {
+      for (const alias of [f.name, this.toSnakeCase(f.name), this.capitalize(f.name)]) {
+        const lower = alias.toLowerCase();
+        if (!seen.has(lower)) {
+          seen.add(lower);
+          fieldPairs.push(`{ "${alias}", "${f.name}" }`);
+        }
+      }
+    }
+    const dictBody = fieldPairs.join(', ');
+    return this.getAllPropertyVariations(m.name)
+      .filter(prop => { const l = prop.toLowerCase(); if (seenModel.has(l)) return false; seenModel.add(l); return true; })
+      .map(prop => `            { "${prop}", new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ${dictBody} } },`);
+  }).join('\n');
+})()}
+        };
+
+        public static readonly Dictionary<string, Dictionary<string, An5RelationDef>> RelationMap = new Dictionary<string, Dictionary<string, An5RelationDef>>(StringComparer.OrdinalIgnoreCase)
+        {
+${(() => {
+  const seenModel = new Set<string>();
+  return models.flatMap(m => {
+    const relEntries = m.relations.map(rel => {
+      const target = this.capitalize(rel.type);
+      const relType = rel.isArray ? 'many' : 'one';
+      const fk = rel.foreignKey || 'id';
+      const lk = rel.localKey || 'id';
+      return `{ "${rel.name}", new An5RelationDef { ModelName = "${target}", RelationType = "${relType}", ForeignKey = "${fk}", LocalKey = "${lk}" } }`;
+    }).join(', ');
+    return this.getAllPropertyVariations(m.name)
+      .filter(prop => { const l = prop.toLowerCase(); if (seenModel.has(l)) return false; seenModel.add(l); return true; })
+      .map(prop => `            { "${prop}", new Dictionary<string, An5RelationDef>(StringComparer.OrdinalIgnoreCase) { ${relEntries} } },`);
+  }).join('\n');
+})()}
+        };
+
+        public static string ToSnakeCase(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new System.Text.StringBuilder(s.Length + 4);
+            for (int i = 0; i < s.Length; i++)
+            {
+                var ch = s[i];
+                if (ch >= 'A' && ch <= 'Z')
+                {
+                    if (i > 0)
+                    {
+                        var prev = s[i - 1];
+                        var hasNextLower = i + 1 < s.Length && s[i + 1] >= 'a' && s[i + 1] <= 'z';
+                        var prevIsUpper = prev >= 'A' && prev <= 'Z';
+                        if (prev != '_' && (!prevIsUpper || hasNextLower))
+                            sb.Append('_');
+                    }
+                    sb.Append(char.ToLowerInvariant(ch));
+                }
+                else
+                {
+                    sb.Append(ch);
+                }
+            }
+            return sb.ToString();
+        }
+
+        public static string ResolveTable(string modelName)
+        {
+            if (string.IsNullOrEmpty(modelName)) return modelName ?? "";
+            return ModelToTable.TryGetValue(modelName, out var tbl) ? tbl : modelName;
+        }
+
+        public static bool ModelHasFields(string modelName)
+        {
+            return !string.IsNullOrEmpty(modelName)
+                && ModelFields.TryGetValue(modelName, out var map)
+                && map.Count > 0;
+        }
+
+        public static bool ModelHasField(string modelName, string col)
+        {
+            return TryResolveColumn(modelName, col, out _);
+        }
+
+        public static bool TryResolveColumn(string modelName, string col, out string resolved)
+        {
+            resolved = col;
+            if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(col)) return false;
+            if (!ModelFields.TryGetValue(modelName, out var map) || map.Count == 0) return false;
+            if (map.TryGetValue(col, out var direct))
+            {
+                resolved = direct;
+                return true;
+            }
+            var snake = ToSnakeCase(col);
+            if (map.TryGetValue(snake, out var bySnake))
+            {
+                resolved = bySnake;
+                return true;
+            }
+            return false;
+        }
+
+        public static string ResolveColumn(string modelName, string col)
+        {
+            return TryResolveColumn(modelName, col, out var resolved) ? resolved : col;
+        }
+
+        public static bool ResolveRelation(string modelName, string relKey, out An5RelationDef relation)
+        {
+            relation = null;
+            if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(relKey)) return false;
+            if (!RelationMap.TryGetValue(modelName, out var rels) || rels.Count == 0) return false;
+            if (rels.TryGetValue(relKey, out relation)) return true;
+            var snake = ToSnakeCase(relKey);
+            foreach (var kv in rels)
+            {
+                if (string.Equals(ToSnakeCase(kv.Key), snake, StringComparison.OrdinalIgnoreCase))
+                {
+                    relation = kv.Value;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public static (string ChildCol, string ParentCol) ResolveRelationKeys(string parentModel, An5RelationDef rel)
+        {
+            if (rel == null) return ("id", "id");
+            var rawFK = string.IsNullOrEmpty(rel.ForeignKey) ? "id" : rel.ForeignKey;
+            var rawLK = string.IsNullOrEmpty(rel.LocalKey) ? "id" : rel.LocalKey;
+            if (rel.RelationType == "many")
+                return (ResolveColumn(rel.ModelName, rawFK), ResolveColumn(parentModel, rawLK));
+            if ((ModelHasField(rel.ModelName, rawFK) && !ModelHasField(rel.ModelName, rawLK))
+                || (ModelHasField(parentModel, rawLK) && !ModelHasField(parentModel, rawFK)))
+            {
+                return (ResolveColumn(rel.ModelName, rawFK), ResolveColumn(parentModel, rawLK));
+            }
+            return (ResolveColumn(rel.ModelName, rawLK), ResolveColumn(parentModel, rawFK));
+        }
+    }
+
+    internal static class An5WhereBuilder
+    {
+        private static readonly HashSet<string> ScalarOperators = new HashSet<string>(StringComparer.Ordinal)
+        { "equals", "in", "notIn", "contains", "startsWith", "endsWith", "not", "gte", "lte", "gt", "lt", "mode" };
+
+        private static readonly HashSet<string> RelationOperators = new HashSet<string>(StringComparer.Ordinal)
+        { "some", "none", "every", "is", "isNot", "is_not" };
+
+        private static string SanitizeAlias(string s)
+        {
+            var sb = new System.Text.StringBuilder((s ?? "").Length);
+            foreach (var ch in (s ?? ""))
+                sb.Append(char.IsLetterOrDigit(ch) || ch == '_' ? ch : '_');
+            var res = sb.ToString();
+            return res.Length > 0 && char.IsLetter(res[0]) ? res : "rel_" + res;
+        }
+
+        public static void ParseArgs(
+            object args,
+            string modelName,
+            An5Dialect dialect,
+            out string whereSql,
+            out string orderBySql,
+            out int? take,
+            out int? skip,
+            out List<string> selectCols,
+            out Dictionary<string, object> parameters)
+        {
+            whereSql = "";
+            orderBySql = "";
+            take = null;
+            skip = null;
+            selectCols = null;
+            parameters = new Dictionary<string, object>();
+            if (args == null) return;
+
+            int paramIdx = 0;
+            if (args is IAn5WhereInput)
+            {
+                whereSql = BuildWhereFromObject(args, modelName, dialect, parameters, ref paramIdx, "", "", "");
+                return;
+            }
+            if (args is IDictionary<string, object> rawDict)
+            {
+                whereSql = BuildWhereFromDict(rawDict, modelName, dialect, parameters, ref paramIdx, "", "", "");
+                return;
+            }
+
+            var argType = args.GetType();
+            var hasWhereProp = argType.GetProperty("Where", BindingFlags.Public | BindingFlags.Instance) != null;
+            var hasOrderProp = argType.GetProperty("OrderBy", BindingFlags.Public | BindingFlags.Instance) != null;
+            var hasTakeProp = argType.GetProperty("Take", BindingFlags.Public | BindingFlags.Instance) != null;
+            var hasSkipProp = argType.GetProperty("Skip", BindingFlags.Public | BindingFlags.Instance) != null;
+            var hasSelectProp = argType.GetProperty("Select", BindingFlags.Public | BindingFlags.Instance) != null;
+            if (!(args is IAn5QueryArgs) && !hasWhereProp && !hasOrderProp && !hasTakeProp && !hasSkipProp && !hasSelectProp)
+                throw new ArgumentException($"Unsupported query args type '{argType.Name}'.");
+
+            var whereVal = argType.GetProperty("Where", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+            if (whereVal != null)
+            {
+                if (whereVal is IAn5WhereInput)
+                    whereSql = BuildWhereFromObject(whereVal, modelName, dialect, parameters, ref paramIdx, "", "", "");
+                else if (whereVal is IDictionary<string, object> wd)
+                    whereSql = BuildWhereFromDict(wd, modelName, dialect, parameters, ref paramIdx, "", "", "");
+                else
+                    throw new ArgumentException($"Unsupported Where payload type '{whereVal.GetType().Name}'.");
+            }
+
+            var orderByVal = argType.GetProperty("OrderBy", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+            if (orderByVal != null)
+            {
+                var orderParts = new List<string>();
+                foreach (var prop in orderByVal.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    var dirObj = prop.GetValue(orderByVal);
+                    if (dirObj == null) continue;
+                    var dirStr = dirObj.ToString()?.ToUpperInvariant() == "DESC" ? "DESC" : "ASC";
+                    var col = An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, prop.Name), dialect);
+                    orderParts.Add($"{col} {dirStr}");
+                }
+                if (orderParts.Count > 0)
+                    orderBySql = "ORDER BY " + string.Join(", ", orderParts);
+            }
+
+            var takeVal = argType.GetProperty("Take", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+            if (takeVal != null) take = Convert.ToInt32(takeVal);
+
+            var skipVal = argType.GetProperty("Skip", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+            if (skipVal != null) skip = Convert.ToInt32(skipVal);
+
+            var selectVal = argType.GetProperty("Select", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+            if (selectVal is IEnumerable<string> selList)
+            {
+                selectCols = new List<string>();
+                foreach (var col in selList)
+                    if (!string.IsNullOrEmpty(col))
+                        selectCols.Add(An5ClientMetadata.ResolveColumn(modelName, col));
+            }
+        }
+
+        private static string AddParam(Dictionary<string, object> parameters, ref int paramIdx, object value)
+        {
+            var name = "p_" + (paramIdx++);
+            parameters[name] = value;
+            return "@" + name;
+        }
+
+        private static string BuildWhereFromObject(
+            object whereObj,
+            string modelName,
+            An5Dialect dialect,
+            Dictionary<string, object> parameters,
+            ref int paramIdx,
+            string prefix,
+            string selfRef,
+            string colPrefix)
+        {
+            if (whereObj == null) return "";
+            if (whereObj is IDictionary<string, object> dict)
+                return BuildWhereFromDict(dict, modelName, dialect, parameters, ref paramIdx, prefix, selfRef, colPrefix);
+
+            var parts = new List<string>();
+            var props = whereObj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var prop in props)
+            {
+                var val = prop.GetValue(whereObj);
+                if (val == null) continue;
+                var name = prop.Name;
+
+                if (name == "AND" && val is System.Collections.IList andList)
+                {
+                    var subs = new List<string>();
+                    int idx = 0;
+                    foreach (var item in andList)
+                    {
+                        if (item == null) continue;
+                        var sub = BuildWhereFromObject(item, modelName, dialect, parameters, ref paramIdx, $"{prefix}AND{idx++}_", selfRef, colPrefix);
+                        if (!string.IsNullOrEmpty(sub)) subs.Add(sub);
+                    }
+                    if (subs.Count > 0) parts.Add("(" + string.Join(" AND ", subs) + ")");
+                    continue;
+                }
+                if (name == "OR" && val is System.Collections.IList orList)
+                {
+                    var subs = new List<string>();
+                    int idx = 0;
+                    foreach (var item in orList)
+                    {
+                        if (item == null) continue;
+                        var sub = BuildWhereFromObject(item, modelName, dialect, parameters, ref paramIdx, $"{prefix}OR{idx++}_", selfRef, colPrefix);
+                        subs.Add(string.IsNullOrEmpty(sub) ? "1=1" : sub);
+                    }
+                    parts.Add(subs.Count > 0 ? "(" + string.Join(" OR ", subs) + ")" : "1=0");
+                    continue;
+                }
+                if (name == "NOT")
+                {
+                    var sub = BuildWhereFromObject(val, modelName, dialect, parameters, ref paramIdx, $"{prefix}NOT_", selfRef, colPrefix);
+                    parts.Add("NOT (" + (string.IsNullOrEmpty(sub) ? "1=1" : sub) + ")");
+                    continue;
+                }
+
+                if (val is IListRelationFilter lrf)
+                {
+                    if (!An5ClientMetadata.ResolveRelation(modelName, name, out var rel))
+                        throw new ArgumentException($"Relation metadata not found for '{name}' on '{modelName}'.");
+                    if (rel.RelationType != "many")
+                        throw new ArgumentException($"Relation '{name}' on '{modelName}' is to-one and cannot use ListRelationFilter.");
+
+                    var childTable = An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(rel.ModelName), dialect);
+                    var (childKey, parentKey) = An5ClientMetadata.ResolveRelationKeys(modelName, rel);
+                    var childCol = An5Provider.Quote(childKey, dialect);
+                    var parentCol = An5Provider.Quote(parentKey, dialect);
+                    var parentRef = !string.IsNullOrEmpty(selfRef)
+                        ? $"{selfRef}."
+                        : $"{An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(modelName), dialect)}.";
+                    var relSnake = An5ClientMetadata.ToSnakeCase(name);
+
+                    foreach (var entry in new (string Op, object Target)[] { ("some", lrf.SomeTarget), ("none", lrf.NoneTarget), ("every", lrf.EveryTarget) })
+                    {
+                        if (entry.Target == null) continue;
+                        var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_{entry.Op}");
+                        var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                        var inner = BuildWhereFromObject(entry.Target, rel.ModelName, dialect, parameters, ref paramIdx, $"{prefix}{relSnake}_{entry.Op}_", childAlias, $"{childAlias}.");
+                        if (entry.Op == "some")
+                        {
+                            var innerClause = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                            parts.Add($"EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{innerClause})");
+                        }
+                        else if (entry.Op == "none")
+                        {
+                            var innerClause = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                            parts.Add($"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{innerClause})");
+                        }
+                        else
+                        {
+                            var violated = string.IsNullOrEmpty(inner) ? " AND 1=0" : $" AND NOT ({inner})";
+                            parts.Add($"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{violated})");
+                        }
+                    }
+                    continue;
+                }
+
+                if (val is IRelationFilter rf)
+                {
+                    if (!An5ClientMetadata.ResolveRelation(modelName, name, out var rel))
+                        throw new ArgumentException($"Relation metadata not found for '{name}' on '{modelName}'.");
+                    if (rel.RelationType != "one")
+                        throw new ArgumentException($"Relation '{name}' on '{modelName}' is to-many and cannot use RelationFilter.");
+                    if (rf.IsTarget != null && rf.IsNull)
+                        throw new ArgumentException($"Relation filter '{name}' cannot set both Is and IsNull.");
+                    if (rf.IsNotTarget != null && rf.IsNotNull)
+                        throw new ArgumentException($"Relation filter '{name}' cannot set both IsNot and IsNotNull.");
+
+                    var childTable = An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(rel.ModelName), dialect);
+                    var (childKey, parentKey) = An5ClientMetadata.ResolveRelationKeys(modelName, rel);
+                    var childCol = An5Provider.Quote(childKey, dialect);
+                    var parentCol = An5Provider.Quote(parentKey, dialect);
+                    var parentRef = !string.IsNullOrEmpty(selfRef)
+                        ? $"{selfRef}."
+                        : $"{An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(modelName), dialect)}.";
+                    var relSnake = An5ClientMetadata.ToSnakeCase(name);
+
+                    if (rf.IsTarget != null)
+                    {
+                        var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_is");
+                        var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                        var inner = BuildWhereFromObject(rf.IsTarget, rel.ModelName, dialect, parameters, ref paramIdx, $"{prefix}{relSnake}_is_", childAlias, $"{childAlias}.");
+                        var innerClause = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                        parts.Add($"EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{innerClause})");
+                    }
+                    else if (rf.IsNull)
+                    {
+                        var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_is");
+                        var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                        parts.Add($"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation})");
+                    }
+
+                    if (rf.IsNotTarget != null)
+                    {
+                        var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_isNot");
+                        var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                        var inner = BuildWhereFromObject(rf.IsNotTarget, rel.ModelName, dialect, parameters, ref paramIdx, $"{prefix}{relSnake}_isNot_", childAlias, $"{childAlias}.");
+                        var innerClause = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                        parts.Add($"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{innerClause})");
+                    }
+                    else if (rf.IsNotNull)
+                    {
+                        var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_isNot");
+                        var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                        parts.Add($"EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation})");
+                    }
+                    continue;
+                }
+
+                var col = colPrefix + An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, name), dialect);
+                switch (val)
+                {
+                    case StringFilter sf:
+                        AppendStringFilter(parts, col, name, sf, parameters, ref paramIdx);
+                        break;
+                    case IntFilter inf:
+                        AppendComparableFilter(parts, col, inf.Equals, inf.Not, inf.Gt, inf.Gte, inf.Lt, inf.Lte, inf.In, inf.NotIn, parameters, ref paramIdx);
+                        break;
+                    case NumberFilter nf:
+                        AppendComparableFilter(parts, col, nf.Equals, nf.Not, nf.Gt, nf.Gte, nf.Lt, nf.Lte, nf.In, nf.NotIn, parameters, ref paramIdx);
+                        break;
+                    case BoolFilter bf:
+                        if (bf.Equals.HasValue) parts.Add($"{col} = {AddParam(parameters, ref paramIdx, bf.Equals.Value)}");
+                        if (bf.Not.HasValue) parts.Add($"{col} <> {AddParam(parameters, ref paramIdx, bf.Not.Value)}");
+                        break;
+                    case DateTimeFilter df:
+                        AppendComparableFilter(parts, col, df.Equals, df.Not, df.Gt, df.Gte, df.Lt, df.Lte, df.In, df.NotIn, parameters, ref paramIdx);
+                        break;
+                    case string s:
+                    case bool _:
+                    case int _:
+                    case long _:
+                    case double _:
+                    case float _:
+                    case decimal _:
+                    case DateTime _:
+                    case Guid _:
+                        parts.Add($"{col} = {AddParam(parameters, ref paramIdx, val)}");
+                        break;
+                    default:
+                        throw new ArgumentException($"Unsupported filter field type '{val.GetType().Name}' for '{name}'.");
+                }
+            }
+            return string.Join(" AND ", parts);
+        }
+
+        private static void AppendStringFilter(List<string> parts, string col, string fieldName, StringFilter f, Dictionary<string, object> parameters, ref int paramIdx)
+        {
+            if (f == null) return;
+            var insensitive = false;
+            if (!string.IsNullOrEmpty(f.Mode))
+            {
+                if (f.Mode != "default" && f.Mode != "insensitive")
+                    throw new ArgumentException($"Invalid filter mode '{f.Mode}' for field '{fieldName}'.");
+                insensitive = f.Mode == "insensitive";
+            }
+
+            if (f.Equals != null)
+            {
+                var p = AddParam(parameters, ref paramIdx, f.Equals);
+                parts.Add(insensitive ? $"LOWER({col}) = LOWER({p})" : $"{col} = {p}");
+            }
+            if (f.Not != null)
+            {
+                var p = AddParam(parameters, ref paramIdx, f.Not);
+                parts.Add(insensitive ? $"LOWER({col}) <> LOWER({p})" : $"{col} <> {p}");
+            }
+            if (f.Contains != null)
+            {
+                var p = AddParam(parameters, ref paramIdx, $"%{f.Contains}%");
+                parts.Add(insensitive ? $"LOWER({col}) LIKE LOWER({p})" : $"{col} LIKE {p}");
+            }
+            if (f.StartsWith != null)
+            {
+                var p = AddParam(parameters, ref paramIdx, $"{f.StartsWith}%");
+                parts.Add(insensitive ? $"LOWER({col}) LIKE LOWER({p})" : $"{col} LIKE {p}");
+            }
+            if (f.EndsWith != null)
+            {
+                var p = AddParam(parameters, ref paramIdx, $"%{f.EndsWith}");
+                parts.Add(insensitive ? $"LOWER({col}) LIKE LOWER({p})" : $"{col} LIKE {p}");
+            }
+            if (f.Gt != null) parts.Add($"{col} > {AddParam(parameters, ref paramIdx, f.Gt)}");
+            if (f.Gte != null) parts.Add($"{col} >= {AddParam(parameters, ref paramIdx, f.Gte)}");
+            if (f.Lt != null) parts.Add($"{col} < {AddParam(parameters, ref paramIdx, f.Lt)}");
+            if (f.Lte != null) parts.Add($"{col} <= {AddParam(parameters, ref paramIdx, f.Lte)}");
+            AppendInFilter(parts, col, "IN", "1=0", f.In, parameters, ref paramIdx);
+            AppendInFilter(parts, col, "NOT IN", "1=1", f.NotIn, parameters, ref paramIdx);
+        }
+
+        private static void AppendComparableFilter<TVal>(
+            List<string> parts,
+            string col,
+            TVal? eq,
+            TVal? not,
+            TVal? gt,
+            TVal? gte,
+            TVal? lt,
+            TVal? lte,
+            List<TVal> inList,
+            List<TVal> notInList,
+            Dictionary<string, object> parameters,
+            ref int paramIdx) where TVal : struct
+        {
+            if (eq.HasValue) parts.Add($"{col} = {AddParam(parameters, ref paramIdx, eq.Value)}");
+            if (not.HasValue) parts.Add($"{col} <> {AddParam(parameters, ref paramIdx, not.Value)}");
+            if (gt.HasValue) parts.Add($"{col} > {AddParam(parameters, ref paramIdx, gt.Value)}");
+            if (gte.HasValue) parts.Add($"{col} >= {AddParam(parameters, ref paramIdx, gte.Value)}");
+            if (lt.HasValue) parts.Add($"{col} < {AddParam(parameters, ref paramIdx, lt.Value)}");
+            if (lte.HasValue) parts.Add($"{col} <= {AddParam(parameters, ref paramIdx, lte.Value)}");
+            AppendInFilter(parts, col, "IN", "1=0", inList, parameters, ref paramIdx);
+            AppendInFilter(parts, col, "NOT IN", "1=1", notInList, parameters, ref paramIdx);
+        }
+
+        private static void AppendInFilter<TVal>(List<string> parts, string col, string opSql, string emptySql, List<TVal> items, Dictionary<string, object> parameters, ref int paramIdx)
+        {
+            if (items == null) return;
+            if (items.Count == 0)
+            {
+                parts.Add(emptySql);
+                return;
+            }
+            var phs = new List<string>(items.Count);
+            foreach (var item in items)
+                phs.Add(AddParam(parameters, ref paramIdx, item));
+            parts.Add($"{col} {opSql} ({string.Join(", ", phs)})");
+        }
+
+        private static string BuildWhereFromDict(
+            IDictionary<string, object> dict,
+            string modelName,
+            An5Dialect dialect,
+            Dictionary<string, object> parameters,
+            ref int paramIdx,
+            string prefix,
+            string selfRef,
+            string colPrefix)
+        {
+            if (dict == null || dict.Count == 0) return "";
+            var keys = new List<string>(dict.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            var clean = new Dictionary<string, object>();
+            foreach (var k in keys)
+            {
+                var v = dict[k];
+                if (k == "AND" || k == "OR" || k == "NOT" || !k.Contains("_"))
+                {
+                    clean[k] = v;
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(modelName)
+                    && (An5ClientMetadata.ResolveRelation(modelName, k, out _) || An5ClientMetadata.ModelHasField(modelName, k)))
+                {
+                    clean[k] = v;
+                    continue;
+                }
+                if (v is IDictionary<string, object> inner && !HasAnyKey(inner, ScalarOperators) && !HasAnyKey(inner, RelationOperators))
+                {
+                    var innerKeys = new List<string>(inner.Keys);
+                    innerKeys.Sort(StringComparer.Ordinal);
+                    foreach (var ik in innerKeys) clean[ik] = inner[ik];
+                }
+                else
+                {
+                    clean[k] = v;
+                }
+            }
+
+            var cleanKeys = new List<string>(clean.Keys);
+            cleanKeys.Sort(StringComparer.Ordinal);
+            var parts = new List<string>();
+            foreach (var key in cleanKeys)
+            {
+                var value = clean[key];
+                if (key == "AND" || key == "OR" || key == "NOT")
+                {
+                    if (value == null) throw new ArgumentException($"'{key}' filter payload must not be null.");
+                    System.Collections.IList list;
+                    if (value is IDictionary<string, object> singleMap) list = new object[] { singleMap };
+                    else if (value is System.Collections.IList seq) list = seq;
+                    else throw new ArgumentException($"'{key}' filter must be a dictionary or list of dictionaries.");
+
+                    var subs = new List<string>();
+                    int idx = 0;
+                    foreach (var item in list)
+                    {
+                        if (!(item is IDictionary<string, object> subMap))
+                            throw new ArgumentException($"'{key}' filter entry must be a dictionary.");
+                        var s = BuildWhereFromDict(subMap, modelName, dialect, parameters, ref paramIdx, $"{prefix}{key}{idx++}_", selfRef, colPrefix);
+                        subs.Add(string.IsNullOrEmpty(s) ? "1=1" : s);
+                    }
+                    if (subs.Count == 0)
+                    {
+                        if (key == "OR") parts.Add("1=0");
+                    }
+                    else
+                    {
+                        var joiner = key == "AND" ? " AND " : " OR ";
+                        var negation = key == "NOT" ? "NOT " : "";
+                        parts.Add(negation + "(" + string.Join(joiner, subs) + ")");
+                    }
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(modelName))
+                {
+                    if (An5ClientMetadata.ResolveRelation(modelName, key, out var rel))
+                    {
+                        if (!(value is IDictionary<string, object> relDict))
+                            throw new ArgumentException($"Relation filter for '{key}' on '{modelName}' must be a dictionary.");
+                        var isMany = rel.RelationType == "many";
+                        var norm = new Dictionary<string, object>(StringComparer.Ordinal);
+                        var relKeys = new List<string>(relDict.Keys);
+                        relKeys.Sort(StringComparer.Ordinal);
+                        foreach (var rk in relKeys)
+                        {
+                            var canonical = rk == "is_not" ? "isNot" : rk;
+                            var allowed = isMany
+                                ? (canonical == "some" || canonical == "none" || canonical == "every")
+                                : (canonical == "is" || canonical == "isNot");
+                            if (!allowed)
+                                throw new ArgumentException($"Unsupported relation filter operator '{rk}' for relation '{key}'.");
+                            norm[canonical] = relDict[rk];
+                        }
+                        if (norm.Count == 0) continue;
+
+                        var childTable = An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(rel.ModelName), dialect);
+                        var (childKey, parentKey) = An5ClientMetadata.ResolveRelationKeys(modelName, rel);
+                        var childCol = An5Provider.Quote(childKey, dialect);
+                        var parentCol = An5Provider.Quote(parentKey, dialect);
+                        var parentRef = !string.IsNullOrEmpty(selfRef)
+                            ? $"{selfRef}."
+                            : $"{An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(modelName), dialect)}.";
+                        var relSnake = An5ClientMetadata.ToSnakeCase(key);
+
+                        if (isMany)
+                        {
+                            foreach (var op in new[] { "some", "none", "every" })
+                            {
+                                if (!norm.TryGetValue(op, out var opVal)) continue;
+                                if (!(opVal is IDictionary<string, object> innerDict))
+                                    throw new ArgumentException($"'{op}' filter on relation '{key}' must be a dictionary.");
+                                var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_{op}");
+                                var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                                var inner = BuildWhereFromDict(innerDict, rel.ModelName, dialect, parameters, ref paramIdx, $"{prefix}{relSnake}_{op}_", childAlias, $"{childAlias}.");
+                                if (op == "some")
+                                {
+                                    var ic = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                                    parts.Add($"EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{ic})");
+                                }
+                                else if (op == "none")
+                                {
+                                    var ic = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                                    parts.Add($"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{ic})");
+                                }
+                                else
+                                {
+                                    var vw = string.IsNullOrEmpty(inner) ? " AND 1=0" : $" AND NOT ({inner})";
+                                    parts.Add($"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{vw})");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            foreach (var op in new[] { "is", "isNot" })
+                            {
+                                if (!norm.TryGetValue(op, out var opVal)) continue;
+                                var childAlias = "r_" + SanitizeAlias($"{prefix}{relSnake}_{op}");
+                                var correlation = $"{childAlias}.{childCol} = {parentRef}{parentCol}";
+                                if (opVal == null)
+                                {
+                                    parts.Add(op == "is"
+                                        ? $"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation})"
+                                        : $"EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation})");
+                                    continue;
+                                }
+                                if (!(opVal is IDictionary<string, object> innerDict))
+                                    throw new ArgumentException($"'{op}' filter on relation '{key}' must be a dictionary or null.");
+                                var inner = BuildWhereFromDict(innerDict, rel.ModelName, dialect, parameters, ref paramIdx, $"{prefix}{relSnake}_{op}_", childAlias, $"{childAlias}.");
+                                var ic = string.IsNullOrEmpty(inner) ? "" : $" AND ({inner})";
+                                parts.Add(op == "is"
+                                    ? $"EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{ic})"
+                                    : $"NOT EXISTS (SELECT 1 FROM {childTable} AS {childAlias} WHERE {correlation}{ic})");
+                            }
+                        }
+                        continue;
+                    }
+                    if (An5ClientMetadata.ModelHasFields(modelName) && !An5ClientMetadata.ModelHasField(modelName, key))
+                        throw new ArgumentException($"Unknown field '{key}' on model '{modelName}'.");
+                }
+
+                var col = colPrefix + An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, key), dialect);
+                parts.AddRange(BuildDictFieldConditions(col, key, value, parameters, ref paramIdx));
+            }
+            return string.Join(" AND ", parts);
+        }
+
+        private static bool HasAnyKey(IDictionary<string, object> dict, HashSet<string> targetSet)
+        {
+            foreach (var k in dict.Keys)
+                if (targetSet.Contains(k)) return true;
+            return false;
+        }
+
+        private static List<string> BuildDictFieldConditions(string col, string key, object value, Dictionary<string, object> parameters, ref int paramIdx)
+        {
+            if (value == null) return new List<string> { $"{col} IS NULL" };
+            if (!(value is IDictionary<string, object> opMap))
+                return new List<string> { $"{col} = {AddParam(parameters, ref paramIdx, value)}" };
+
+            var insensitive = false;
+            if (opMap.TryGetValue("mode", out var modeVal))
+            {
+                if (!(modeVal is string ms) || (ms != "default" && ms != "insensitive"))
+                    throw new ArgumentException($"Invalid filter mode '{modeVal}' for field '{key}'.");
+                insensitive = ms == "insensitive";
+            }
+
+            var opKeys = new List<string>(opMap.Keys);
+            opKeys.Sort(StringComparer.Ordinal);
+            var outList = new List<string>();
+            foreach (var op in opKeys)
+            {
+                if (!ScalarOperators.Contains(op))
+                    throw new ArgumentException($"Unsupported filter operator '{op}' for field '{key}'.");
+                if (op == "mode") continue;
+
+                var val = opMap[op];
+                switch (op)
+                {
+                    case "not":
+                        if (val == null) outList.Add($"{col} IS NOT NULL");
+                        else if (val is IDictionary<string, object> nested)
+                        {
+                            var nc = BuildDictFieldConditions(col, key, nested, parameters, ref paramIdx);
+                            if (nc.Count > 0) outList.Add("NOT (" + string.Join(" AND ", nc) + ")");
+                        }
+                        else
+                        {
+                            var p = AddParam(parameters, ref paramIdx, val);
+                            outList.Add(insensitive && val is string ? $"LOWER({col}) <> LOWER({p})" : $"{col} <> {p}");
+                        }
+                        break;
+                    case "equals":
+                        if (val == null) outList.Add($"{col} IS NULL");
+                        else
+                        {
+                            var p = AddParam(parameters, ref paramIdx, val);
+                            outList.Add(insensitive && val is string ? $"LOWER({col}) = LOWER({p})" : $"{col} = {p}");
+                        }
+                        break;
+                    case "contains":
+                        if (!(val is string sc)) throw new ArgumentException($"'contains' on '{key}' requires a string.");
+                        var pc = AddParam(parameters, ref paramIdx, $"%{sc}%");
+                        outList.Add(insensitive ? $"LOWER({col}) LIKE LOWER({pc})" : $"{col} LIKE {pc}");
+                        break;
+                    case "startsWith":
+                        if (!(val is string ss)) throw new ArgumentException($"'startsWith' on '{key}' requires a string.");
+                        var ps = AddParam(parameters, ref paramIdx, $"{ss}%");
+                        outList.Add(insensitive ? $"LOWER({col}) LIKE LOWER({ps})" : $"{col} LIKE {ps}");
+                        break;
+                    case "endsWith":
+                        if (!(val is string se)) throw new ArgumentException($"'endsWith' on '{key}' requires a string.");
+                        var pe = AddParam(parameters, ref paramIdx, $"%{se}");
+                        outList.Add(insensitive ? $"LOWER({col}) LIKE LOWER({pe})" : $"{col} LIKE {pe}");
+                        break;
+                    case "gt": outList.Add($"{col} > {AddParam(parameters, ref paramIdx, val)}"); break;
+                    case "gte": outList.Add($"{col} >= {AddParam(parameters, ref paramIdx, val)}"); break;
+                    case "lt": outList.Add($"{col} < {AddParam(parameters, ref paramIdx, val)}"); break;
+                    case "lte": outList.Add($"{col} <= {AddParam(parameters, ref paramIdx, val)}"); break;
+                    case "in":
+                    case "notIn":
+                    {
+                        if (val == null || val is string || val is System.Collections.IDictionary || !(val is System.Collections.IEnumerable seq))
+                            throw new ArgumentException($"'{op}' on '{key}' requires a collection.");
+                        var phs = new List<string>();
+                        foreach (var item in seq) phs.Add(AddParam(parameters, ref paramIdx, item));
+                        if (phs.Count > 0)
+                            outList.Add(op == "in" ? $"{col} IN ({string.Join(", ", phs)})" : $"{col} NOT IN ({string.Join(", ", phs)})");
+                        else
+                            outList.Add(op == "in" ? "1=0" : "1=1");
+                        break;
+                    }
+                }
+            }
+            return outList;
         }
     }
 
@@ -559,6 +1442,7 @@ namespace An5Orm
     {
         public string ConnectionString { get; }
         public string TableName { get; }
+        public string ModelName => typeof(T).Name;
         public An5Dialect Dialect { get; }
 
         public TableClient(string connectionString, string tableName)
@@ -678,6 +1562,53 @@ namespace An5Orm
             return list;
         }
 
+        public List<T> FindMany(object args)
+        {
+            if (args == null) return FindMany(null, null);
+            if (args is string sqlWhere) return FindMany(sqlWhere, null);
+
+            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out var orderBySql, out var take, out var skip, out var selectCols, out var parameters);
+            var cols = selectCols != null && selectCols.Count > 0
+                ? string.Join(", ", selectCols.ConvertAll(c => An5Provider.Quote(c, Dialect)))
+                : "*";
+            var quotedTable = An5Provider.QuoteTable(TableName, Dialect);
+            string query;
+            if (Dialect == An5Dialect.Postgres || Dialect == An5Dialect.Sqlite)
+            {
+                query = $"SELECT {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+                if (take.HasValue) query += $" LIMIT {take.Value}";
+                else if (skip.HasValue) query += Dialect == An5Dialect.Sqlite ? " LIMIT -1" : " LIMIT ALL";
+                if (skip.HasValue) query += $" OFFSET {skip.Value}";
+            }
+            else
+            {
+                if (take.HasValue && !skip.HasValue)
+                {
+                    query = $"SELECT TOP ({take.Value}) {cols} FROM {quotedTable}";
+                    if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                    if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+                }
+                else
+                {
+                    query = $"SELECT {cols} FROM {quotedTable}";
+                    if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                    if (skip.HasValue)
+                    {
+                        query += !string.IsNullOrEmpty(orderBySql) ? $" {orderBySql}" : " ORDER BY (SELECT NULL)";
+                        query += $" OFFSET {skip.Value} ROWS";
+                        if (take.HasValue) query += $" FETCH NEXT {take.Value} ROWS ONLY";
+                    }
+                    else if (!string.IsNullOrEmpty(orderBySql))
+                    {
+                        query += $" {orderBySql}";
+                    }
+                }
+            }
+            return QueryRaw(query, parameters);
+        }
+
         public T FindFirst(string whereClause = null, Dictionary<string, object> parameters = null)
         {
             // TOP goes before the table, LIMIT after the WHERE — appending LIMIT
@@ -736,8 +1667,47 @@ namespace An5Orm
             return default;
         }
 
+        public T FindFirst(object args)
+        {
+            if (args == null) return FindFirst(null, null);
+            if (args is string sqlWhere) return FindFirst(sqlWhere, null);
+
+            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out var orderBySql, out var take, out var skip, out var selectCols, out var parameters);
+            var cols = selectCols != null && selectCols.Count > 0
+                ? string.Join(", ", selectCols.ConvertAll(c => An5Provider.Quote(c, Dialect)))
+                : "*";
+            var quotedTable = An5Provider.QuoteTable(TableName, Dialect);
+            var effectiveTake = take ?? 1;
+            string query;
+            if (Dialect == An5Dialect.Postgres || Dialect == An5Dialect.Sqlite)
+            {
+                query = $"SELECT {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+                query += $" LIMIT {effectiveTake}";
+                if (skip.HasValue) query += $" OFFSET {skip.Value}";
+            }
+            else if (skip.HasValue)
+            {
+                query = $"SELECT {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                query += !string.IsNullOrEmpty(orderBySql) ? $" {orderBySql}" : " ORDER BY (SELECT NULL)";
+                query += $" OFFSET {skip.Value} ROWS FETCH NEXT {effectiveTake} ROWS ONLY";
+            }
+            else
+            {
+                query = $"SELECT TOP ({effectiveTake}) {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+            }
+            var rows = QueryRaw(query, parameters);
+            return rows.Count > 0 ? rows[0] : default;
+        }
+
         public T FindUnique(object id)
         {
+            if (id is IAn5QueryArgs || id is IAn5WhereInput || id is IDictionary<string, object>)
+                return FindFirst(id);
             return FindFirst("Id = @id", new Dictionary<string, object> { { "id", id } });
         }
 
@@ -878,6 +1848,14 @@ namespace An5Orm
             finally { if (!isTx) conn.Dispose(); }
         }
 
+        public int Count(object args)
+        {
+            if (args == null) return Count(null, null);
+            if (args is string sqlWhere) return Count(sqlWhere, null);
+            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out _, out _, out _, out _, out var parameters);
+            return Count(whereSql, parameters);
+        }
+
         public int CreateMany(IEnumerable<T> entities)
         {
             int count = 0;
@@ -889,7 +1867,10 @@ namespace An5Orm
             return count;
         }
 
-        public int UpdateMany(string whereClause, Dictionary<string, object> updateData, Dictionary<string, object> parameters = null)
+        public int UpdateMany(string whereClause, Dictionary<string, object> updateData)
+            => UpdateMany(whereClause, updateData, null);
+
+        public int UpdateMany(string whereClause, Dictionary<string, object> updateData, Dictionary<string, object> parameters)
         {
             if (updateData == null || updateData.Count == 0) return 0;
             var sets = new List<string>();
@@ -922,6 +1903,13 @@ namespace An5Orm
             finally { if (!isTx) conn.Dispose(); }
         }
 
+        public int UpdateMany(object whereArgs, Dictionary<string, object> updateData)
+        {
+            if (whereArgs is string sqlWhere) return UpdateMany(sqlWhere, updateData, null);
+            An5WhereBuilder.ParseArgs(whereArgs, ModelName, Dialect, out var whereSql, out _, out _, out _, out _, out var parameters);
+            return UpdateMany(whereSql, updateData, parameters);
+        }
+
         public int DeleteMany(string whereClause = null, Dictionary<string, object> parameters = null)
         {
             string query = $"DELETE FROM {TableName}";
@@ -940,6 +1928,14 @@ namespace An5Orm
                 }
             }
             finally { if (!isTx) conn.Dispose(); }
+        }
+
+        public int DeleteMany(object args)
+        {
+            if (args == null) return DeleteMany(null, null);
+            if (args is string sqlWhere) return DeleteMany(sqlWhere, null);
+            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out _, out _, out _, out _, out var parameters);
+            return DeleteMany(whereSql, parameters);
         }
 
         public T Upsert(T entity, string idColumnName = "Id")
@@ -1362,14 +2358,23 @@ namespace An5Orm
         public List<T> FindMany(string whereClause = null, Dictionary<string, object> parameters = null)
             => _table.FindMany(whereClause, parameters);
 
+        public List<T> FindMany(object args)
+            => _table.FindMany(args);
+
         public T FindFirst(string whereClause = null, Dictionary<string, object> parameters = null)
             => _table.FindFirst(whereClause, parameters);
+
+        public T FindFirst(object args)
+            => _table.FindFirst(args);
 
         public T FindUnique(object id)
             => _table.FindUnique(id);
 
         public int Count(string whereClause = null, Dictionary<string, object> parameters = null)
             => _table.Count(whereClause, parameters);
+
+        public int Count(object args)
+            => _table.Count(args);
 
         public List<T> VectorSearch(List<double> vector, int take = 10, string whereClause = null, Dictionary<string, object> parameters = null, string vectorField = "Embedding", string distanceMetric = "cosine")
             => _table.VectorSearch(vector, take, whereClause, parameters, vectorField, distanceMetric);
@@ -1400,8 +2405,38 @@ namespace An5Orm
     fs.writeFileSync(path.join(this.outputDir, 'An5DbContext.cs'), content);
   }
 
+  private getAllPropertyVariations(modelName: string): string[] {
+    const variations = new Set<string>();
+    variations.add(modelName);
+    variations.add(this.toCamelCase(modelName));
+    variations.add(modelName + 's');
+    variations.add(this.toCamelCase(modelName) + 's');
+    const acronyms = ['LLM', 'AI', 'MCP', 'IT', 'QC', 'HR', 'MR', 'WH', 'SSIS', 'API', 'URL', 'ID', 'JSON'];
+    for (const acronym of acronyms) {
+      if (modelName.startsWith(acronym)) {
+        variations.add(acronym.toLowerCase() + modelName.slice(acronym.length));
+        variations.add(acronym[0].toLowerCase() + acronym.slice(1) + modelName.slice(acronym.length));
+        variations.add(acronym.toLowerCase() + modelName.slice(acronym.length) + 's');
+      }
+    }
+    return Array.from(variations);
+  }
+
   private capitalize(str: string): string {
     if (!str) return '';
     return str[0].toUpperCase() + str.slice(1);
+  }
+
+  private toCamelCase(str: string): string {
+    if (!str) return '';
+    return str[0].toLowerCase() + str.slice(1);
+  }
+
+  private toSnakeCase(str: string): string {
+    if (!str) return '';
+    return str
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+      .replace(/([a-z\d])([A-Z])/g, '$1_$2')
+      .toLowerCase();
   }
 }
