@@ -223,7 +223,7 @@ pub struct StringFilter {
     pub lt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lte: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]
     pub in_list: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_in: Vec<String>,
@@ -245,7 +245,7 @@ pub struct IntFilter {
     pub lt: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lte: Option<i64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]
     pub in_list: Vec<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_in: Vec<i64>,
@@ -267,7 +267,7 @@ pub struct NumberFilter {
     pub lt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lte: Option<f64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]
     pub in_list: Vec<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_in: Vec<f64>,
@@ -348,6 +348,47 @@ pub struct DateTimeFilter {
     pub lte: Option<DateTime<Utc>>,
 }
 
+/// Type-safe filter for to-many relations (\`some\` / \`none\` / \`every\`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRelationFilter<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub some: Option<Box<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub none: Option<Box<T>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub every: Option<Box<T>>,
+}
+
+impl<T> Default for ListRelationFilter<T> {
+    fn default() -> Self {
+        Self {
+            some: None,
+            none: None,
+            every: None,
+        }
+    }
+}
+
+/// Type-safe filter for to-one relations (\`is\` / \`isNot\`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationFilter<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is: Option<Option<Box<T>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_not: Option<Option<Box<T>>>,
+}
+
+impl<T> Default for RelationFilter<T> {
+    fn default() -> Self {
+        Self {
+            is: None,
+            is_not: None,
+        }
+    }
+}
+
 // ─── SQL fragment builders (shared) ─────────────────────────────────────────
 
 
@@ -422,11 +463,22 @@ pub struct DateTimeFilter {
       s.push(`    pub or: Option<Vec<${name}WhereInput>>,`);
       s.push(`    #[serde(default, rename = "NOT", skip_serializing_if = "Option::is_none")]`);
       s.push(`    pub not: Option<Box<${name}WhereInput>>,`);
+      const scalarSnakeNames = new Set(model.fields.map((f) => this.toSnakeCase(f.name)));
       for (const f of model.fields) {
         const ft = this.getRustFilterType(f);
         const snake = this.toSnakeCase(f.name);
         s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
         s.push(`    pub ${snake}: Option<${ft}>,`);
+      }
+      for (const rel of model.relations) {
+        const relSnake = this.toSnakeCase(rel.name);
+        if (scalarSnakeNames.has(relSnake)) continue;
+        const relWhere = `${this.capitalize(rel.type)}WhereInput`;
+        const wrapper = rel.isArray
+          ? `ListRelationFilter<${relWhere}>`
+          : `RelationFilter<${relWhere}>`;
+        s.push(`    #[serde(default, rename = "${rel.name}", skip_serializing_if = "Option::is_none")]`);
+        s.push(`    pub ${relSnake}: Option<${wrapper}>,`);
       }
       s.push(`}\n`);
 
@@ -604,6 +656,25 @@ pub struct DateTimeFilter {
     }
     content += "    ]\n}\n\n";
 
+    content += `/// Relation metadata per model alias, for adapter registration.\n`;
+    content += `pub fn relation_map() -> Vec<(&'static str, Vec<(&'static str, &'static str, &'static str, &'static str, &'static str)>)> {\n    vec![\n`;
+    const seenRels = new Set<string>();
+    for (const model of models) {
+      const relEntries = model.relations.map((rel) => {
+        const target = this.toCamelCase(rel.type);
+        const relType = rel.isArray ? 'many' : 'one';
+        const fk = this.toSnakeCase(rel.foreignKey || 'id');
+        const lk = this.toSnakeCase(rel.localKey || 'id');
+        return `("${rel.name}", "${target}", "${relType}", "${fk}", "${lk}")`;
+      });
+      for (const prop of this.getAllPropertyVariations(model.name)) {
+        if (seenRels.has(prop)) continue;
+        seenRels.add(prop);
+        content += `        ("${prop}", vec![${relEntries.join(', ')}]),\n`;
+      }
+    }
+    content += "    ]\n}\n\n";
+
     fs.writeFileSync(path.join(this.outputDir, 'src', 'metadata.rs'), content);
   }
 
@@ -621,13 +692,15 @@ pub struct DateTimeFilter {
 //! Code generated by an5ORM. DO NOT EDIT.
 
 use an5_adapters::{
-    AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, RowMap, TableClient,
-    UpdateArgs, VectorSearchArgs${models.some((model) => model.isView) ? ', ViewClient' : ''},
+    AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, RelationDef, RowMap,
+    TableClient, UpdateArgs, VectorSearchArgs${models.some((model) => model.isView) ? ', ViewClient' : ''},
 };
 use serde::de::DeserializeOwned;
 
 use crate::filters::*;
-use crate::metadata::{model_fields_map, model_primary_key, model_to_table, model_to_table_map};
+use crate::metadata::{
+    model_fields_map, model_primary_key, model_to_table, model_to_table_map, relation_map,
+};
 use crate::models::*;
 
 /// Error type shared with the adapter runtime.
@@ -682,10 +755,26 @@ impl An5Client {
         for (alias, field_meta) in model_fields_map() {
             fields.insert(alias.to_string(), field_meta);
         }
+        let mut relations: std::collections::HashMap<String, std::collections::HashMap<String, RelationDef>> = std::collections::HashMap::new();
+        for (alias, rel_entries) in relation_map() {
+            let mut inner = std::collections::HashMap::new();
+            for (rel_name, target_model, rel_type, fk, lk) in rel_entries {
+                inner.insert(
+                    rel_name.to_string(),
+                    RelationDef {
+                        model_name: target_model.to_string(),
+                        relation_type: rel_type.to_string(),
+                        foreign_key: fk.to_string(),
+                        local_key: lk.to_string(),
+                    },
+                );
+            }
+            relations.insert(alias.to_string(), inner);
+        }
         adapter.set_metadata(AdapterMetadata {
             model_to_table: map,
             model_fields: fields,
-            ..Default::default()
+            relation_map: relations,
         });
         Self { adapter }
     }

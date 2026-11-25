@@ -640,6 +640,45 @@ model Post {
   assertIncludes(client, 'an5_orm_types');
 });
 
+test("Rust generator emits ListRelationFilter, RelationFilter, relation_map, and rename=in on in_list", async () => {
+  const outDir = path.join(tmpRoot, 'rust-relations');
+  const models = await parse('rust-relations', `
+model Author {
+  id    NVARCHAR(64) @id @default(uuid())
+  email NVARCHAR(255) @unique
+  posts Post[]
+  @@map("authors")
+}
+
+model Post {
+  id       NVARCHAR(64) @id @default(uuid())
+  authorId NVARCHAR(64)
+  title    NVARCHAR(255)
+  author   Author @relation(fields: [authorId], references: [id])
+  @@map("posts")
+}
+`, 'sqlite');
+
+  new RustGenerator(outDir).generate(models);
+
+  const filters = fs.readFileSync(path.join(outDir, 'src', 'filters.rs'), 'utf8');
+  assertIncludes(filters, '#[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]');
+  assertIncludes(filters, 'pub struct ListRelationFilter<T>');
+  assertIncludes(filters, 'pub struct RelationFilter<T>');
+
+  const modelSrc = fs.readFileSync(path.join(outDir, 'src', 'models.rs'), 'utf8');
+  assertIncludes(modelSrc, 'pub posts: Option<ListRelationFilter<PostWhereInput>>');
+  assertIncludes(modelSrc, 'pub author: Option<RelationFilter<AuthorWhereInput>>');
+
+  const meta = fs.readFileSync(path.join(outDir, 'src', 'metadata.rs'), 'utf8');
+  assertIncludes(meta, 'pub fn relation_map()');
+  assertIncludes(meta, '("posts", "post", "many", "author_id", "id")');
+  assertIncludes(meta, '("author", "author", "one", "author_id", "id")');
+
+  const client = fs.readFileSync(path.join(outDir, 'src', 'client.rs'), 'utf8');
+  assertIncludes(client, 'relation_map: relations');
+});
+
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
 run()
