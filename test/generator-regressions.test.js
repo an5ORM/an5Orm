@@ -452,6 +452,8 @@ view WidgetLabel {
   assert.ok(!goModel.includes('type WidgetLabelCreateInput'));
   assert.ok(!goModel.includes('type WidgetLabelDeleteManyArgs'));
   assertIncludes(goModel, 'type WidgetLabelWhereInput');
+  assertIncludes(goModel, 'type WidgetLabelAggregateHavingInput');
+  assertIncludes(goModel, 'type WidgetLabelGroupByArgs');
 
   // Rust: reads go through the runtime ViewClient; write methods and inputs stay out.
   const rustDir = path.join(tmpRoot, 'rust-view');
@@ -796,12 +798,17 @@ model Post {
   assertIncludes(clientGo, 'type ListRelationFilter[T any] struct');
   assertIncludes(clientGo, 'type RelationFilter[T any] struct');
   assertIncludes(clientGo, 'type BoolFilter struct {\n\tEquals *bool\n\tNot    *bool\n}');
+  assertIncludes(clientGo, 'Mode       string // "default" or "insensitive"');
   assertIncludes(clientGo, 'buildWhereFromStructWithContext');
+  assertIncludes(clientGo, 'buildHavingFromStruct');
   assertIncludes(clientGo, 'resolveModelRelation(modelName, name)');
 
   const authorGo = fs.readFileSync(path.join(goDir, 'Author.go'), 'utf8');
   assertIncludes(authorGo, 'Posts *ListRelationFilter[PostWhereInput]');
   assertIncludes(authorGo, 'IsActive *BoolFilter');
+  assertIncludes(authorGo, 'type AuthorCountAggregateFilter struct');
+  assertIncludes(authorGo, 'type AuthorAggregateHavingInput struct');
+  assertIncludes(authorGo, 'type AuthorGroupByArgs struct');
 
   const postGo = fs.readFileSync(path.join(goDir, 'Post.go'), 'utf8');
   assertIncludes(postGo, 'Author *RelationFilter[AuthorWhereInput]');

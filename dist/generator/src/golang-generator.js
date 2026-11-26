@@ -270,6 +270,7 @@ type StringFilter struct {
 \tGte        *string
 \tLt         *string
 \tLte        *string
+\tMode       string // "default" or "insensitive"
 }
 
 // NumberFilter provides type-safe numeric field filtering options.
@@ -354,7 +355,7 @@ type DateTimeFilter struct {
 // AggregateArgs configures an aggregate query.
 type AggregateArgs struct {
 	Where interface{}
-	Count bool
+	Count interface{} // bool, []string, or map[string]bool / map[string]interface{}
 	Sum   []string
 	Avg   []string
 	Min   []string
@@ -363,12 +364,17 @@ type AggregateArgs struct {
 
 // GroupByArgs configures a GroupBy query.
 type GroupByArgs struct {
-	By    []string
-	Where interface{}
-	Sum   []string
-	Avg   []string
-	Min   []string
-	Max   []string
+	By      []string
+	Where   interface{}
+	Having  interface{}
+	OrderBy interface{}
+	Take    int
+	Skip    int
+	Count   interface{} // bool, []string, or map[string]bool / map[string]interface{}
+	Sum     []string
+	Avg     []string
+	Min     []string
+	Max     []string
 }
 
 // Dialect identifies the database engine in use.
@@ -583,7 +589,7 @@ func (c *ViewClient[T]) Aggregate(ctx context.Context, args AggregateArgs) (map[
 }
 
 // GroupBy groups view rows by specified columns and computes aggregates.
-func (c *ViewClient[T]) GroupBy(ctx context.Context, args GroupByArgs) ([]map[string]interface{}, error) {
+func (c *ViewClient[T]) GroupBy(ctx context.Context, args interface{}) ([]map[string]interface{}, error) {
 \treturn c.table.GroupBy(ctx, args)
 }
 
@@ -817,30 +823,53 @@ type whereResult struct {
 }
 
 // buildStringFilter converts a StringFilter to SQL fragments.
-func buildStringFilter(col string, f *StringFilter, args []interface{}, ph func(int) string) (string, []interface{}) {
+func buildStringFilter(col string, f *StringFilter, dialect Dialect, args []interface{}, ph func(int) string) (string, []interface{}, error) {
 \tif f == nil {
-\t\treturn "", args
+\t\treturn "", args, nil
+\t}
+\tinsensitive := false
+\tif f.Mode != "" {
+\t\tif strings.EqualFold(f.Mode, "insensitive") {
+\t\t\tinsensitive = true
+\t\t} else if !strings.EqualFold(f.Mode, "default") {
+\t\t\treturn "", nil, fmt.Errorf("invalid string filter mode '%s'; expected 'default' or 'insensitive'", f.Mode)
+\t\t}
+\t}
+\tformatPattern := func(pattern string) string {
+\t\targs = append(args, pattern)
+\t\tif !insensitive {
+\t\t\treturn col + " LIKE " + ph(len(args))
+\t\t}
+\t\tif dialect == DialectPostgres {
+\t\t\treturn col + " ILIKE " + ph(len(args))
+\t\t}
+\t\treturn "LOWER(" + col + ") LIKE LOWER(" + ph(len(args)) + ")"
 \t}
 \tvar parts []string
 \tif f.Equals != nil {
 \t\targs = append(args, *f.Equals)
-\t\tparts = append(parts, col+" = "+ph(len(args)))
+\t\tif insensitive {
+\t\t\tparts = append(parts, "LOWER("+col+") = LOWER("+ph(len(args))+")")
+\t\t} else {
+\t\t\tparts = append(parts, col+" = "+ph(len(args)))
+\t\t}
 \t}
 \tif f.Not != nil {
 \t\targs = append(args, *f.Not)
-\t\tparts = append(parts, col+" <> "+ph(len(args)))
+\t\tif insensitive {
+\t\t\tparts = append(parts, "LOWER("+col+") <> LOWER("+ph(len(args))+")")
+\t\t} else {
+\t\t\tparts = append(parts, col+" <> "+ph(len(args)))
+\t\t}
 \t}
 \tif f.Contains != nil {
-\t\targs = append(args, "%"+*f.Contains+"%")
-\t\tparts = append(parts, col+" LIKE "+ph(len(args)))
+\t\tparts = append(parts, formatPattern("%"+*f.Contains+"%"))
 \t}
 \tif f.StartsWith != nil {
-\t\targs = append(args, *f.StartsWith+"%")
-\t\tparts = append(parts, col+" LIKE "+ph(len(args)))
+\t\tparts = append(parts, formatPattern(*f.StartsWith+"%"))
 \t}
 \tif f.EndsWith != nil {
-\t\targs = append(args, "%"+*f.EndsWith)
-\t\tparts = append(parts, col+" LIKE "+ph(len(args)))
+\t\tparts = append(parts, formatPattern("%"+*f.EndsWith))
 \t}
 \tif f.Gt != nil {
 \t\targs = append(args, *f.Gt)
@@ -865,9 +894,17 @@ func buildStringFilter(col string, f *StringFilter, args []interface{}, ph func(
 \t\t\tphs := make([]string, len(f.In))
 \t\t\tfor i, v := range f.In {
 \t\t\t\targs = append(args, v)
-\t\t\t\tphs[i] = ph(len(args))
+\t\t\t\tif insensitive {
+\t\t\t\t\tphs[i] = "LOWER(" + ph(len(args)) + ")"
+\t\t\t\t} else {
+\t\t\t\t\tphs[i] = ph(len(args))
+\t\t\t\t}
 \t\t\t}
-\t\t\tparts = append(parts, col+" IN ("+strings.Join(phs, ", ")+")")
+\t\t\tlhs := col
+\t\t\tif insensitive {
+\t\t\t\tlhs = "LOWER(" + col + ")"
+\t\t\t}
+\t\t\tparts = append(parts, lhs+" IN ("+strings.Join(phs, ", ")+")")
 \t\t}
 \t}
 \tif f.NotIn != nil {
@@ -877,12 +914,20 @@ func buildStringFilter(col string, f *StringFilter, args []interface{}, ph func(
 \t\t\tphs := make([]string, len(f.NotIn))
 \t\t\tfor i, v := range f.NotIn {
 \t\t\t\targs = append(args, v)
-\t\t\t\tphs[i] = ph(len(args))
+\t\t\t\tif insensitive {
+\t\t\t\t\tphs[i] = "LOWER(" + ph(len(args)) + ")"
+\t\t\t\t} else {
+\t\t\t\t\tphs[i] = ph(len(args))
+\t\t\t\t}
 \t\t\t}
-\t\t\tparts = append(parts, col+" NOT IN ("+strings.Join(phs, ", ")+")")
+\t\t\tlhs := col
+\t\t\tif insensitive {
+\t\t\t\tlhs = "LOWER(" + col + ")"
+\t\t\t}
+\t\t\tparts = append(parts, lhs+" NOT IN ("+strings.Join(phs, ", ")+")")
 \t\t}
 \t}
-\treturn strings.Join(parts, " AND "), args
+\treturn strings.Join(parts, " AND "), args, nil
 }
 
 // buildNumberFilter converts a NumberFilter to SQL fragments.
@@ -1135,6 +1180,12 @@ func (c *TableClient[T]) FindMany(ctx context.Context, args interface{}) ([]T, e
 	if c.Dialect == DialectPostgres || c.Dialect == DialectSqlite {
 		if take > 0 {
 			query += fmt.Sprintf(" LIMIT %d", take)
+		} else if skip > 0 {
+			if c.Dialect == DialectSqlite {
+				query += " LIMIT -1"
+			} else {
+				query += " LIMIT ALL"
+			}
 		}
 		if skip > 0 {
 			query += fmt.Sprintf(" OFFSET %d", skip)
@@ -1375,27 +1426,629 @@ func (c *TableClient[T]) Transaction(ctx context.Context, fn func(tx *sql.Tx) er
 \treturn tx.Commit()
 }
 
+func extractCountFields(countVal interface{}) (bool, []string) {
+\tswitch v := countVal.(type) {
+\tcase nil:
+\t\treturn false, nil
+\tcase bool:
+\t\treturn v, nil
+\tcase string:
+\t\tif v == "" {
+\t\t\treturn false, nil
+\t\t}
+\t\tif v == "_all" {
+\t\t\treturn true, nil
+\t\t}
+\t\treturn true, []string{v}
+\tcase []string:
+\t\tincludeAll := false
+\t\tvar cols []string
+\t\tfor _, item := range v {
+\t\t\tif item == "_all" {
+\t\t\t\tincludeAll = true
+\t\t\t} else if item != "" {
+\t\t\t\tcols = append(cols, item)
+\t\t\t}
+\t\t}
+\t\treturn includeAll, cols
+\tcase []interface{}:
+\t\tincludeAll := false
+\t\tvar cols []string
+\t\tfor _, raw := range v {
+\t\t\tif s, ok := raw.(string); ok {
+\t\t\t\tif s == "_all" {
+\t\t\t\t\tincludeAll = true
+\t\t\t\t} else if s != "" {
+\t\t\t\t\tcols = append(cols, s)
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t\treturn includeAll, cols
+\tcase map[string]bool:
+\t\tkeys := make([]string, 0, len(v))
+\t\tfor k := range v {
+\t\t\tkeys = append(keys, k)
+\t\t}
+\t\tsort.Strings(keys)
+\t\tincludeAll := false
+\t\tvar cols []string
+\t\tfor _, k := range keys {
+\t\t\tif !v[k] {
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tif k == "_all" {
+\t\t\t\tincludeAll = true
+\t\t\t} else {
+\t\t\t\tcols = append(cols, k)
+\t\t\t}
+\t\t}
+\t\treturn includeAll, cols
+\tcase map[string]interface{}:
+\t\tkeys := make([]string, 0, len(v))
+\t\tfor k := range v {
+\t\t\tkeys = append(keys, k)
+\t\t}
+\t\tsort.Strings(keys)
+\t\tincludeAll := false
+\t\tvar cols []string
+\t\tfor _, k := range keys {
+\t\t\tif b, ok := v[k].(bool); !ok || !b {
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tif k == "_all" {
+\t\t\t\tincludeAll = true
+\t\t\t} else {
+\t\t\t\tcols = append(cols, k)
+\t\t\t}
+\t\t}
+\t\treturn includeAll, cols
+\t}
+\treturn false, nil
+}
+
+func readStringSliceField(v reflect.Value, name string) []string {
+\tf := v.FieldByName(name)
+\tif !f.IsValid() || f.Kind() != reflect.Slice {
+\t\treturn nil
+\t}
+\tout := make([]string, 0, f.Len())
+\tfor i := 0; i < f.Len(); i++ {
+\t\ts := f.Index(i).String()
+\t\tif s != "" {
+\t\t\tout = append(out, s)
+\t\t}
+\t}
+\treturn out
+}
+
+func (c *TableClient[T]) parseOrderByValue(val interface{}) string {
+\tif val == nil {
+\t\treturn ""
+\t}
+\tif s, ok := val.(string); ok {
+\t\tif strings.TrimSpace(s) == "" {
+\t\t\treturn ""
+\t\t}
+\t\treturn "ORDER BY " + s
+\t}
+\trv := reflect.ValueOf(val)
+\tfor rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+\t\tif rv.IsNil() {
+\t\t\treturn ""
+\t\t}
+\t\trv = rv.Elem()
+\t}
+\tvar entries []reflect.Value
+\tif rv.Kind() == reflect.Slice {
+\t\tfor i := 0; i < rv.Len(); i++ {
+\t\t\tentries = append(entries, rv.Index(i))
+\t\t}
+\t} else {
+\t\tentries = []reflect.Value{rv}
+\t}
+\tvar parts []string
+\tfor _, entry := range entries {
+\t\tcur := entry
+\t\tfor cur.Kind() == reflect.Ptr || cur.Kind() == reflect.Interface {
+\t\t\tif cur.IsNil() {
+\t\t\t\tbreak
+\t\t\t}
+\t\t\tcur = cur.Elem()
+\t\t}
+\t\tif cur.Kind() == reflect.Ptr || cur.Kind() == reflect.Interface {
+\t\t\tcontinue
+\t\t}
+\t\tswitch cur.Kind() {
+\t\tcase reflect.Struct:
+\t\t\ttyp := cur.Type()
+\t\t\tfor i := 0; i < cur.NumField(); i++ {
+\t\t\t\tfv := cur.Field(i)
+\t\t\t\tcol := c.quoteName(c.toSnakeCase(typ.Field(i).Name))
+\t\t\t\tif fv.Kind() == reflect.Ptr && !fv.IsNil() {
+\t\t\t\t\tdirection := strings.ToUpper(fv.Elem().String())
+\t\t\t\t\tif direction != "DESC" {
+\t\t\t\t\t\tdirection = "ASC"
+\t\t\t\t\t}
+\t\t\t\t\tparts = append(parts, col+" "+direction)
+\t\t\t\t} else if fv.Kind() == reflect.String {
+\t\t\t\t\tdirection := strings.ToUpper(fv.String())
+\t\t\t\t\tif direction != "DESC" {
+\t\t\t\t\t\tdirection = "ASC"
+\t\t\t\t\t}
+\t\t\t\t\tparts = append(parts, col+" "+direction)
+\t\t\t\t}
+\t\t\t}
+\t\tcase reflect.Map:
+\t\t\tmapKeys := make([]string, 0, cur.Len())
+\t\t\tfor _, mk := range cur.MapKeys() {
+\t\t\t\tmapKeys = append(mapKeys, mk.String())
+\t\t\t}
+\t\t\tsort.Strings(mapKeys)
+\t\t\tfor _, k := range mapKeys {
+\t\t\t\tmv := fmt.Sprintf("%v", cur.MapIndex(reflect.ValueOf(k)).Interface())
+\t\t\t\tdirection := strings.ToUpper(mv)
+\t\t\t\tif direction != "DESC" {
+\t\t\t\t\tdirection = "ASC"
+\t\t\t\t}
+\t\t\t\tparts = append(parts, c.quoteName(c.toSnakeCase(k))+" "+direction)
+\t\t\t}
+\t\t}
+\t}
+\tif len(parts) == 0 {
+\t\treturn ""
+\t}
+\treturn "ORDER BY " + strings.Join(parts, ", ")
+}
+
+func (c *TableClient[T]) buildFilterExpr(colExpr string, label string, elem reflect.Value, args []interface{}, pHFunc func(int) string) (string, []interface{}, error) {
+\tfor elem.Kind() == reflect.Ptr || elem.Kind() == reflect.Interface {
+\t\tif elem.IsNil() {
+\t\t\treturn colExpr + " IS NULL", args, nil
+\t\t}
+\t\telem = elem.Elem()
+\t}
+\ttypeName := elem.Type().Name()
+\tswitch typeName {
+\tcase "StringFilter":
+\t\tfilter := elem.Interface().(StringFilter)
+\t\treturn buildStringFilter(colExpr, &filter, c.Dialect, args, pHFunc)
+\tcase "NumberFilter":
+\t\tfilter := elem.Interface().(NumberFilter)
+\t\tclause, newArgs := buildNumberFilter(colExpr, &filter, args, pHFunc)
+\t\treturn clause, newArgs, nil
+\tcase "IntFilter":
+\t\tfilter := elem.Interface().(IntFilter)
+\t\tclause, newArgs := buildIntFilter(colExpr, &filter, args, pHFunc)
+\t\treturn clause, newArgs, nil
+\tcase "BoolFilter":
+\t\tfilter := elem.Interface().(BoolFilter)
+\t\tclause, newArgs := buildBoolFilter(colExpr, &filter, args, pHFunc)
+\t\treturn clause, newArgs, nil
+\tcase "DateTimeFilter":
+\t\tfilter := elem.Interface().(DateTimeFilter)
+\t\tclause, newArgs := buildDateTimeFilter(colExpr, &filter, args, pHFunc)
+\t\treturn clause, newArgs, nil
+\tcase "bool":
+\t\targs = append(args, elem.Bool())
+\t\treturn colExpr + " = " + pHFunc(len(args)), args, nil
+\tcase "string":
+\t\targs = append(args, elem.String())
+\t\treturn colExpr + " = " + pHFunc(len(args)), args, nil
+\tcase "int", "int64":
+\t\targs = append(args, elem.Int())
+\t\treturn colExpr + " = " + pHFunc(len(args)), args, nil
+\tcase "float64":
+\t\targs = append(args, elem.Float())
+\t\treturn colExpr + " = " + pHFunc(len(args)), args, nil
+\tcase "Time":
+\t\targs = append(args, elem.Interface())
+\t\treturn colExpr + " = " + pHFunc(len(args)), args, nil
+\tdefault:
+\t\treturn "", nil, fmt.Errorf("unsupported filter field type '%s' for '%s'", elem.Type().String(), label)
+\t}
+}
+
+func (c *TableClient[T]) buildMapFilterExpr(colExpr string, label string, val interface{}, args []interface{}, pHFunc func(int) string) (string, []interface{}, error) {
+\tif val == nil {
+\t\treturn colExpr + " IS NULL", args, nil
+\t}
+\tif rv, present := isPtrTargetPresent(val); present {
+\t\tif rv.Kind() == reflect.Struct && rv.Type().Name() != "Time" {
+\t\t\treturn c.buildFilterExpr(colExpr, label, rv, args, pHFunc)
+\t\t}
+\t}
+\tm, ok := val.(map[string]interface{})
+\tif !ok {
+\t\trv := reflect.ValueOf(val)
+\t\tif rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+\t\t\treturn "", nil, fmt.Errorf("invalid slice filter value for '%s'; use 'in' instead", label)
+\t\t}
+\t\targs = append(args, val)
+\t\treturn colExpr + " = " + pHFunc(len(args)), args, nil
+\t}
+\tif m == nil {
+\t\treturn colExpr + " IS NULL", args, nil
+\t}
+\tinsensitive := false
+\tif mv, hasMode := m["mode"]; hasMode && mv != nil {
+\t\tms, ok := mv.(string)
+\t\tif !ok || (!strings.EqualFold(ms, "default") && !strings.EqualFold(ms, "insensitive")) {
+\t\t\treturn "", nil, fmt.Errorf("invalid filter mode '%v' for '%s'", mv, label)
+\t\t}
+\t\tinsensitive = strings.EqualFold(ms, "insensitive")
+\t}
+\tkeys := make([]string, 0, len(m))
+\tfor k := range m {
+\t\tkeys = append(keys, k)
+\t}
+\tsort.Strings(keys)
+\tvar parts []string
+\tfor _, op := range keys {
+\t\tv := m[op]
+\t\tswitch op {
+\t\tcase "mode":
+\t\t\tcontinue
+\t\tcase "equals":
+\t\t\tif v == nil {
+\t\t\t\tparts = append(parts, colExpr+" IS NULL")
+\t\t\t} else if s, ok := v.(string); ok && insensitive {
+\t\t\t\targs = append(args, s)
+\t\t\t\tparts = append(parts, "LOWER("+colExpr+") = LOWER("+pHFunc(len(args))+")")
+\t\t\t} else {
+\t\t\t\targs = append(args, v)
+\t\t\t\tparts = append(parts, colExpr+" = "+pHFunc(len(args)))
+\t\t\t}
+\t\tcase "not":
+\t\t\tif v == nil {
+\t\t\t\tparts = append(parts, colExpr+" IS NOT NULL")
+\t\t\t} else if nested, ok := v.(map[string]interface{}); ok {
+\t\t\t\tsub, nextArgs, err := c.buildMapFilterExpr(colExpr, label, nested, args, pHFunc)
+\t\t\t\tif err != nil {
+\t\t\t\t\treturn "", nil, err
+\t\t\t\t}
+\t\t\t\tif sub != "" {
+\t\t\t\t\tparts = append(parts, "NOT ("+sub+")")
+\t\t\t\t\targs = nextArgs
+\t\t\t\t}
+\t\t\t} else if s, ok := v.(string); ok && insensitive {
+\t\t\t\targs = append(args, s)
+\t\t\t\tparts = append(parts, "LOWER("+colExpr+") <> LOWER("+pHFunc(len(args))+")")
+\t\t\t} else {
+\t\t\t\targs = append(args, v)
+\t\t\t\tparts = append(parts, colExpr+" <> "+pHFunc(len(args)))
+\t\t\t}
+\t\tcase "contains", "startsWith", "endsWith":
+\t\t\ts, ok := v.(string)
+\t\t\tif !ok {
+\t\t\t\treturn "", nil, fmt.Errorf("'%s' operator on '%s' requires a string", op, label)
+\t\t\t}
+\t\t\tpat := "%" + s + "%"
+\t\t\tif op == "startsWith" { pat = s + "%" }
+\t\t\tif op == "endsWith" { pat = "%" + s }
+\t\t\targs = append(args, pat)
+\t\t\tif !insensitive {
+\t\t\t\tparts = append(parts, colExpr+" LIKE "+pHFunc(len(args)))
+\t\t\t} else if c.Dialect == DialectPostgres {
+\t\t\t\tparts = append(parts, colExpr+" ILIKE "+pHFunc(len(args)))
+\t\t\t} else {
+\t\t\t\tparts = append(parts, "LOWER("+colExpr+") LIKE LOWER("+pHFunc(len(args))+")")
+\t\t\t}
+\t\tcase "gt", "gte", "lt", "lte":
+\t\t\tif v == nil {
+\t\t\t\treturn "", nil, fmt.Errorf("'%s' operator on '%s' must not be nil", op, label)
+\t\t\t}
+\t\t\tsqlOp := map[string]string{"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
+\t\t\targs = append(args, v)
+\t\t\tparts = append(parts, colExpr+" "+sqlOp+" "+pHFunc(len(args)))
+\t\tcase "in", "notIn":
+\t\t\trv := reflect.ValueOf(v)
+\t\t\tif v == nil || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
+\t\t\t\treturn "", nil, fmt.Errorf("'%s' operator on '%s' requires a slice", op, label)
+\t\t\t}
+\t\t\tif rv.Len() == 0 {
+\t\t\t\tif op == "in" { parts = append(parts, "1=0") } else { parts = append(parts, "1=1") }
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\tphs := make([]string, rv.Len())
+\t\t\tlower := false
+\t\t\tif insensitive {
+\t\t\t\tfor i := 0; i < rv.Len(); i++ {
+\t\t\t\t\tif _, isStr := rv.Index(i).Interface().(string); isStr {
+\t\t\t\t\t\tlower = true
+\t\t\t\t\t\tbreak
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}
+\t\t\tfor i := 0; i < rv.Len(); i++ {
+\t\t\t\titem := rv.Index(i).Interface()
+\t\t\t\targs = append(args, item)
+\t\t\t\tif _, isStr := item.(string); lower && isStr {
+\t\t\t\t\tphs[i] = "LOWER(" + pHFunc(len(args)) + ")"
+\t\t\t\t} else {
+\t\t\t\t\tphs[i] = pHFunc(len(args))
+\t\t\t\t}
+\t\t\t}
+\t\t\tlhs := colExpr
+\t\t\tif lower { lhs = "LOWER(" + colExpr + ")" }
+\t\t\tsqlIn := "IN"
+\t\t\tif op == "notIn" { sqlIn = "NOT IN" }
+\t\t\tparts = append(parts, lhs+" "+sqlIn+" ("+strings.Join(phs, ", ")+")")
+\t\tdefault:
+\t\t\treturn "", nil, fmt.Errorf("unsupported filter operator '%s' for '%s'", op, label)
+\t\t}
+\t}
+\treturn strings.Join(parts, " AND "), args, nil
+}
+
+var havingAggSqlFn = map[string]string{
+\t"_count": "COUNT",
+\t"_sum":   "SUM",
+\t"_avg":   "AVG",
+\t"_min":   "MIN",
+\t"_max":   "MAX",
+}
+
+func (c *TableClient[T]) buildHaving(having interface{}, byFields []string, argOffset int) (string, []interface{}, error) {
+\tif having == nil {
+\t\treturn "", nil, nil
+\t}
+\trv := reflect.ValueOf(having)
+\tfor rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+\t\tif rv.IsNil() {
+\t\t\treturn "", nil, nil
+\t\t}
+\t\trv = rv.Elem()
+\t}
+\tbySet := make(map[string]bool, len(byFields)*2)
+\tfor _, f := range byFields {
+\t\tbySet[strings.ToLower(f)] = true
+\t\tbySet[c.toSnakeCase(f)] = true
+\t}
+\tif rv.Kind() == reflect.Map {
+\t\tm, ok := rv.Interface().(map[string]interface{})
+\t\tif !ok {
+\t\t\treturn "", nil, fmt.Errorf("having map must be map[string]interface{}, got %T", having)
+\t\t}
+\t\treturn c.buildHavingFromMap(m, bySet, argOffset)
+\t}
+\tif rv.Kind() == reflect.Struct {
+\t\treturn c.buildHavingFromStruct(rv, bySet, argOffset)
+\t}
+\treturn "", nil, fmt.Errorf("having clause must be a struct or map, got %T", having)
+}
+
+func (c *TableClient[T]) buildHavingFromMap(having map[string]interface{}, bySet map[string]bool, argOffset int) (string, []interface{}, error) {
+\tif len(having) == 0 {
+\t\treturn "", nil, nil
+\t}
+\tpHFunc := func(n int) string { return c.ph(argOffset + n - 1) }
+\tkeys := make([]string, 0, len(having))
+\tfor k := range having {
+\t\tkeys = append(keys, k)
+\t}
+\tsort.Strings(keys)
+\tvar parts []string
+\tvar args []interface{}
+\tfor _, key := range keys {
+\t\tval := having[key]
+\t\tswitch key {
+\t\tcase "AND", "OR", "NOT":
+\t\t\titems := val
+\t\t\tif sm, ok := val.(map[string]interface{}); ok && sm != nil {
+\t\t\t\titems = []interface{}{sm}
+\t\t\t}
+\t\t\trv := reflect.ValueOf(items)
+\t\t\tif items == nil || (rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array) {
+\t\t\t\treturn "", nil, fmt.Errorf("'%s' in having must be a map or slice of maps", key)
+\t\t\t}
+\t\t\tvar subs []string
+\t\t\tfor i := 0; i < rv.Len(); i++ {
+\t\t\t\tsubMap, ok := rv.Index(i).Interface().(map[string]interface{})
+\t\t\t\tif !ok || subMap == nil {
+\t\t\t\t\treturn "", nil, fmt.Errorf("'%s' entries in having must be maps", key)
+\t\t\t\t}
+\t\t\t\tsub, subArgs, err := c.buildHavingFromMap(subMap, bySet, argOffset+len(args))
+\t\t\t\tif err != nil {
+\t\t\t\t\treturn "", nil, err
+\t\t\t\t}
+\t\t\t\tif sub == "" { sub = "1=1" }
+\t\t\t\tsubs = append(subs, sub)
+\t\t\t\targs = append(args, subArgs...)
+\t\t\t}
+\t\t\tif len(subs) == 0 {
+\t\t\t\tif key == "OR" { parts = append(parts, "1=0") }
+\t\t\t} else if key == "NOT" {
+\t\t\t\tparts = append(parts, "NOT ("+strings.Join(subs, " OR ")+")")
+\t\t\t} else if key == "AND" {
+\t\t\t\tparts = append(parts, "("+strings.Join(subs, " AND ")+")")
+\t\t\t} else {
+\t\t\t\tparts = append(parts, "("+strings.Join(subs, " OR ")+")")
+\t\t\t}
+\t\t\tcontinue
+\t\t}
+\t\tif sqlFn, isAgg := havingAggSqlFn[key]; isAgg {
+\t\t\taggMap, ok := val.(map[string]interface{})
+\t\t\tif !ok || aggMap == nil {
+\t\t\t\treturn "", nil, fmt.Errorf("having '%s' filter must be a map", key)
+\t\t\t}
+\t\t\taggKeys := make([]string, 0, len(aggMap))
+\t\t\tfor ak := range aggMap { aggKeys = append(aggKeys, ak) }
+\t\t\tsort.Strings(aggKeys)
+\t\t\tfor _, f := range aggKeys {
+\t\t\t\tvar expr string
+\t\t\t\tif f == "_all" {
+\t\t\t\t\tif key != "_count" {
+\t\t\t\t\t\treturn "", nil, fmt.Errorf("having '%s' does not support '_all'", key)
+\t\t\t\t\t}
+\t\t\t\t\texpr = "COUNT(*)"
+\t\t\t\t} else {
+\t\t\t\t\tcolSnake := c.toSnakeCase(f)
+\t\t\t\t\tif len(ModelFields) > 0 && !modelHasFieldMeta(c.ModelName, colSnake) {
+\t\t\t\t\t\treturn "", nil, fmt.Errorf("unknown field '%s' in having.%s on model '%s'", f, key, c.ModelName)
+\t\t\t\t\t}
+\t\t\t\t\texpr = fmt.Sprintf("%s(%s)", sqlFn, c.quoteName(colSnake))
+\t\t\t\t}
+\t\t\t\tsub, nextArgs, err := c.buildMapFilterExpr(expr, key+"."+f, aggMap[f], args, pHFunc)
+\t\t\t\tif err != nil {
+\t\t\t\t\treturn "", nil, err
+\t\t\t\t}
+\t\t\t\tif sub != "" { parts = append(parts, sub) }
+\t\t\t\targs = nextArgs
+\t\t\t}
+\t\t\tcontinue
+\t\t}
+\t\tif strings.HasPrefix(key, "_") {
+\t\t\treturn "", nil, fmt.Errorf("unknown having aggregate key '%s'", key)
+\t\t}
+\t\tcolSnake := c.toSnakeCase(key)
+\t\tif len(ModelFields) > 0 && !modelHasFieldMeta(c.ModelName, colSnake) {
+\t\t\treturn "", nil, fmt.Errorf("unknown field '%s' on model '%s'", key, c.ModelName)
+\t\t}
+\t\tif len(bySet) > 0 && !bySet[strings.ToLower(key)] && !bySet[colSnake] {
+\t\t\treturn "", nil, fmt.Errorf("field '%s' in having must be included in groupBy 'by' fields or wrapped in an aggregate", key)
+\t\t}
+\t\tsub, nextArgs, err := c.buildMapFilterExpr(c.quoteName(colSnake), key, val, args, pHFunc)
+\t\tif err != nil {
+\t\t\treturn "", nil, err
+\t\t}
+\t\tif sub != "" { parts = append(parts, sub) }
+\t\targs = nextArgs
+\t}
+\treturn strings.Join(parts, " AND "), args, nil
+}
+
+func (c *TableClient[T]) buildHavingFromStruct(v reflect.Value, bySet map[string]bool, argOffset int) (string, []interface{}, error) {
+\ttyp := v.Type()
+\tvar parts []string
+\tvar args []interface{}
+\tpHFunc := func(n int) string { return c.ph(argOffset + n - 1) }
+
+\tfor i := 0; i < v.NumField(); i++ {
+\t\tname := typ.Field(i).Name
+\t\tfv := v.Field(i)
+\t\tif name == "AND" {
+\t\t\tif fv.Kind() == reflect.Slice && !fv.IsNil() {
+\t\t\t\tvar subParts []string
+\t\t\t\tfor j := 0; j < fv.Len(); j++ {
+\t\t\t\t\tsub, subArgs, err := c.buildHavingFromStruct(fv.Index(j), bySet, argOffset+len(args))
+\t\t\t\t\tif err != nil { return "", nil, err }
+\t\t\t\t\tif sub != "" {
+\t\t\t\t\t\tsubParts = append(subParts, sub)
+\t\t\t\t\t\targs = append(args, subArgs...)
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t\tif len(subParts) > 0 { parts = append(parts, "("+strings.Join(subParts, " AND ")+")") }
+\t\t\t}
+\t\t\tcontinue
+\t\t}
+\t\tif name == "OR" {
+\t\t\tif fv.Kind() == reflect.Slice && !fv.IsNil() {
+\t\t\t\tvar subParts []string
+\t\t\t\tfor j := 0; j < fv.Len(); j++ {
+\t\t\t\t\tsub, subArgs, err := c.buildHavingFromStruct(fv.Index(j), bySet, argOffset+len(args))
+\t\t\t\t\tif err != nil { return "", nil, err }
+\t\t\t\t\tif sub == "" { sub = "1=1" }
+\t\t\t\t\tsubParts = append(subParts, sub)
+\t\t\t\t\targs = append(args, subArgs...)
+\t\t\t\t}
+\t\t\t\tif len(subParts) > 0 { parts = append(parts, "("+strings.Join(subParts, " OR ")+")") } else { parts = append(parts, "1=0") }
+\t\t\t}
+\t\t\tcontinue
+\t\t}
+\t\tif name == "NOT" {
+\t\t\tif fv.Kind() == reflect.Ptr && !fv.IsNil() {
+\t\t\t\tsub, subArgs, err := c.buildHavingFromStruct(fv.Elem(), bySet, argOffset+len(args))
+\t\t\t\tif err != nil { return "", nil, err }
+\t\t\t\tif sub == "" { sub = "1=1" }
+\t\t\t\tparts = append(parts, "NOT ("+sub+")")
+\t\t\t\targs = append(args, subArgs...)
+\t\t\t}
+\t\t\tcontinue
+\t\t}
+\t\tif fv.Kind() != reflect.Ptr || fv.IsNil() {
+\t\t\tcontinue
+\t\t}
+\t\telem := fv.Elem()
+
+\t\taggMapFn := map[string]string{"Count": "COUNT", "Sum": "SUM", "Avg": "AVG", "Min": "MIN", "Max": "MAX"}
+\t\tif sqlFn, isAgg := aggMapFn[name]; isAgg {
+\t\t\tif elem.Kind() != reflect.Struct {
+\t\t\t\treturn "", nil, fmt.Errorf("having '%s' filter must be a struct", name)
+\t\t\t}
+\t\t\taggTyp := elem.Type()
+\t\t\tfor j := 0; j < elem.NumField(); j++ {
+\t\t\t\tfname := aggTyp.Field(j).Name
+\t\t\t\tffv := elem.Field(j)
+\t\t\t\tfelem, fpresent := isPtrTargetPresent(ffv.Interface())
+\t\t\t\tif !fpresent {
+\t\t\t\t\tcontinue
+\t\t\t\t}
+\t\t\t\tvar expr string
+\t\t\t\tif fname == "All" || fname == "_all" {
+\t\t\t\t\tif name != "Count" {
+\t\t\t\t\t\treturn "", nil, fmt.Errorf("having '%s' does not support 'All'", name)
+\t\t\t\t\t}
+\t\t\t\t\texpr = "COUNT(*)"
+\t\t\t\t} else {
+\t\t\t\t\tcolSnake := c.toSnakeCase(fname)
+\t\t\t\t\tif len(ModelFields) > 0 && !modelHasFieldMeta(c.ModelName, colSnake) {
+\t\t\t\t\t\treturn "", nil, fmt.Errorf("unknown field '%s' in having.%s on model '%s'", fname, name, c.ModelName)
+\t\t\t\t\t}
+\t\t\t\t\texpr = fmt.Sprintf("%s(%s)", sqlFn, c.quoteName(colSnake))
+\t\t\t\t}
+\t\t\t\tclause, newArgs, err := c.buildFilterExpr(expr, name+"."+fname, felem, args, pHFunc)
+\t\t\t\tif err != nil { return "", nil, err }
+\t\t\t\tif clause != "" { parts = append(parts, clause) }
+\t\t\t\targs = newArgs
+\t\t\t}
+\t\t\tcontinue
+\t\t}
+
+\t\tcolSnake := c.toSnakeCase(name)
+\t\tif len(ModelFields) > 0 && !modelHasFieldMeta(c.ModelName, colSnake) {
+\t\t\treturn "", nil, fmt.Errorf("unknown field '%s' on model '%s'", name, c.ModelName)
+\t\t}
+\t\tif len(bySet) > 0 && !bySet[strings.ToLower(name)] && !bySet[colSnake] {
+\t\t\treturn "", nil, fmt.Errorf("field '%s' in having must be included in groupBy 'by' fields or wrapped in an aggregate", name)
+\t\t}
+\t\tclause, newArgs, err := c.buildFilterExpr(c.quoteName(colSnake), name, elem, args, pHFunc)
+\t\tif err != nil { return "", nil, err }
+\t\tif clause != "" { parts = append(parts, clause) }
+\t\targs = newArgs
+\t}
+\treturn strings.Join(parts, " AND "), args, nil
+}
+
 // Aggregate returns aggregate calculations (count, sum, avg, min, max).
 func (c *TableClient[T]) Aggregate(ctx context.Context, args AggregateArgs) (map[string]interface{}, error) {
 \tclause, _, _, _, _, queryArgs, err := c.parseArgs(args.Where)
 \tif err != nil {
 \t\treturn nil, err
 \t}
+\tincludeAllCount, countCols := extractCountFields(args.Count)
 \tvar selectParts []string
-\tif args.Count || (len(args.Sum) == 0 && len(args.Avg) == 0 && len(args.Min) == 0 && len(args.Max) == 0) {
+\tif includeAllCount || len(countCols) > 0 || (len(args.Sum) == 0 && len(args.Avg) == 0 && len(args.Min) == 0 && len(args.Max) == 0) {
 \t\tselectParts = append(selectParts, "COUNT(*) AS _count")
 \t}
+\tfor _, col := range countCols {
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("COUNT(%s) AS _count_%s", c.quoteName(colSnake), colSnake))
+\t}
 \tfor _, col := range args.Sum {
-\t\tselectParts = append(selectParts, fmt.Sprintf("SUM(%s) AS _sum_%s", c.quoteName(col), col))
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("SUM(%s) AS _sum_%s", c.quoteName(colSnake), colSnake))
 \t}
 \tfor _, col := range args.Avg {
-\t\tselectParts = append(selectParts, fmt.Sprintf("AVG(%s) AS _avg_%s", c.quoteName(col), col))
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("AVG(%s) AS _avg_%s", c.quoteName(colSnake), colSnake))
 \t}
 \tfor _, col := range args.Min {
-\t\tselectParts = append(selectParts, fmt.Sprintf("MIN(%s) AS _min_%s", c.quoteName(col), col))
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("MIN(%s) AS _min_%s", c.quoteName(colSnake), colSnake))
 \t}
 \tfor _, col := range args.Max {
-\t\tselectParts = append(selectParts, fmt.Sprintf("MAX(%s) AS _max_%s", c.quoteName(col), col))
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("MAX(%s) AS _max_%s", c.quoteName(colSnake), colSnake))
 \t}
 
 \tquery := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), c.quoteTable())
@@ -1431,41 +2084,135 @@ func (c *TableClient[T]) Aggregate(ctx context.Context, args AggregateArgs) (map
 \treturn res, nil
 }
 
-// GroupBy groups records by specified columns and computes aggregates.
-func (c *TableClient[T]) GroupBy(ctx context.Context, args GroupByArgs) ([]map[string]interface{}, error) {
-\tif len(args.By) == 0 {
+// GroupBy groups records by specified columns and computes aggregates, HAVING, ORDER BY, and pagination.
+func (c *TableClient[T]) GroupBy(ctx context.Context, args interface{}) ([]map[string]interface{}, error) {
+\tif args == nil {
+\t\treturn nil, fmt.Errorf("GroupBy requires arguments")
+\t}
+\trv := reflect.ValueOf(args)
+\tfor rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface {
+\t\tif rv.IsNil() {
+\t\t\treturn nil, fmt.Errorf("GroupBy requires arguments")
+\t\t}
+\t\trv = rv.Elem()
+\t}
+\tif rv.Kind() != reflect.Struct {
+\t\treturn nil, fmt.Errorf("GroupBy args must be a struct, got %T", args)
+\t}
+\tbyFields := readStringSliceField(rv, "By")
+\tif len(byFields) == 0 {
 \t\treturn nil, fmt.Errorf("GroupBy requires at least one column in 'By'")
 \t}
-\tclause, _, _, _, _, queryArgs, err := c.parseArgs(args.Where)
+
+\tvar whereVal interface{}
+\tif wf := rv.FieldByName("Where"); wf.IsValid() {
+\t\twhereVal = wf.Interface()
+\t}
+\tvar whereClause string
+\tvar queryArgs []interface{}
+\tif welem, present := isPtrTargetPresent(whereVal); present {
+\t\tif welem.Kind() != reflect.Struct {
+\t\t\treturn nil, fmt.Errorf("where clause must be a struct, got %s", welem.Type().String())
+\t\t}
+\t\tvar err error
+\t\twhereClause, queryArgs, err = c.buildWhereFromStructWithContext(welem, c.ModelName, 1, "", "", "")
+\t\tif err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t}
+
+\tvar havingVal interface{}
+\tif hf := rv.FieldByName("Having"); hf.IsValid() {
+\t\thavingVal = hf.Interface()
+\t}
+\thavingClause, havingArgs, err := c.buildHaving(havingVal, byFields, len(queryArgs)+1)
 \tif err != nil {
 \t\treturn nil, err
 \t}
-\tbyCols := make([]string, len(args.By))
-\tfor i, col := range args.By {
-\t\tbyCols[i] = c.quoteName(col)
+\tqueryArgs = append(queryArgs, havingArgs...)
+
+\tbyCols := make([]string, len(byFields))
+\tfor i, col := range byFields {
+\t\tbyCols[i] = c.quoteName(c.toSnakeCase(col))
 \t}
 
 \tselectParts := make([]string, len(byCols))
 \tcopy(selectParts, byCols)
 \tselectParts = append(selectParts, "COUNT(*) AS _count")
-\tfor _, col := range args.Sum {
-\t\tselectParts = append(selectParts, fmt.Sprintf("SUM(%s) AS _sum_%s", c.quoteName(col), col))
+\tif cf := rv.FieldByName("Count"); cf.IsValid() {
+\t\t_, countCols := extractCountFields(cf.Interface())
+\t\tfor _, col := range countCols {
+\t\t\tcolSnake := c.toSnakeCase(col)
+\t\t\tselectParts = append(selectParts, fmt.Sprintf("COUNT(%s) AS _count_%s", c.quoteName(colSnake), colSnake))
+\t\t}
 \t}
-\tfor _, col := range args.Avg {
-\t\tselectParts = append(selectParts, fmt.Sprintf("AVG(%s) AS _avg_%s", c.quoteName(col), col))
+\tfor _, col := range readStringSliceField(rv, "Sum") {
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("SUM(%s) AS _sum_%s", c.quoteName(colSnake), colSnake))
 \t}
-\tfor _, col := range args.Min {
-\t\tselectParts = append(selectParts, fmt.Sprintf("MIN(%s) AS _min_%s", c.quoteName(col), col))
+\tfor _, col := range readStringSliceField(rv, "Avg") {
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("AVG(%s) AS _avg_%s", c.quoteName(colSnake), colSnake))
 \t}
-\tfor _, col := range args.Max {
-\t\tselectParts = append(selectParts, fmt.Sprintf("MAX(%s) AS _max_%s", c.quoteName(col), col))
+\tfor _, col := range readStringSliceField(rv, "Min") {
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("MIN(%s) AS _min_%s", c.quoteName(colSnake), colSnake))
+\t}
+\tfor _, col := range readStringSliceField(rv, "Max") {
+\t\tcolSnake := c.toSnakeCase(col)
+\t\tselectParts = append(selectParts, fmt.Sprintf("MAX(%s) AS _max_%s", c.quoteName(colSnake), colSnake))
 \t}
 
 \tquery := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectParts, ", "), c.quoteTable())
-\tif clause != "" {
-\t\tquery += " WHERE " + clause
+\tif whereClause != "" {
+\t\tquery += " WHERE " + whereClause
 \t}
 \tquery += " GROUP BY " + strings.Join(byCols, ", ")
+\tif havingClause != "" {
+\t\tquery += " HAVING " + havingClause
+\t}
+
+\tvar orderBySQL string
+\tif obf := rv.FieldByName("OrderBy"); obf.IsValid() {
+\t\torderBySQL = c.parseOrderByValue(obf.Interface())
+\t}
+\ttake := 0
+\tif tf := rv.FieldByName("Take"); tf.IsValid() {
+\t\tif telem, ok := isPtrTargetPresent(tf.Interface()); ok && (telem.Kind() == reflect.Int || telem.Kind() == reflect.Int64) {
+\t\t\ttake = int(telem.Int())
+\t\t}
+\t}
+\tskip := 0
+\tif sf := rv.FieldByName("Skip"); sf.IsValid() {
+\t\tif selem, ok := isPtrTargetPresent(sf.Interface()); ok && (selem.Kind() == reflect.Int || selem.Kind() == reflect.Int64) {
+\t\t\tskip = int(selem.Int())
+\t\t}
+\t}
+\tif orderBySQL != "" {
+\t\tquery += " " + orderBySQL
+\t} else if take > 0 || skip > 0 {
+\t\tquery += " ORDER BY " + strings.Join(byCols, ", ")
+\t}
+\tif take > 0 || skip > 0 {
+\t\tif skip < 0 { skip = 0 }
+\t\tif c.Dialect == DialectPostgres || c.Dialect == DialectSqlite {
+\t\t\tif take > 0 {
+\t\t\t\tquery += fmt.Sprintf(" LIMIT %d", take)
+\t\t\t} else if c.Dialect == DialectSqlite {
+\t\t\t\tquery += " LIMIT -1"
+\t\t\t} else {
+\t\t\t\tquery += " LIMIT ALL"
+\t\t\t}
+\t\t\tif skip > 0 {
+\t\t\t\tquery += fmt.Sprintf(" OFFSET %d", skip)
+\t\t\t}
+\t\t} else {
+\t\t\tquery += fmt.Sprintf(" OFFSET %d ROWS", skip)
+\t\t\tif take > 0 {
+\t\t\t\tquery += fmt.Sprintf(" FETCH NEXT %d ROWS ONLY", take)
+\t\t\t}
+\t\t}
+\t}
 
 \trows, err := c.DB.QueryContext(ctx, query, queryArgs...)
 \tif err != nil {
@@ -1550,25 +2297,8 @@ func (c *TableClient[T]) parseArgsWithOffset(args interface{}, offset int) (wher
 
 \t// OrderBy
 \torderByField := v.FieldByName("OrderBy")
-\tif orderByField.IsValid() && !orderByField.IsNil() {
-\t\tobv := orderByField.Elem()
-\t\ttyp := obv.Type()
-\t\tvar parts []string
-\t\tfor i := 0; i < obv.NumField(); i++ {
-\t\t\tfv := obv.Field(i)
-\t\t\tif fv.IsNil() {
-\t\t\t\tcontinue
-\t\t\t}
-\t\t\tcol := c.quoteName(c.toSnakeCase(typ.Field(i).Name))
-\t\t\tdirection := strings.ToUpper(fv.Elem().String())
-\t\t\tif direction != "DESC" {
-\t\t\t\tdirection = "ASC"
-\t\t\t}
-\t\t\tparts = append(parts, col+" "+direction)
-\t\t}
-\t\tif len(parts) > 0 {
-\t\t\torderBy = "ORDER BY " + strings.Join(parts, ", ")
-\t\t}
+\tif orderByField.IsValid() {
+\t\torderBy = c.parseOrderByValue(orderByField.Interface())
 \t}
 
 \t// Take
@@ -1801,52 +2531,14 @@ func (c *TableClient[T]) buildWhereFromStructWithContext(v reflect.Value, modelN
 \t\t}
 
 \t\tcol := colPrefix + c.quoteName(c.toSnakeCase(name))
-\t\ttypeName := field.Type.Elem().Name()
-
-\t\tswitch typeName {
-\t\tcase "StringFilter":
-\t\t\tfilter := elem.Interface().(StringFilter)
-\t\t\tclause, newArgs := buildStringFilter(col, &filter, args, pHFunc)
-\t\t\tif clause != "" { parts = append(parts, clause) }
-\t\t\targs = newArgs
-\t\tcase "NumberFilter":
-\t\t\tfilter := elem.Interface().(NumberFilter)
-\t\t\tclause, newArgs := buildNumberFilter(col, &filter, args, pHFunc)
-\t\t\tif clause != "" { parts = append(parts, clause) }
-\t\t\targs = newArgs
-\t\tcase "IntFilter":
-\t\t\tfilter := elem.Interface().(IntFilter)
-\t\t\tclause, newArgs := buildIntFilter(col, &filter, args, pHFunc)
-\t\t\tif clause != "" { parts = append(parts, clause) }
-\t\t\targs = newArgs
-\t\tcase "BoolFilter":
-\t\t\tfilter := elem.Interface().(BoolFilter)
-\t\t\tclause, newArgs := buildBoolFilter(col, &filter, args, pHFunc)
-\t\t\tif clause != "" { parts = append(parts, clause) }
-\t\t\targs = newArgs
-\t\tcase "DateTimeFilter":
-\t\t\tfilter := elem.Interface().(DateTimeFilter)
-\t\t\tclause, newArgs := buildDateTimeFilter(col, &filter, args, pHFunc)
-\t\t\tif clause != "" { parts = append(parts, clause) }
-\t\t\targs = newArgs
-\t\tcase "bool":
-\t\t\targs = append(args, elem.Bool())
-\t\t\tparts = append(parts, col+" = "+pHFunc(len(args)))
-\t\tcase "string":
-\t\t\targs = append(args, elem.String())
-\t\t\tparts = append(parts, col+" = "+pHFunc(len(args)))
-\t\tcase "int", "int64":
-\t\t\targs = append(args, elem.Int())
-\t\t\tparts = append(parts, col+" = "+pHFunc(len(args)))
-\t\tcase "float64":
-\t\t\targs = append(args, elem.Float())
-\t\t\tparts = append(parts, col+" = "+pHFunc(len(args)))
-\t\tcase "Time":
-\t\t\targs = append(args, elem.Interface())
-\t\t\tparts = append(parts, col+" = "+pHFunc(len(args)))
-\t\tdefault:
-\t\t\treturn "", nil, fmt.Errorf("unsupported filter field type '%s' for '%s'", field.Type.String(), name)
+\t\tclause, newArgs, err := c.buildFilterExpr(col, name, elem, args, pHFunc)
+\t\tif err != nil {
+\t\t\treturn "", nil, err
 \t\t}
+\t\tif clause != "" {
+\t\t\tparts = append(parts, clause)
+\t\t}
+\t\targs = newArgs
 \t}
 
 \treturn strings.Join(parts, " AND "), args, nil
@@ -2116,6 +2808,60 @@ var _ = time.Time{}
         // CountArgs
         content += `// ${name}CountArgs provides ORM-style args for Count queries on ${name}.\ntype ${name}CountArgs struct {\n`;
         content += `\tWhere *${name}WhereInput\n`;
+        content += `}\n\n`;
+        // AggregateHavingInput & filter structs
+        content += `// ${name}CountAggregateFilter filters COUNT aggregates in ${name} GroupBy HAVING clauses.\ntype ${name}CountAggregateFilter struct {\n`;
+        content += `\tAll *IntFilter\n`;
+        for (const field of model.fields) {
+            const cap = this.capitalize(field.name);
+            if (cap !== 'All') {
+                content += `\t${cap} *IntFilter\n`;
+            }
+        }
+        content += `}\n\n`;
+        content += `// ${name}NumericAggregateFilter filters SUM/AVG aggregates in ${name} GroupBy HAVING clauses.\ntype ${name}NumericAggregateFilter struct {\n`;
+        for (const field of model.fields) {
+            const kind = (0, type_kinds_1.fieldKind)(field, this.provider);
+            if (kind === 'int' || kind === 'bigint' || kind === 'float') {
+                content += `\t${this.capitalize(field.name)} *NumberFilter\n`;
+            }
+        }
+        content += `}\n\n`;
+        content += `// ${name}ScalarAggregateFilter filters MIN/MAX aggregates in ${name} GroupBy HAVING clauses.\ntype ${name}ScalarAggregateFilter struct {\n`;
+        for (const field of model.fields) {
+            content += `\t${this.capitalize(field.name)} *${this.getGoFilterType(field)}\n`;
+        }
+        content += `}\n\n`;
+        const reservedHaving = new Set(['AND', 'OR', 'NOT', 'Count', 'Sum', 'Avg', 'Min', 'Max']);
+        content += `// ${name}AggregateHavingInput provides type-safe HAVING filters for ${name} GroupBy queries.\ntype ${name}AggregateHavingInput struct {\n`;
+        content += `\tAND   []${name}AggregateHavingInput\n`;
+        content += `\tOR    []${name}AggregateHavingInput\n`;
+        content += `\tNOT   *${name}AggregateHavingInput\n`;
+        for (const field of model.fields) {
+            const cap = this.capitalize(field.name);
+            if (!reservedHaving.has(cap)) {
+                content += `\t${cap} *${this.getGoFilterType(field)}\n`;
+            }
+        }
+        content += `\tCount *${name}CountAggregateFilter\n`;
+        content += `\tSum   *${name}NumericAggregateFilter\n`;
+        content += `\tAvg   *${name}NumericAggregateFilter\n`;
+        content += `\tMin   *${name}ScalarAggregateFilter\n`;
+        content += `\tMax   *${name}ScalarAggregateFilter\n`;
+        content += `}\n\n`;
+        // GroupByArgs
+        content += `// ${name}GroupByArgs provides ORM-style args for GroupBy queries on ${name}.\ntype ${name}GroupByArgs struct {\n`;
+        content += `\tBy      []string\n`;
+        content += `\tWhere   *${name}WhereInput\n`;
+        content += `\tHaving  *${name}AggregateHavingInput\n`;
+        content += `\tOrderBy *${name}OrderByInput\n`;
+        content += `\tTake    *int\n`;
+        content += `\tSkip    *int\n`;
+        content += `\tCount   interface{}\n`;
+        content += `\tSum     []string\n`;
+        content += `\tAvg     []string\n`;
+        content += `\tMin     []string\n`;
+        content += `\tMax     []string\n`;
         content += `}\n\n`;
         return content;
     }
