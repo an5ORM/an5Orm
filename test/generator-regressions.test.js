@@ -483,6 +483,10 @@ view WidgetLabel {
   assert.ok(!javaContext.includes('ModelClient<WidgetLabel>'), 'a view must not use the writable client');
   const javaView = fs.readFileSync(path.join(javaDir, 'ViewClient.java'), 'utf8');
   assert.ok(!javaView.includes('public T create('), 'a view client must not offer create');
+  assertIncludes(javaView, 'public List<Map<String, Object>> groupBy(An5OrmTypes.GroupByBuilder group)');
+  const javaViewTypes = fs.readFileSync(path.join(javaDir, 'An5OrmTypes.java'), 'utf8');
+  assertIncludes(javaViewTypes, 'public static final class WidgetLabelAggregateHaving implements HavingBuilder');
+  assertIncludes(javaViewTypes, 'public static final class WidgetLabelGroupBy implements GroupByBuilder');
 
   // Kotlin: the generated ViewClient wraps the runtime one.
   const kotlinDir = path.join(tmpRoot, 'kotlin-view');
@@ -760,11 +764,22 @@ model Post {
   new JavaGenerator(javaDir).generate(models);
   const javaTypes = fs.readFileSync(path.join(javaDir, 'An5OrmTypes.java'), 'utf8');
   assertIncludes(javaTypes, 'public interface WhereBuilder');
+  assertIncludes(javaTypes, 'public interface HavingBuilder');
+  assertIncludes(javaTypes, 'public interface GroupByBuilder');
+  assertIncludes(javaTypes, 'public static Map<String, Object> insensitive(Map<String, Object> filter)');
+  assertIncludes(javaTypes, 'public String mode;');
   assertIncludes(javaTypes, 'public static final class ListRelationFilter<T extends WhereBuilder>');
   assertIncludes(javaTypes, 'public static final class RelationFilter<T extends WhereBuilder>');
   assertIncludes(javaTypes, 'public static final class AuthorWhere implements WhereBuilder');
   assertIncludes(javaTypes, 'public ListRelationFilter<PostWhere> Posts;');
   assertIncludes(javaTypes, 'public RelationFilter<AuthorWhere> Author;');
+  assertIncludes(javaTypes, 'public static final class AuthorCountAggregateFilter');
+  assertIncludes(javaTypes, 'public static final class AuthorNumericAggregateFilter');
+  assertIncludes(javaTypes, 'public static final class AuthorScalarAggregateFilter');
+  assertIncludes(javaTypes, 'public static final class AuthorAggregateHaving implements HavingBuilder');
+  assertIncludes(javaTypes, 'public static final class AuthorGroupBy implements GroupByBuilder');
+  const javaModelClient = fs.readFileSync(path.join(javaDir, 'ModelClient.java'), 'utf8');
+  assertIncludes(javaModelClient, 'public List<Map<String, Object>> groupBy(An5OrmTypes.GroupByBuilder group)');
   const javaMeta = fs.readFileSync(path.join(javaDir, 'An5Metadata.java'), 'utf8');
   assertIncludes(javaMeta, 'relation("Post", "many", "authorId", "id")');
   assertIncludes(javaMeta, 'relation("Author", "one", "authorId", "id")');

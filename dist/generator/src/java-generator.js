@@ -554,6 +554,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import an5.adapters.An5GroupBy;
+
 /**
  * Typed filters for the generated models.
  *
@@ -613,6 +615,14 @@ public final class An5OrmTypes {
     /** An empty list matches everything. */
     public static Map<String, Object> notIn(Object... values) {
       return operator("notIn", Arrays.asList(values));
+    }
+
+    /** Marks a string filter operator map case-insensitive ({@code mode: "insensitive"}). */
+    public static Map<String, Object> insensitive(Map<String, Object> filter) {
+      Map<String, Object> copy =
+          filter == null ? new LinkedHashMap<String, Object>() : new LinkedHashMap<String, Object>(filter);
+      copy.put("mode", "insensitive");
+      return copy;
     }
 
     /** The column is \`NULL\`. */
@@ -708,6 +718,7 @@ public final class An5OrmTypes {
     public String gte;
     public String lt;
     public String lte;
+    public String mode;
 
     public Map<String, Object> toMap() {
       Map<String, Object> filter = new LinkedHashMap<String, Object>();
@@ -722,6 +733,7 @@ public final class An5OrmTypes {
       put(filter, "gte", gte);
       put(filter, "lt", lt);
       put(filter, "lte", lte);
+      put(filter, "mode", mode);
       return filter;
     }
 
@@ -737,10 +749,20 @@ public final class An5OrmTypes {
       return filter;
     }
 
-    public static StringFilter has(String substring) {
+    public static StringFilter has(String value) {
       StringFilter filter = new StringFilter();
-      filter.contains = substring;
+      filter.contains = value;
       return filter;
+    }
+
+    public StringFilter mode(String value) {
+      this.mode = value;
+      return this;
+    }
+
+    public StringFilter insensitive() {
+      this.mode = "insensitive";
+      return this;
     }
   }
 
@@ -862,6 +884,16 @@ public final class An5OrmTypes {
   /** Common interface implemented by generated model \`WHERE\` builders. */
   public interface WhereBuilder {
     Map<String, Object> toMap();
+  }
+
+  /** Common interface implemented by generated model \`HAVING\` builders. */
+  public interface HavingBuilder {
+    Map<String, Object> toMap();
+  }
+
+  /** Common interface implemented by generated model \`GroupBy\` builders. */
+  public interface GroupByBuilder {
+    An5GroupBy toGroupBy();
   }
 
   /** Type-safe filter for to-many relations (\`some\`, \`none\`, \`every\`). */
@@ -1044,6 +1076,211 @@ public final class An5OrmTypes {
       return entries;
     }
   }
+
+  /** Count aggregate filter for ${name}.groupBy() HAVING clauses. */
+  public static final class ${name}CountAggregateFilter {
+    public NumberFilter _all;
+`;
+            for (const field of model.fields) {
+                content += `    public NumberFilter ${this.fieldName(field.name)};\n`;
+            }
+            content += `
+    public Map<String, Object> toMap() {
+      Map<String, Object> filter = new LinkedHashMap<String, Object>();
+      if (_all != null) filter.put("_all", _all.toMap());
+`;
+            for (const field of model.fields) {
+                const property = this.fieldName(field.name);
+                content += `      if (${property} != null) filter.put("${field.name}", ${property}.toMap());\n`;
+            }
+            content += `      return filter;
+    }
+  }
+
+  /** Numeric aggregate filter (sum/avg) for ${name}.groupBy() HAVING clauses. */
+  public static final class ${name}NumericAggregateFilter {
+`;
+            for (const field of model.fields) {
+                const kind = (0, type_kinds_1.fieldKind)(field, this.provider);
+                if (kind === 'int' || kind === 'bigint' || kind === 'float') {
+                    content += `    public NumberFilter ${this.fieldName(field.name)};\n`;
+                }
+            }
+            content += `
+    public Map<String, Object> toMap() {
+      Map<String, Object> filter = new LinkedHashMap<String, Object>();
+`;
+            for (const field of model.fields) {
+                const kind = (0, type_kinds_1.fieldKind)(field, this.provider);
+                if (kind === 'int' || kind === 'bigint' || kind === 'float') {
+                    const property = this.fieldName(field.name);
+                    content += `      if (${property} != null) filter.put("${field.name}", ${property}.toMap());\n`;
+                }
+            }
+            content += `      return filter;
+    }
+  }
+
+  /** Scalar aggregate filter (min/max) for ${name}.groupBy() HAVING clauses. */
+  public static final class ${name}ScalarAggregateFilter {
+`;
+            for (const field of model.fields) {
+                content += `    public ${this.getFilterType(field)} ${this.fieldName(field.name)};\n`;
+            }
+            content += `
+    public Map<String, Object> toMap() {
+      Map<String, Object> filter = new LinkedHashMap<String, Object>();
+`;
+            for (const field of model.fields) {
+                const property = this.fieldName(field.name);
+                content += `      if (${property} != null) filter.put("${field.name}", ${property}.toMap());\n`;
+            }
+            content += `      return filter;
+    }
+  }
+
+  /** Type-safe \`HAVING\` builder for ${name}.groupBy() queries. */
+  public static final class ${name}AggregateHaving implements HavingBuilder {
+    public List<${name}AggregateHaving> and;
+    public List<${name}AggregateHaving> or;
+    public ${name}AggregateHaving not;
+    public ${name}CountAggregateFilter _count;
+    public ${name}NumericAggregateFilter _sum;
+    public ${name}NumericAggregateFilter _avg;
+    public ${name}ScalarAggregateFilter _min;
+    public ${name}ScalarAggregateFilter _max;
+`;
+            for (const field of model.fields) {
+                content += `    public ${this.getFilterType(field)} ${this.fieldName(field.name)};\n`;
+            }
+            content += `
+    public ${name}AggregateHaving and(${name}AggregateHaving... clauses) {
+      this.and = Arrays.asList(clauses);
+      return this;
+    }
+
+    public ${name}AggregateHaving or(${name}AggregateHaving... clauses) {
+      this.or = Arrays.asList(clauses);
+      return this;
+    }
+
+    public ${name}AggregateHaving not(${name}AggregateHaving clause) {
+      this.not = clause;
+      return this;
+    }
+
+    @Override
+    public Map<String, Object> toMap() {
+      Map<String, Object> filter = new LinkedHashMap<String, Object>();
+      if (and != null) filter.put("AND", toMapValues(and));
+      if (or != null) filter.put("OR", toMapValues(or));
+      if (not != null) filter.put("NOT", toMapValues(Arrays.asList(not)));
+      if (_count != null) filter.put("_count", _count.toMap());
+      if (_sum != null) filter.put("_sum", _sum.toMap());
+      if (_avg != null) filter.put("_avg", _avg.toMap());
+      if (_min != null) filter.put("_min", _min.toMap());
+      if (_max != null) filter.put("_max", _max.toMap());
+`;
+            for (const field of model.fields) {
+                const property = this.fieldName(field.name);
+                content += `      if (${property} != null) filter.put("${field.name}", ${property}.toMap());\n`;
+            }
+            content += `      return filter;
+    }
+
+    private static List<Object> toMapValues(List<${name}AggregateHaving> clauses) {
+      List<Object> values = new ArrayList<Object>(clauses.size());
+      for (${name}AggregateHaving clause : clauses) {
+        values.add(clause == null ? new LinkedHashMap<String, Object>() : clause.toMap());
+      }
+      return values;
+    }
+  }
+
+  /** Type-safe \`groupBy\` builder for ${name}. */
+  public static final class ${name}GroupBy implements GroupByBuilder {
+    private final An5GroupBy delegate = new An5GroupBy();
+
+    public ${name}GroupBy by(String... columns) {
+      delegate.by(columns);
+      return this;
+    }
+
+    public ${name}GroupBy where(${name}Where where) {
+      if (where != null) delegate.where(where.toMap());
+      return this;
+    }
+
+    public ${name}GroupBy where(Map<String, Object> where) {
+      delegate.where(where);
+      return this;
+    }
+
+    public ${name}GroupBy having(${name}AggregateHaving having) {
+      if (having != null) delegate.having(having.toMap());
+      return this;
+    }
+
+    public ${name}GroupBy having(Map<String, Object> having) {
+      delegate.having(having);
+      return this;
+    }
+
+    public ${name}GroupBy orderBy(${name}OrderBy orderBy) {
+      if (orderBy != null) delegate.orderBy(orderBy.toList());
+      return this;
+    }
+
+    public ${name}GroupBy orderBy(String column, String direction) {
+      delegate.orderBy(column, direction);
+      return this;
+    }
+
+    public ${name}GroupBy skip(int skip) {
+      delegate.skip(skip);
+      return this;
+    }
+
+    public ${name}GroupBy take(Integer take) {
+      delegate.take(take);
+      return this;
+    }
+
+    public ${name}GroupBy count() {
+      delegate.count();
+      return this;
+    }
+
+    public ${name}GroupBy count(String... columns) {
+      delegate.count(columns);
+      return this;
+    }
+
+    public ${name}GroupBy sum(String... columns) {
+      delegate.sum(columns);
+      return this;
+    }
+
+    public ${name}GroupBy avg(String... columns) {
+      delegate.avg(columns);
+      return this;
+    }
+
+    public ${name}GroupBy min(String... columns) {
+      delegate.min(columns);
+      return this;
+    }
+
+    public ${name}GroupBy max(String... columns) {
+      delegate.max(columns);
+      return this;
+    }
+
+    @Override
+    public An5GroupBy toGroupBy() {
+      return delegate;
+    }
+  }
 `;
         }
         content += `}\n`;
@@ -1205,18 +1442,6 @@ import an5.adapters.An5GroupBy;
 import an5.adapters.An5Query;
 import an5.adapters.An5TableClient;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-
-import an5.adapters.An5Adapter;
-import an5.adapters.An5Aggregate;
-import an5.adapters.An5GroupBy;
-import an5.adapters.An5Query;
-import an5.adapters.An5TableClient;
-
 /**
  * A typed client for one model.
  *
@@ -1326,6 +1551,11 @@ public final class ModelClient<T> {
     return table.groupBy(group);
   }
 
+  /** One row per group from a typed model GroupBy builder. */
+  public List<Map<String, Object>> groupBy(An5OrmTypes.GroupByBuilder group) throws SQLException {
+    return table.groupBy(group == null ? new An5GroupBy() : group.toGroupBy());
+  }
+
   /** The rows nearest a vector. */
   public List<T> vectorSearch(
       double[] vector, Integer take, Map<String, Object> where, String vectorField, String metric)
@@ -1424,6 +1654,10 @@ public final class ViewClient<T> {
 
   public List<Map<String, Object>> groupBy(An5GroupBy group) throws SQLException {
     return view.groupBy(group);
+  }
+
+  public List<Map<String, Object>> groupBy(An5OrmTypes.GroupByBuilder group) throws SQLException {
+    return view.groupBy(group == null ? new An5GroupBy() : group.toGroupBy());
   }
 
   public List<T> vectorSearch(
