@@ -452,6 +452,20 @@ test('parseWhere supports mode insensitive in sql-utils', () => {
   const sql = parseWhere('user', { name: { contains: 'Son', mode: 'insensitive' } }, params);
   assertEq(sql, 'LOWER([name]) LIKE LOWER(@name_contains)');
   assertEq(params.name_contains, '%Son%');
+
+  const nestedParams = {};
+  const nestedSql = parseWhere('user', { name: { not: { startsWith: 'son' }, mode: 'insensitive' } }, nestedParams);
+  assertEq(nestedSql, 'NOT (LOWER([name]) LIKE LOWER(@name_not_name_startsWith))');
+  assertEq(nestedParams.name_not_name_startsWith, 'son%');
+
+  const doubleNotParams = {};
+  const doubleNotSql = parseWhere('user', { name: { not: { not: { in: ['A', 'b'] } }, mode: 'insensitive' } }, doubleNotParams);
+  assertEq(doubleNotSql, 'NOT (NOT (LOWER([name]) IN (LOWER(@name_not_name_not_name_in_0), LOWER(@name_not_name_not_name_in_1))))');
+
+  const overrideParams = {};
+  const overrideSql = parseWhere('user', { name: { not: { equals: 'Son', mode: 'default' }, mode: 'insensitive' } }, overrideParams);
+  assertEq(overrideSql, 'NOT ([name] = @name_not_name_equals)');
+  assertEq(overrideParams.name_not_name_equals, 'Son');
 });
 
 // ─── buildOrderBy tests ──────────────────────────────────────────────────────

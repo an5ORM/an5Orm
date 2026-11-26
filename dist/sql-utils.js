@@ -400,7 +400,10 @@ function parseWhere(modelName, where, params, prefix = "", ctx = {}) {
                             }
                             else if (isPlainObject(opVal)) {
                                 const nestedParams = {};
-                                const nestedSql = parseWhere(modelName, { [key]: opVal }, nestedParams, `${prefix}${key}_not_`, ctx);
+                                const nestedFilter = opVal.mode === undefined && value.mode !== undefined
+                                    ? { ...opVal, mode: value.mode }
+                                    : opVal;
+                                const nestedSql = parseWhere(modelName, { [key]: nestedFilter }, nestedParams, `${prefix}${key}_not_`, ctx);
                                 Object.assign(params, nestedParams);
                                 if (nestedSql)
                                     conditions.push(`NOT (${nestedSql})`);
