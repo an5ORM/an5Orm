@@ -503,6 +503,10 @@ view WidgetLabel {
   assertIncludes(swiftDb, 'public let widgetLabel: ViewModelClient<WidgetLabel>');
   assertIncludes(swiftDb, 'ViewModelClient(\n            view: adapter.view("WidgetLabel")');
   assert.ok(!swiftDb.includes('ModelClient(\n            table: adapter.table("WidgetLabel")'));
+  assertIncludes(swiftDb, 'public func groupBy(_ builder: An5Orm.GroupByBuilder) throws -> [Row] { try client.groupBy(builder.build()) }');
+  const swiftViewTypes = fs.readFileSync(path.join(swiftDir, 'Sources', 'An5Client', 'An5OrmTypes.swift'), 'utf8');
+  assertIncludes(swiftViewTypes, 'public struct WidgetLabelAggregateHaving: HavingBuilder');
+  assertIncludes(swiftViewTypes, 'public struct WidgetLabelGroupBy: GroupByBuilder');
 });
 
 test("a view cannot be the target of a relation", async () => {
@@ -730,12 +734,31 @@ model Post {
 
   const types = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5OrmTypes.swift'), 'utf8');
   assertIncludes(types, 'public protocol WhereBuilder');
+  assertIncludes(types, 'public protocol HavingBuilder');
+  assertIncludes(types, 'public protocol GroupByBuilder');
+  assertIncludes(types, 'public struct StringFilter {\n        private var operators: Where = [:]\n\n        public init() {}');
+  assertIncludes(types, 'public struct NumberFilter {\n        private var operators: Where = [:]\n\n        public init() {}');
+  assertIncludes(types, 'public struct BoolFilter {\n        private var operators: Where = [:]\n\n        public init() {}');
+  assertIncludes(types, 'public struct DateFilter {\n        private var operators: Where = [:]\n\n        public init() {}');
+  assertIncludes(types, 'public static func inList(_ values: [String]) -> StringFilter');
+  assertIncludes(types, 'public static func notInList(_ values: [String]) -> StringFilter');
+  assertIncludes(types, 'public static func inList(_ values: [Double]) -> NumberFilter');
+  assertIncludes(types, 'public static func notInList(_ values: [Double]) -> NumberFilter');
+  assertIncludes(types, 'public func insensitive() -> StringFilter');
   assertIncludes(types, 'public struct ListRelationFilter<Target: WhereBuilder>');
   assertIncludes(types, 'public struct RelationFilter<Target: WhereBuilder>');
   assertIncludes(types, 'public struct AuthorWhere: WhereBuilder');
   assertIncludes(types, 'public var posts: ListRelationFilter<PostWhere>?');
   assertIncludes(types, 'public var author: RelationFilter<AuthorWhere>?');
+  assertIncludes(types, 'public struct AuthorCountAggregateFilter');
+  assertIncludes(types, 'public struct AuthorNumericAggregateFilter');
+  assertIncludes(types, 'public struct AuthorScalarAggregateFilter');
+  assertIncludes(types, 'public struct AuthorAggregateHaving: HavingBuilder');
+  assertIncludes(types, 'public struct AuthorGroupBy: GroupByBuilder');
   assertIncludes(types, 'filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()');
+
+  const dbSwift = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5Db.swift'), 'utf8');
+  assertIncludes(dbSwift, 'public func groupBy(_ builder: An5Orm.GroupByBuilder) throws -> [Row] { try table.groupBy(builder.build()) }');
 
   const meta = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5Metadata.swift'), 'utf8');
   assertIncludes(meta, '"posts": ["modelName": "Post", "relationType": "many", "foreignKey": "authorId", "localKey": "id"]');

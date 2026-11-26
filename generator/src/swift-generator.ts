@@ -311,6 +311,8 @@ public enum An5Orm {
     public struct StringFilter {
         private var operators: Where = [:]
 
+        public init() {}
+
         public static func \`is\`(_ value: String?) -> StringFilter {
             var filter = StringFilter()
             filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
@@ -341,6 +343,14 @@ public enum An5Orm {
             return filter
         }
 
+        public static func inList(_ values: [String]) -> StringFilter {
+            StringFilter().inList(values)
+        }
+
+        public static func notInList(_ values: [String]) -> StringFilter {
+            StringFilter().notInList(values)
+        }
+
         public func inList(_ values: [String]) -> StringFilter {
             var filter = self
             filter.operators["in"] = values
@@ -353,6 +363,16 @@ public enum An5Orm {
             return filter
         }
 
+        public func mode(_ value: String) -> StringFilter {
+            var filter = self
+            filter.operators["mode"] = value
+            return filter
+        }
+
+        public func insensitive() -> StringFilter {
+            mode("insensitive")
+        }
+
         /// The filter as the runtime reads it.
         public func build() -> Where { operators }
     }
@@ -361,9 +381,17 @@ public enum An5Orm {
     public struct NumberFilter {
         private var operators: Where = [:]
 
+        public init() {}
+
         public static func \`is\`(_ value: Double?) -> NumberFilter {
             var filter = NumberFilter()
             filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
+            return filter
+        }
+
+        public static func isNot(_ value: Double?) -> NumberFilter {
+            var filter = NumberFilter()
+            filter.operators["not"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
@@ -391,9 +419,23 @@ public enum An5Orm {
             return filter
         }
 
+        public static func inList(_ values: [Double]) -> NumberFilter {
+            NumberFilter().inList(values)
+        }
+
+        public static func notInList(_ values: [Double]) -> NumberFilter {
+            NumberFilter().notInList(values)
+        }
+
         public func inList(_ values: [Double]) -> NumberFilter {
             var filter = self
             filter.operators["in"] = values
+            return filter
+        }
+
+        public func notInList(_ values: [Double]) -> NumberFilter {
+            var filter = self
+            filter.operators["notIn"] = values
             return filter
         }
 
@@ -405,9 +447,17 @@ public enum An5Orm {
     public struct BoolFilter {
         private var operators: Where = [:]
 
+        public init() {}
+
         public static func \`is\`(_ value: Bool?) -> BoolFilter {
             var filter = BoolFilter()
             filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()
+            return filter
+        }
+
+        public static func isNot(_ value: Bool?) -> BoolFilter {
+            var filter = BoolFilter()
+            filter.operators["not"] = value.map { $0 as Any } ?? NSNull()
             return filter
         }
 
@@ -418,6 +468,8 @@ public enum An5Orm {
     /// A filter on a date column.
     public struct DateFilter {
         private var operators: Where = [:]
+
+        public init() {}
 
         public static func \`is\`(_ value: Date?) -> DateFilter {
             var filter = DateFilter()
@@ -445,6 +497,17 @@ public enum An5Orm {
     public protocol WhereBuilder {
         init()
         func build() -> Where
+    }
+
+    /// Common interface for generated per-model \`HAVING\` builders.
+    public protocol HavingBuilder {
+        init()
+        func build() -> Where
+    }
+
+    /// Common interface for generated per-model \`groupBy\` builders.
+    public protocol GroupByBuilder {
+        func build() -> Aggregate
     }
 
     /// A filter on a to-many relation (\`some\`, \`none\`, \`every\`).
@@ -614,6 +677,219 @@ ${buildLines.join('\n')}
 
         /// The sort as the runtime reads it.
         public func build() -> [[String: String]] { entries }
+    }
+`;
+      const countFilterProps = [
+        `        public var _all: NumberFilter?`,
+        ...model.fields.map((field) => `        public var ${this.property(field.name)}: NumberFilter?`),
+      ];
+      const countBuildLines = [
+        `            if let _all = _all { filter["_all"] = _all.build() }`,
+        ...model.fields.map((field) => {
+          const property = this.property(field.name);
+          return `            if let ${property} = ${property} { filter["${field.name}"] = ${property}.build() }`;
+        }),
+      ];
+      const numericFields = model.fields.filter((field) => {
+        const kind = fieldKind(field, this.provider);
+        return kind === 'int' || kind === 'bigint' || kind === 'float';
+      });
+      const numericProps = numericFields.map((field) => `        public var ${this.property(field.name)}: NumberFilter?`);
+      const numericBuildLines = numericFields.map((field) => {
+        const property = this.property(field.name);
+        return `            if let ${property} = ${property} { filter["${field.name}"] = ${property}.build() }`;
+      });
+      const scalarProps = model.fields.map(
+        (field) => `        public var ${this.property(field.name)}: ${this.filterType(field)}?`
+      );
+      const scalarBuildLines = model.fields.map((field) => {
+        const property = this.property(field.name);
+        return `            if let ${property} = ${property} { filter["${field.name}"] = ${property}.build() }`;
+      });
+      content += `
+    /// Count aggregate filter for ${name}.groupBy() HAVING clauses.
+    public struct ${name}CountAggregateFilter {
+${countFilterProps.join('\n')}
+
+        public init() {}
+
+        public func build() -> Where {
+            var filter: Where = [:]
+${countBuildLines.join('\n')}
+            return filter
+        }
+    }
+
+    /// Numeric aggregate filter (sum/avg) for ${name}.groupBy() HAVING clauses.
+    public struct ${name}NumericAggregateFilter {
+${numericProps.join('\n')}
+
+        public init() {}
+
+        public func build() -> Where {
+${numericBuildLines.length === 0 ? '            return [:]' : `            var filter: Where = [:]\n${numericBuildLines.join('\n')}\n            return filter`}
+        }
+    }
+
+    /// Scalar aggregate filter (min/max) for ${name}.groupBy() HAVING clauses.
+    public struct ${name}ScalarAggregateFilter {
+${scalarProps.join('\n')}
+
+        public init() {}
+
+        public func build() -> Where {
+            var filter: Where = [:]
+${scalarBuildLines.join('\n')}
+            return filter
+        }
+    }
+
+    /// A \`HAVING\` builder for ${name}.groupBy() queries.
+    public struct ${name}AggregateHaving: HavingBuilder {
+        private var operators: Where = [:]
+        public var _count: ${name}CountAggregateFilter?
+        public var _sum: ${name}NumericAggregateFilter?
+        public var _avg: ${name}NumericAggregateFilter?
+        public var _min: ${name}ScalarAggregateFilter?
+        public var _max: ${name}ScalarAggregateFilter?
+${scalarProps.join('\n')}
+
+        public init() {}
+
+        public func and(_ clauses: ${name}AggregateHaving...) -> ${name}AggregateHaving {
+            var filter = self
+            filter.operators["AND"] = clauses.map { $0.build() }
+            return filter
+        }
+
+        public func or(_ clauses: ${name}AggregateHaving...) -> ${name}AggregateHaving {
+            var filter = self
+            filter.operators["OR"] = clauses.map { $0.build() }
+            return filter
+        }
+
+        public func not(_ clause: ${name}AggregateHaving) -> ${name}AggregateHaving {
+            var filter = self
+            filter.operators["NOT"] = [clause.build()]
+            return filter
+        }
+
+        public func build() -> Where {
+            var filter = operators
+            if let _count = _count { filter["_count"] = _count.build() }
+            if let _sum = _sum { filter["_sum"] = _sum.build() }
+            if let _avg = _avg { filter["_avg"] = _avg.build() }
+            if let _min = _min { filter["_min"] = _min.build() }
+            if let _max = _max { filter["_max"] = _max.build() }
+${scalarBuildLines.join('\n')}
+            return filter
+        }
+    }
+
+    /// Type-safe \`groupBy\` builder for ${name}.
+    public struct ${name}GroupBy: GroupByBuilder {
+        private var spec = Aggregate()
+
+        public init() {}
+
+        public func by(_ columns: String...) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.by.append(contentsOf: columns)
+            return builder
+        }
+
+        public func \`where\`(_ filter: ${name}Where) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.filter = filter.build()
+            return builder
+        }
+
+        public func \`where\`(_ filter: Where) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.filter = filter
+            return builder
+        }
+
+        public func having(_ filter: ${name}AggregateHaving) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.having = filter.build()
+            return builder
+        }
+
+        public func having(_ filter: Where) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.having = filter
+            return builder
+        }
+
+        public func orderBy(_ order: ${name}OrderBy) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.orderBy = order.build()
+            return builder
+        }
+
+        public func orderBy(_ entries: [[String: String]]) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.orderBy = entries
+            return builder
+        }
+
+        public func skip(_ value: Int) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.skip = Swift.max(0, value)
+            return builder
+        }
+
+        public func take(_ value: Int?) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.take = value
+            return builder
+        }
+
+        public func count() -> ${name}GroupBy {
+            var builder = self
+            builder.spec.count = true
+            return builder
+        }
+
+        public func count(_ columns: String...) -> ${name}GroupBy {
+            var builder = self
+            for column in columns {
+                if column == "_all" {
+                    builder.spec.count = true
+                }
+                if !builder.spec.countFields.contains(column) {
+                    builder.spec.countFields.append(column)
+                }
+            }
+            return builder
+        }
+
+        public func sum(_ columns: String...) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.sum.append(contentsOf: columns)
+            return builder
+        }
+
+        public func average(_ columns: String...) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.average.append(contentsOf: columns)
+            return builder
+        }
+
+        public func min(_ columns: String...) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.minimum.append(contentsOf: columns)
+            return builder
+        }
+
+        public func max(_ columns: String...) -> ${name}GroupBy {
+            var builder = self
+            builder.spec.maximum.append(contentsOf: columns)
+            return builder
+        }
+
+        public func build() -> Aggregate { spec }
     }
 `;
     }
@@ -817,6 +1093,9 @@ public struct ModelClient<T> {
     /// One row per group, each carrying the group's count and aggregates.
     public func groupBy(_ aggregate: Aggregate) throws -> [Row] { try table.groupBy(aggregate) }
 
+    /// One row per group from a typed \`GroupByBuilder\`.
+    public func groupBy(_ builder: An5Orm.GroupByBuilder) throws -> [Row] { try table.groupBy(builder.build()) }
+
     /// The rows nearest a vector.
     public func vectorSearch(
         _ vector: [Double],
@@ -864,6 +1143,9 @@ public struct ViewModelClient<T> {
 
     /// One row per group, each carrying the group's count and aggregates.
     public func groupBy(_ aggregate: Aggregate) throws -> [Row] { try client.groupBy(aggregate) }
+
+    /// One row per group from a typed \`GroupByBuilder\`.
+    public func groupBy(_ builder: An5Orm.GroupByBuilder) throws -> [Row] { try client.groupBy(builder.build()) }
 
     /// The rows nearest a vector.
     public func vectorSearch(
