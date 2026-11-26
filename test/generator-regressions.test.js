@@ -418,6 +418,9 @@ view WidgetLabel {
   assert.ok(!types.includes('class WidgetLabelUpdateInput'), 'a view must not expose an update input');
   assert.ok(!types.includes('class WidgetLabelDeleteManyArgs'), 'a view must not expose a delete input');
   assertIncludes(types, 'class WidgetLabelWhereInput');
+  assertIncludes(types, 'class WidgetLabelAggregateHavingInput');
+  assertIncludes(types, 'class WidgetLabelGroupByArgs');
+  assertIncludes(context, '=> _table.GroupBy(args);');
 
   // ...but the view still has a table entity, because the rows are mapped to it.
   assertIncludes(context, 'new TableClient<Widget>');
@@ -855,6 +858,11 @@ model Post {
   assertIncludes(typesCs, 'public class BoolFilter\n    {\n        public new bool? Equals { get; set; }\n        public bool? Not { get; set; }\n    }');
   assertIncludes(typesCs, 'public ListRelationFilter<PostWhereInput> Posts { get; set; }');
   assertIncludes(typesCs, 'public RelationFilter<AuthorWhereInput> Author { get; set; }');
+  assertIncludes(typesCs, 'public class AuthorCountAggregateFilter');
+  assertIncludes(typesCs, 'public class AuthorNumericAggregateFilter');
+  assertIncludes(typesCs, 'public class AuthorScalarAggregateFilter');
+  assertIncludes(typesCs, 'public class AuthorAggregateHavingInput : IAn5HavingInput');
+  assertIncludes(typesCs, 'public class AuthorGroupByArgs : IAn5GroupByArgs');
 
   const ctxCs = fs.readFileSync(path.join(dotnetDir, 'An5DbContext.cs'), 'utf8');
   assertIncludes(ctxCs, 'public static class An5ClientMetadata');
@@ -862,7 +870,9 @@ model Post {
   assertIncludes(ctxCs, '{ "posts", new An5RelationDef { ModelName = "Post", RelationType = "many", ForeignKey = "authorId", LocalKey = "id" } }');
   assertIncludes(ctxCs, '{ "author", new An5RelationDef { ModelName = "Author", RelationType = "one", ForeignKey = "authorId", LocalKey = "id" } }');
   assertIncludes(ctxCs, 'internal static class An5WhereBuilder');
+  assertIncludes(ctxCs, 'public static string BuildHaving(');
   assertIncludes(ctxCs, 'public List<T> FindMany(object args)');
+  assertIncludes(ctxCs, 'public List<Dictionary<string, object>> GroupBy(object args)');
 });
 
 test("TypeScript generator emits QueryMode, StringFilter.mode, ListRelationFilter, and RelationFilter", async () => {

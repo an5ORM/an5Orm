@@ -114,7 +114,11 @@ namespace An5Orm
 
     internal interface IAn5WhereInput { }
 
+    internal interface IAn5HavingInput { }
+
     internal interface IAn5QueryArgs { }
+
+    internal interface IAn5GroupByArgs { }
 
     internal interface IListRelationFilter
     {
@@ -240,6 +244,59 @@ namespace An5Orm
             content += `    /// <summary>ORM-style args for ${name}.Count().</summary>\n`;
             content += `    public class ${name}CountArgs : IAn5QueryArgs\n    {\n`;
             content += `        public ${name}WhereInput Where { get; set; }\n`;
+            content += `    }\n\n`;
+            // Aggregate & GroupBy HAVING inputs
+            content += `    /// <summary>Count aggregate filters for ${name}.GroupBy() HAVING clauses.</summary>\n`;
+            content += `    public class ${name}CountAggregateFilter\n    {\n`;
+            content += `        public IntFilter _all { get; set; }\n`;
+            for (const f of model.fields) {
+                content += `        public IntFilter ${this.capitalize(f.name)} { get; set; }\n`;
+            }
+            content += `    }\n\n`;
+            content += `    /// <summary>Numeric aggregate filters (sum/avg) for ${name}.GroupBy() HAVING clauses.</summary>\n`;
+            content += `    public class ${name}NumericAggregateFilter\n    {\n`;
+            for (const f of model.fields) {
+                const kind = (0, type_kinds_1.fieldKind)(f, this.provider);
+                if (kind === 'int' || kind === 'bigint' || kind === 'float') {
+                    content += `        public NumberFilter ${this.capitalize(f.name)} { get; set; }\n`;
+                }
+            }
+            content += `    }\n\n`;
+            content += `    /// <summary>Scalar aggregate filters (min/max) for ${name}.GroupBy() HAVING clauses.</summary>\n`;
+            content += `    public class ${name}ScalarAggregateFilter\n    {\n`;
+            for (const f of model.fields) {
+                const ft = this.getCsFilterType(f, f.isOptional);
+                content += `        public ${ft} ${this.capitalize(f.name)} { get; set; }\n`;
+            }
+            content += `    }\n\n`;
+            content += `    /// <summary>Type-safe HAVING filter for ${name}.GroupBy() queries.</summary>\n`;
+            content += `    public class ${name}AggregateHavingInput : IAn5HavingInput\n    {\n`;
+            content += `        public List<${name}AggregateHavingInput> AND { get; set; }\n`;
+            content += `        public List<${name}AggregateHavingInput> OR { get; set; }\n`;
+            content += `        public ${name}AggregateHavingInput NOT { get; set; }\n`;
+            content += `        public ${name}CountAggregateFilter _count { get; set; }\n`;
+            content += `        public ${name}NumericAggregateFilter _sum { get; set; }\n`;
+            content += `        public ${name}NumericAggregateFilter _avg { get; set; }\n`;
+            content += `        public ${name}ScalarAggregateFilter _min { get; set; }\n`;
+            content += `        public ${name}ScalarAggregateFilter _max { get; set; }\n`;
+            for (const f of model.fields) {
+                const ft = this.getCsFilterType(f, f.isOptional);
+                content += `        public ${ft} ${this.capitalize(f.name)} { get; set; }\n`;
+            }
+            content += `    }\n\n`;
+            content += `    /// <summary>ORM-style args for ${name}.GroupBy().</summary>\n`;
+            content += `    public class ${name}GroupByArgs : IAn5GroupByArgs\n    {\n`;
+            content += `        public List<string> By { get; set; }\n`;
+            content += `        public ${name}WhereInput Where { get; set; }\n`;
+            content += `        public ${name}AggregateHavingInput Having { get; set; }\n`;
+            content += `        public ${name}OrderByInput OrderBy { get; set; }\n`;
+            content += `        public int? Skip { get; set; }\n`;
+            content += `        public int? Take { get; set; }\n`;
+            content += `        public object Count { get; set; }\n`;
+            content += `        public List<string> Sum { get; set; }\n`;
+            content += `        public List<string> Avg { get; set; }\n`;
+            content += `        public List<string> Min { get; set; }\n`;
+            content += `        public List<string> Max { get; set; }\n`;
             content += `    }\n\n`;
         }
         content += `}\n`;
@@ -707,6 +764,24 @@ ${(() => {
         private static readonly HashSet<string> RelationOperators = new HashSet<string>(StringComparer.Ordinal)
         { "some", "none", "every", "is", "isNot", "is_not" };
 
+        private static readonly Dictionary<string, string> AggregateHavingOps = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            { "_count", "COUNT" },
+            { "_sum", "SUM" },
+            { "_avg", "AVG" },
+            { "_min", "MIN" },
+            { "_max", "MAX" },
+        };
+
+        internal static string SanitizeIdentifier(string s)
+        {
+            var sb = new System.Text.StringBuilder((s ?? "").Length);
+            foreach (var ch in (s ?? ""))
+                sb.Append(char.IsLetterOrDigit(ch) || ch == '_' ? ch : '_');
+            var res = sb.ToString();
+            return res.Length > 0 && char.IsLetter(res[0]) ? res : "col_" + res;
+        }
+
         private static string SanitizeAlias(string s)
         {
             var sb = new System.Text.StringBuilder((s ?? "").Length);
@@ -714,6 +789,88 @@ ${(() => {
                 sb.Append(char.IsLetterOrDigit(ch) || ch == '_' ? ch : '_');
             var res = sb.ToString();
             return res.Length > 0 && char.IsLetter(res[0]) ? res : "rel_" + res;
+        }
+
+        private static bool IsNonScalarCollection(object value)
+        {
+            if (value == null || value is string || value is byte[]) return false;
+            return value is System.Collections.IEnumerable;
+        }
+
+        public static string BuildWhere(
+            object whereVal,
+            string modelName,
+            An5Dialect dialect,
+            Dictionary<string, object> parameters,
+            ref int paramIdx)
+        {
+            if (whereVal == null) return "";
+            if (whereVal is IAn5WhereInput)
+                return BuildWhereFromObject(whereVal, modelName, dialect, parameters, ref paramIdx, "", "", "");
+            if (whereVal is IDictionary<string, object> wd)
+                return BuildWhereFromDict(wd, modelName, dialect, parameters, ref paramIdx, "", "", "");
+            throw new ArgumentException($"Unsupported Where payload type '{whereVal.GetType().Name}'.");
+        }
+
+        public static string BuildOrderBy(object orderByVal, string modelName, An5Dialect dialect)
+        {
+            if (orderByVal == null) return "";
+            var entries = orderByVal is System.Collections.IList list && !(orderByVal is IDictionary<string, object>) && !(orderByVal is IDictionary<string, string>)
+                ? list
+                : new object[] { orderByVal };
+            var orderParts = new List<string>();
+            foreach (var entry in entries)
+            {
+                if (entry == null) continue;
+                if (entry is IDictionary<string, object> dict)
+                {
+                    foreach (var kv in dict)
+                    {
+                        if (kv.Value == null) continue;
+                        var dirStr = kv.Value.ToString()?.ToUpperInvariant() == "DESC" ? "DESC" : "ASC";
+                        var col = An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, kv.Key), dialect);
+                        orderParts.Add($"{col} {dirStr}");
+                    }
+                    continue;
+                }
+                if (entry is IDictionary<string, string> sdict)
+                {
+                    foreach (var kv in sdict)
+                    {
+                        if (string.IsNullOrEmpty(kv.Value)) continue;
+                        var dirStr = kv.Value.ToUpperInvariant() == "DESC" ? "DESC" : "ASC";
+                        var col = An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, kv.Key), dialect);
+                        orderParts.Add($"{col} {dirStr}");
+                    }
+                    continue;
+                }
+                foreach (var prop in entry.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    var dirObj = prop.GetValue(entry);
+                    if (dirObj == null) continue;
+                    var dirStr = dirObj.ToString()?.ToUpperInvariant() == "DESC" ? "DESC" : "ASC";
+                    var col = An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, prop.Name), dialect);
+                    orderParts.Add($"{col} {dirStr}");
+                }
+            }
+            return orderParts.Count > 0 ? "ORDER BY " + string.Join(", ", orderParts) : "";
+        }
+
+        public static string BuildHaving(
+            object havingVal,
+            string modelName,
+            An5Dialect dialect,
+            List<string> resolvedByCols,
+            Dictionary<string, object> parameters,
+            ref int paramIdx)
+        {
+            if (havingVal == null) return "";
+            var bySet = new HashSet<string>(resolvedByCols ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+            if (havingVal is IAn5HavingInput)
+                return BuildHavingFromObject(havingVal, modelName, dialect, bySet, parameters, ref paramIdx);
+            if (havingVal is IDictionary<string, object> hd)
+                return BuildHavingFromDict(hd, modelName, dialect, bySet, parameters, ref paramIdx);
+            throw new ArgumentException($"Unsupported Having payload type '{havingVal.GetType().Name}'.");
         }
 
         public static void ParseArgs(
@@ -757,31 +914,10 @@ ${(() => {
                 throw new ArgumentException($"Unsupported query args type '{argType.Name}'.");
 
             var whereVal = argType.GetProperty("Where", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
-            if (whereVal != null)
-            {
-                if (whereVal is IAn5WhereInput)
-                    whereSql = BuildWhereFromObject(whereVal, modelName, dialect, parameters, ref paramIdx, "", "", "");
-                else if (whereVal is IDictionary<string, object> wd)
-                    whereSql = BuildWhereFromDict(wd, modelName, dialect, parameters, ref paramIdx, "", "", "");
-                else
-                    throw new ArgumentException($"Unsupported Where payload type '{whereVal.GetType().Name}'.");
-            }
+            whereSql = BuildWhere(whereVal, modelName, dialect, parameters, ref paramIdx);
 
             var orderByVal = argType.GetProperty("OrderBy", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
-            if (orderByVal != null)
-            {
-                var orderParts = new List<string>();
-                foreach (var prop in orderByVal.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
-                {
-                    var dirObj = prop.GetValue(orderByVal);
-                    if (dirObj == null) continue;
-                    var dirStr = dirObj.ToString()?.ToUpperInvariant() == "DESC" ? "DESC" : "ASC";
-                    var col = An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, prop.Name), dialect);
-                    orderParts.Add($"{col} {dirStr}");
-                }
-                if (orderParts.Count > 0)
-                    orderBySql = "ORDER BY " + string.Join(", ", orderParts);
-            }
+            orderBySql = BuildOrderBy(orderByVal, modelName, dialect);
 
             var takeVal = argType.GetProperty("Take", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
             if (takeVal != null) take = Convert.ToInt32(takeVal);
@@ -955,40 +1091,204 @@ ${(() => {
                 }
 
                 var col = colPrefix + An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, name), dialect);
-                switch (val)
-                {
-                    case StringFilter sf:
-                        AppendStringFilter(parts, col, name, sf, parameters, ref paramIdx);
-                        break;
-                    case IntFilter inf:
-                        AppendComparableFilter(parts, col, inf.Equals, inf.Not, inf.Gt, inf.Gte, inf.Lt, inf.Lte, inf.In, inf.NotIn, parameters, ref paramIdx);
-                        break;
-                    case NumberFilter nf:
-                        AppendComparableFilter(parts, col, nf.Equals, nf.Not, nf.Gt, nf.Gte, nf.Lt, nf.Lte, nf.In, nf.NotIn, parameters, ref paramIdx);
-                        break;
-                    case BoolFilter bf:
-                        if (bf.Equals.HasValue) parts.Add($"{col} = {AddParam(parameters, ref paramIdx, bf.Equals.Value)}");
-                        if (bf.Not.HasValue) parts.Add($"{col} <> {AddParam(parameters, ref paramIdx, bf.Not.Value)}");
-                        break;
-                    case DateTimeFilter df:
-                        AppendComparableFilter(parts, col, df.Equals, df.Not, df.Gt, df.Gte, df.Lt, df.Lte, df.In, df.NotIn, parameters, ref paramIdx);
-                        break;
-                    case string s:
-                    case bool _:
-                    case int _:
-                    case long _:
-                    case double _:
-                    case float _:
-                    case decimal _:
-                    case DateTime _:
-                    case Guid _:
-                        parts.Add($"{col} = {AddParam(parameters, ref paramIdx, val)}");
-                        break;
-                    default:
-                        throw new ArgumentException($"Unsupported filter field type '{val.GetType().Name}' for '{name}'.");
-                }
+                AppendTypedFilter(parts, col, name, val, parameters, ref paramIdx);
             }
             return string.Join(" AND ", parts);
+        }
+
+        private static string BuildHavingFromObject(
+            object havingObj,
+            string modelName,
+            An5Dialect dialect,
+            HashSet<string> bySet,
+            Dictionary<string, object> parameters,
+            ref int paramIdx)
+        {
+            if (havingObj == null) return "";
+            if (havingObj is IDictionary<string, object> dict)
+                return BuildHavingFromDict(dict, modelName, dialect, bySet, parameters, ref paramIdx);
+
+            var parts = new List<string>();
+            foreach (var prop in havingObj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                var val = prop.GetValue(havingObj);
+                if (val == null) continue;
+                var name = prop.Name;
+
+                if (name == "AND" && val is System.Collections.IList andList)
+                {
+                    var subs = new List<string>();
+                    foreach (var item in andList)
+                    {
+                        if (item == null) continue;
+                        var sub = BuildHavingFromObject(item, modelName, dialect, bySet, parameters, ref paramIdx);
+                        if (!string.IsNullOrEmpty(sub)) subs.Add(sub);
+                    }
+                    if (subs.Count > 0) parts.Add("(" + string.Join(" AND ", subs) + ")");
+                    continue;
+                }
+                if (name == "OR" && val is System.Collections.IList orList)
+                {
+                    var subs = new List<string>();
+                    foreach (var item in orList)
+                    {
+                        if (item == null) continue;
+                        var sub = BuildHavingFromObject(item, modelName, dialect, bySet, parameters, ref paramIdx);
+                        subs.Add(string.IsNullOrEmpty(sub) ? "1=1" : sub);
+                    }
+                    parts.Add(subs.Count > 0 ? "(" + string.Join(" OR ", subs) + ")" : "1=0");
+                    continue;
+                }
+                if (name == "NOT")
+                {
+                    if (val is System.Collections.IList notList)
+                    {
+                        var subs = new List<string>();
+                        foreach (var item in notList)
+                        {
+                            if (item == null) continue;
+                            var sub = BuildHavingFromObject(item, modelName, dialect, bySet, parameters, ref paramIdx);
+                            subs.Add(string.IsNullOrEmpty(sub) ? "1=1" : sub);
+                        }
+                        if (subs.Count > 0) parts.Add("NOT (" + string.Join(" OR ", subs) + ")");
+                    }
+                    else
+                    {
+                        var sub = BuildHavingFromObject(val, modelName, dialect, bySet, parameters, ref paramIdx);
+                        parts.Add("NOT (" + (string.IsNullOrEmpty(sub) ? "1=1" : sub) + ")");
+                    }
+                    continue;
+                }
+
+                if (AggregateHavingOps.TryGetValue(name, out var sqlFn))
+                {
+                    foreach (var aggProp in val.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        var aggVal = aggProp.GetValue(val);
+                        if (aggVal == null) continue;
+                        string expr;
+                        if (aggProp.Name == "_all")
+                        {
+                            if (name != "_count")
+                                throw new ArgumentException($"'_all' is only valid inside '_count' having filter, not '{name}'.");
+                            expr = "COUNT(*)";
+                        }
+                        else
+                        {
+                            var resolvedCol = An5ClientMetadata.ResolveColumn(modelName, aggProp.Name);
+                            expr = $"{sqlFn}({An5Provider.Quote(resolvedCol, dialect)})";
+                        }
+                        AppendTypedFilter(parts, expr, $"{name}.{aggProp.Name}", aggVal, parameters, ref paramIdx);
+                    }
+                    continue;
+                }
+
+                var scalarCol = An5ClientMetadata.ResolveColumn(modelName, name);
+                if (!bySet.Contains(scalarCol))
+                    throw new ArgumentException($"Field '{name}' in having clause must be included in 'by' fields or wrapped in an aggregate filter (_count, _sum, _avg, _min, _max).");
+                AppendTypedFilter(parts, An5Provider.Quote(scalarCol, dialect), name, val, parameters, ref paramIdx);
+            }
+            return string.Join(" AND ", parts);
+        }
+
+        private static string BuildHavingFromDict(
+            IDictionary<string, object> dict,
+            string modelName,
+            An5Dialect dialect,
+            HashSet<string> bySet,
+            Dictionary<string, object> parameters,
+            ref int paramIdx)
+        {
+            if (dict == null || dict.Count == 0) return "";
+            var keys = new List<string>(dict.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            var parts = new List<string>();
+            foreach (var key in keys)
+            {
+                var value = dict[key];
+                if (key == "AND" || key == "OR" || key == "NOT")
+                {
+                    var p = parameters;
+                    var bSet = bySet;
+                    var nextIdx = paramIdx;
+                    var logical = BuildDictLogicalCondition(key, value, subMap =>
+                        BuildHavingFromDict(subMap, modelName, dialect, bSet, p, ref nextIdx));
+                    paramIdx = nextIdx;
+                    if (!string.IsNullOrEmpty(logical)) parts.Add(logical);
+                    continue;
+                }
+
+                if (AggregateHavingOps.TryGetValue(key, out var sqlFn))
+                {
+                    if (!(value is IDictionary<string, object> aggDict))
+                        throw new ArgumentException($"'{key}' having filter must be a dictionary.");
+                    var aggKeys = new List<string>(aggDict.Keys);
+                    aggKeys.Sort(StringComparer.Ordinal);
+                    foreach (var field in aggKeys)
+                    {
+                        string expr;
+                        if (field == "_all")
+                        {
+                            if (key != "_count")
+                                throw new ArgumentException($"'_all' is only valid inside '_count' having filter, not '{key}'.");
+                            expr = "COUNT(*)";
+                        }
+                        else
+                        {
+                            if (!string.IsNullOrEmpty(modelName) && An5ClientMetadata.ModelHasFields(modelName) && !An5ClientMetadata.ModelHasField(modelName, field))
+                                throw new ArgumentException($"Unknown field '{field}' on model '{modelName}' in '{key}' having filter.");
+                            var resolvedCol = An5ClientMetadata.ResolveColumn(modelName, field);
+                            expr = $"{sqlFn}({An5Provider.Quote(resolvedCol, dialect)})";
+                        }
+                        parts.AddRange(BuildDictFieldConditions(expr, $"{key}.{field}", aggDict[field], parameters, ref paramIdx));
+                    }
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(modelName) && An5ClientMetadata.ModelHasFields(modelName) && !An5ClientMetadata.ModelHasField(modelName, key))
+                    throw new ArgumentException($"Unknown field '{key}' on model '{modelName}' in having clause.");
+                var scalarCol = An5ClientMetadata.ResolveColumn(modelName, key);
+                if (!bySet.Contains(scalarCol))
+                    throw new ArgumentException($"Field '{key}' in having clause must be included in 'by' fields or wrapped in an aggregate filter (_count, _sum, _avg, _min, _max).");
+                parts.AddRange(BuildDictFieldConditions(An5Provider.Quote(scalarCol, dialect), key, value, parameters, ref paramIdx));
+            }
+            return string.Join(" AND ", parts);
+        }
+
+        private static void AppendTypedFilter(List<string> parts, string col, string name, object val, Dictionary<string, object> parameters, ref int paramIdx)
+        {
+            switch (val)
+            {
+                case StringFilter sf:
+                    AppendStringFilter(parts, col, name, sf, parameters, ref paramIdx);
+                    break;
+                case IntFilter inf:
+                    AppendComparableFilter(parts, col, inf.Equals, inf.Not, inf.Gt, inf.Gte, inf.Lt, inf.Lte, inf.In, inf.NotIn, parameters, ref paramIdx);
+                    break;
+                case NumberFilter nf:
+                    AppendComparableFilter(parts, col, nf.Equals, nf.Not, nf.Gt, nf.Gte, nf.Lt, nf.Lte, nf.In, nf.NotIn, parameters, ref paramIdx);
+                    break;
+                case BoolFilter bf:
+                    if (bf.Equals.HasValue) parts.Add($"{col} = {AddParam(parameters, ref paramIdx, bf.Equals.Value)}");
+                    if (bf.Not.HasValue) parts.Add($"{col} <> {AddParam(parameters, ref paramIdx, bf.Not.Value)}");
+                    break;
+                case DateTimeFilter df:
+                    AppendComparableFilter(parts, col, df.Equals, df.Not, df.Gt, df.Gte, df.Lt, df.Lte, df.In, df.NotIn, parameters, ref paramIdx);
+                    break;
+                case string s:
+                case bool _:
+                case int _:
+                case long _:
+                case double _:
+                case float _:
+                case decimal _:
+                case DateTime _:
+                case Guid _:
+                    parts.Add($"{col} = {AddParam(parameters, ref paramIdx, val)}");
+                    break;
+                default:
+                    throw new ArgumentException($"Unsupported filter field type '{val.GetType().Name}' for '{name}'.");
+            }
         }
 
         private static void AppendStringFilter(List<string> parts, string col, string fieldName, StringFilter f, Dictionary<string, object> parameters, ref int paramIdx)
@@ -1031,8 +1331,8 @@ ${(() => {
             if (f.Gte != null) parts.Add($"{col} >= {AddParam(parameters, ref paramIdx, f.Gte)}");
             if (f.Lt != null) parts.Add($"{col} < {AddParam(parameters, ref paramIdx, f.Lt)}");
             if (f.Lte != null) parts.Add($"{col} <= {AddParam(parameters, ref paramIdx, f.Lte)}");
-            AppendInFilter(parts, col, "IN", "1=0", f.In, parameters, ref paramIdx);
-            AppendInFilter(parts, col, "NOT IN", "1=1", f.NotIn, parameters, ref paramIdx);
+            AppendInFilter(parts, col, "IN", "1=0", f.In, parameters, ref paramIdx, insensitive);
+            AppendInFilter(parts, col, "NOT IN", "1=1", f.NotIn, parameters, ref paramIdx, insensitive);
         }
 
         private static void AppendComparableFilter<TVal>(
@@ -1059,7 +1359,7 @@ ${(() => {
             AppendInFilter(parts, col, "NOT IN", "1=1", notInList, parameters, ref paramIdx);
         }
 
-        private static void AppendInFilter<TVal>(List<string> parts, string col, string opSql, string emptySql, List<TVal> items, Dictionary<string, object> parameters, ref int paramIdx)
+        private static void AppendInFilter<TVal>(List<string> parts, string col, string opSql, string emptySql, List<TVal> items, Dictionary<string, object> parameters, ref int paramIdx, bool insensitive = false)
         {
             if (items == null) return;
             if (items.Count == 0)
@@ -1067,10 +1367,56 @@ ${(() => {
                 parts.Add(emptySql);
                 return;
             }
+            var useLower = insensitive && typeof(TVal) == typeof(string) && items.TrueForAll(v => v != null);
             var phs = new List<string>(items.Count);
             foreach (var item in items)
-                phs.Add(AddParam(parameters, ref paramIdx, item));
-            parts.Add($"{col} {opSql} ({string.Join(", ", phs)})");
+            {
+                var ph = AddParam(parameters, ref paramIdx, item);
+                phs.Add(useLower ? $"LOWER({ph})" : ph);
+            }
+            var lhs = useLower ? $"LOWER({col})" : col;
+            parts.Add($"{lhs} {opSql} ({string.Join(", ", phs)})");
+        }
+
+        private static string BuildDictLogicalCondition(
+            string key,
+            object value,
+            Func<IDictionary<string, object>, string> recurse)
+        {
+            if (value == null) throw new ArgumentException($"'{key}' filter payload must not be null.");
+            System.Collections.IList list;
+            if (key == "OR")
+            {
+                if (!(value is System.Collections.IList orSeq))
+                    throw new ArgumentException("'OR' filter must be a list of dictionaries.");
+                list = orSeq;
+            }
+            else if (value is IDictionary<string, object> singleMap)
+            {
+                list = new object[] { singleMap };
+            }
+            else if (value is System.Collections.IList seq)
+            {
+                list = seq;
+            }
+            else
+            {
+                throw new ArgumentException($"'{key}' filter must be a dictionary or list of dictionaries.");
+            }
+
+            var subs = new List<string>();
+            foreach (var item in list)
+            {
+                if (!(item is IDictionary<string, object> subMap))
+                    throw new ArgumentException($"'{key}' filter entry must be a dictionary.");
+                var s = recurse(subMap);
+                subs.Add(string.IsNullOrEmpty(s) ? "1=1" : s);
+            }
+            if (subs.Count == 0)
+                return key == "OR" ? "1=0" : "";
+            var joiner = key == "AND" ? " AND " : " OR ";
+            var negation = key == "NOT" ? "NOT " : "";
+            return negation + "(" + string.Join(joiner, subs) + ")";
         }
 
         private static string BuildWhereFromDict(
@@ -1121,31 +1467,16 @@ ${(() => {
                 var value = clean[key];
                 if (key == "AND" || key == "OR" || key == "NOT")
                 {
-                    if (value == null) throw new ArgumentException($"'{key}' filter payload must not be null.");
-                    System.Collections.IList list;
-                    if (value is IDictionary<string, object> singleMap) list = new object[] { singleMap };
-                    else if (value is System.Collections.IList seq) list = seq;
-                    else throw new ArgumentException($"'{key}' filter must be a dictionary or list of dictionaries.");
-
-                    var subs = new List<string>();
                     int idx = 0;
-                    foreach (var item in list)
-                    {
-                        if (!(item is IDictionary<string, object> subMap))
-                            throw new ArgumentException($"'{key}' filter entry must be a dictionary.");
-                        var s = BuildWhereFromDict(subMap, modelName, dialect, parameters, ref paramIdx, $"{prefix}{key}{idx++}_", selfRef, colPrefix);
-                        subs.Add(string.IsNullOrEmpty(s) ? "1=1" : s);
-                    }
-                    if (subs.Count == 0)
-                    {
-                        if (key == "OR") parts.Add("1=0");
-                    }
-                    else
-                    {
-                        var joiner = key == "AND" ? " AND " : " OR ";
-                        var negation = key == "NOT" ? "NOT " : "";
-                        parts.Add(negation + "(" + string.Join(joiner, subs) + ")");
-                    }
+                    var pfx = prefix;
+                    var p = parameters;
+                    var refSelf = selfRef;
+                    var cPfx = colPrefix;
+                    var nextIdx = paramIdx;
+                    var logical = BuildDictLogicalCondition(key, value, subMap =>
+                        BuildWhereFromDict(subMap, modelName, dialect, p, ref nextIdx, $"{pfx}{key}{idx++}_", refSelf, cPfx));
+                    paramIdx = nextIdx;
+                    if (!string.IsNullOrEmpty(logical)) parts.Add(logical);
                     continue;
                 }
 
@@ -1249,13 +1580,17 @@ ${(() => {
             return false;
         }
 
-        private static List<string> BuildDictFieldConditions(string col, string key, object value, Dictionary<string, object> parameters, ref int paramIdx)
+        private static List<string> BuildDictFieldConditions(string col, string key, object value, Dictionary<string, object> parameters, ref int paramIdx, bool inheritedInsensitive = false)
         {
             if (value == null) return new List<string> { $"{col} IS NULL" };
             if (!(value is IDictionary<string, object> opMap))
+            {
+                if (IsNonScalarCollection(value))
+                    throw new ArgumentException($"Filter value for '{key}' must be a scalar value, not a collection.");
                 return new List<string> { $"{col} = {AddParam(parameters, ref paramIdx, value)}" };
+            }
 
-            var insensitive = false;
+            var insensitive = inheritedInsensitive;
             if (opMap.TryGetValue("mode", out var modeVal))
             {
                 if (!(modeVal is string ms) || (ms != "default" && ms != "insensitive"))
@@ -1279,8 +1614,12 @@ ${(() => {
                         if (val == null) outList.Add($"{col} IS NOT NULL");
                         else if (val is IDictionary<string, object> nested)
                         {
-                            var nc = BuildDictFieldConditions(col, key, nested, parameters, ref paramIdx);
+                            var nc = BuildDictFieldConditions(col, key, nested, parameters, ref paramIdx, insensitive);
                             if (nc.Count > 0) outList.Add("NOT (" + string.Join(" AND ", nc) + ")");
+                        }
+                        else if (IsNonScalarCollection(val))
+                        {
+                            throw new ArgumentException($"'not' on '{key}' requires a scalar value or operator dictionary.");
                         }
                         else
                         {
@@ -1290,6 +1629,8 @@ ${(() => {
                         break;
                     case "equals":
                         if (val == null) outList.Add($"{col} IS NULL");
+                        else if (val is System.Collections.IDictionary || IsNonScalarCollection(val))
+                            throw new ArgumentException($"'equals' on '{key}' requires a scalar value.");
                         else
                         {
                             var p = AddParam(parameters, ref paramIdx, val);
@@ -1311,21 +1652,43 @@ ${(() => {
                         var pe = AddParam(parameters, ref paramIdx, $"%{se}");
                         outList.Add(insensitive ? $"LOWER({col}) LIKE LOWER({pe})" : $"{col} LIKE {pe}");
                         break;
-                    case "gt": outList.Add($"{col} > {AddParam(parameters, ref paramIdx, val)}"); break;
-                    case "gte": outList.Add($"{col} >= {AddParam(parameters, ref paramIdx, val)}"); break;
-                    case "lt": outList.Add($"{col} < {AddParam(parameters, ref paramIdx, val)}"); break;
-                    case "lte": outList.Add($"{col} <= {AddParam(parameters, ref paramIdx, val)}"); break;
+                    case "gt":
+                    case "gte":
+                    case "lt":
+                    case "lte":
+                    {
+                        if (val == null || val is System.Collections.IDictionary || IsNonScalarCollection(val))
+                            throw new ArgumentException($"'{op}' on '{key}' requires a scalar value.");
+                        var cmp = op == "gt" ? ">" : op == "gte" ? ">=" : op == "lt" ? "<" : "<=";
+                        outList.Add($"{col} {cmp} {AddParam(parameters, ref paramIdx, val)}");
+                        break;
+                    }
                     case "in":
                     case "notIn":
                     {
-                        if (val == null || val is string || val is System.Collections.IDictionary || !(val is System.Collections.IEnumerable seq))
+                        if (val == null || val is string || val is byte[] || val is System.Collections.IDictionary || !(val is System.Collections.IEnumerable seq))
                             throw new ArgumentException($"'{op}' on '{key}' requires a collection.");
-                        var phs = new List<string>();
-                        foreach (var item in seq) phs.Add(AddParam(parameters, ref paramIdx, item));
-                        if (phs.Count > 0)
-                            outList.Add(op == "in" ? $"{col} IN ({string.Join(", ", phs)})" : $"{col} NOT IN ({string.Join(", ", phs)})");
-                        else
+                        var items = new List<object>();
+                        var allStrings = true;
+                        foreach (var item in seq)
+                        {
+                            if (!(item is string)) allStrings = false;
+                            items.Add(item);
+                        }
+                        if (items.Count == 0)
+                        {
                             outList.Add(op == "in" ? "1=0" : "1=1");
+                            break;
+                        }
+                        var useLower = insensitive && allStrings;
+                        var phs = new List<string>(items.Count);
+                        foreach (var item in items)
+                        {
+                            var ph = AddParam(parameters, ref paramIdx, item);
+                            phs.Add(useLower ? $"LOWER({ph})" : ph);
+                        }
+                        var lhs = useLower ? $"LOWER({col})" : col;
+                        outList.Add(op == "in" ? $"{lhs} IN ({string.Join(", ", phs)})" : $"{lhs} NOT IN ({string.Join(", ", phs)})");
                         break;
                     }
                 }
@@ -2113,12 +2476,25 @@ ${(() => {
             List<string> sum = null,
             List<string> avg = null,
             List<string> min = null,
-            List<string> max = null)
+            List<string> max = null,
+            string havingClause = null,
+            string orderByClause = null,
+            int? skip = null,
+            int? take = null,
+            object count = null)
         {
             if (by == null || by.Count == 0) throw new ArgumentException("GroupBy requires at least one column in 'by'");
             var byCols = by.Select(c => An5Provider.Quote(c, Dialect)).ToList();
             var selectParts = new List<string>(byCols);
-            selectParts.Add("COUNT(*) AS _count");
+            if (!(count is bool bCount && !bCount))
+            {
+                selectParts.Add("COUNT(*) AS _count");
+                if (count != null && !(count is bool))
+                {
+                    foreach (var cf in ExtractAggFields(count, "_count", false))
+                        if (cf != "_all") selectParts.Add($"COUNT({An5Provider.Quote(cf, Dialect)}) AS _count_{An5WhereBuilder.SanitizeIdentifier(cf)}");
+                }
+            }
             if (sum != null) foreach (var col in sum) selectParts.Add($"SUM({An5Provider.Quote(col, Dialect)}) AS _sum_{col}");
             if (avg != null) foreach (var col in avg) selectParts.Add($"AVG({An5Provider.Quote(col, Dialect)}) AS _avg_{col}");
             if (min != null) foreach (var col in min) selectParts.Add($"MIN({An5Provider.Quote(col, Dialect)}) AS _min_{col}");
@@ -2127,6 +2503,23 @@ ${(() => {
             var query = $"SELECT {string.Join(", ", selectParts)} FROM {TableName}";
             if (!string.IsNullOrEmpty(whereClause)) query += $" WHERE {whereClause}";
             query += $" GROUP BY {string.Join(", ", byCols)}";
+            if (!string.IsNullOrEmpty(havingClause)) query += $" HAVING {havingClause}";
+            if (!string.IsNullOrEmpty(orderByClause)) query += $" {orderByClause}";
+            else if (skip.HasValue || take.HasValue) query += $" ORDER BY {string.Join(", ", byCols)}";
+            if (skip.HasValue || take.HasValue)
+            {
+                if (Dialect == An5Dialect.Postgres || Dialect == An5Dialect.Sqlite)
+                {
+                    if (take.HasValue) query += $" LIMIT {take.Value}";
+                    else if (skip.HasValue) query += Dialect == An5Dialect.Sqlite ? " LIMIT -1" : " LIMIT ALL";
+                    if (skip.HasValue) query += $" OFFSET {skip.Value}";
+                }
+                else
+                {
+                    query += $" OFFSET {skip ?? 0} ROWS";
+                    if (take.HasValue) query += $" FETCH NEXT {take.Value} ROWS ONLY";
+                }
+            }
 
             var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
             try
@@ -2152,6 +2545,253 @@ ${(() => {
                 return rows;
             }
             finally { if (!isTx) conn.Dispose(); }
+        }
+
+        public List<Dictionary<string, object>> GroupBy(object args)
+        {
+            if (args == null) throw new ArgumentException("GroupBy requires 'by' fields.");
+            if (args is List<string> legacyBy) return GroupBy(legacyBy, null, null, null, null, null, null);
+
+            object byVal = null;
+            object whereVal = null;
+            object havingVal = null;
+            object orderByVal = null;
+            int? skip = null;
+            int? take = null;
+            object countVal = null;
+            object sumVal = null;
+            object avgVal = null;
+            object minVal = null;
+            object maxVal = null;
+
+            if (args is IDictionary<string, object> argDict)
+            {
+                argDict.TryGetValue("by", out byVal);
+                argDict.TryGetValue("where", out whereVal);
+                argDict.TryGetValue("having", out havingVal);
+                argDict.TryGetValue("orderBy", out orderByVal);
+                if (argDict.TryGetValue("skip", out var sv) && sv != null) skip = Convert.ToInt32(sv);
+                if (argDict.TryGetValue("take", out var tv) && tv != null) take = Convert.ToInt32(tv);
+                if (!argDict.TryGetValue("_count", out countVal)) argDict.TryGetValue("count", out countVal);
+                if (!argDict.TryGetValue("_sum", out sumVal)) argDict.TryGetValue("sum", out sumVal);
+                if (!argDict.TryGetValue("_avg", out avgVal)) argDict.TryGetValue("avg", out avgVal);
+                if (!argDict.TryGetValue("_min", out minVal)) argDict.TryGetValue("min", out minVal);
+                if (!argDict.TryGetValue("_max", out maxVal)) argDict.TryGetValue("max", out maxVal);
+            }
+            else
+            {
+                var t = args.GetType();
+                var byProp = t.GetProperty("By", BindingFlags.Public | BindingFlags.Instance);
+                if (!(args is IAn5GroupByArgs) && byProp == null)
+                    throw new ArgumentException($"Unsupported GroupBy args type '{t.Name}'.");
+                byVal = byProp?.GetValue(args);
+                whereVal = t.GetProperty("Where", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                havingVal = t.GetProperty("Having", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                orderByVal = t.GetProperty("OrderBy", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                var sv = t.GetProperty("Skip", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                if (sv != null) skip = Convert.ToInt32(sv);
+                var tv = t.GetProperty("Take", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                if (tv != null) take = Convert.ToInt32(tv);
+                countVal = t.GetProperty("Count", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                sumVal = t.GetProperty("Sum", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                avgVal = t.GetProperty("Avg", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                minVal = t.GetProperty("Min", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+                maxVal = t.GetProperty("Max", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
+            }
+
+            var byFields = new List<string>();
+            if (byVal is string singleBy && !string.IsNullOrEmpty(singleBy))
+            {
+                byFields.Add(singleBy);
+            }
+            else if (byVal != null && !(byVal is System.Collections.IDictionary) && byVal is System.Collections.IEnumerable bySeq)
+            {
+                foreach (var item in bySeq)
+                    if (item is string s && !string.IsNullOrEmpty(s)) byFields.Add(s);
+            }
+            if (byFields.Count == 0) throw new ArgumentException("GroupBy requires at least one field in 'by'.");
+
+            var resolvedByCols = new List<string>(byFields.Count);
+            foreach (var f in byFields)
+            {
+                if (An5ClientMetadata.ModelHasFields(ModelName) && !An5ClientMetadata.ModelHasField(ModelName, f))
+                    throw new ArgumentException($"Unknown field '{f}' on model '{ModelName}' in groupBy 'by'.");
+                resolvedByCols.Add(An5ClientMetadata.ResolveColumn(ModelName, f));
+            }
+
+            var countFields = ExtractAggFields(countVal, "_count", true);
+            var sumFields = ExtractAggFields(sumVal, "_sum", true);
+            var avgFields = ExtractAggFields(avgVal, "_avg", true);
+            var minFields = ExtractAggFields(minVal, "_min", true);
+            var maxFields = ExtractAggFields(maxVal, "_max", true);
+
+            var parameters = new Dictionary<string, object>();
+            int paramIdx = 0;
+            var whereSql = An5WhereBuilder.BuildWhere(whereVal, ModelName, Dialect, parameters, ref paramIdx);
+            var havingSql = An5WhereBuilder.BuildHaving(havingVal, ModelName, Dialect, resolvedByCols, parameters, ref paramIdx);
+            var orderBySql = An5WhereBuilder.BuildOrderBy(orderByVal, ModelName, Dialect);
+
+            var byCols = resolvedByCols.ConvertAll(c => An5Provider.Quote(c, Dialect));
+            var selectParts = new List<string>(byCols);
+            var includeCount = !(countVal is bool cbFalse && !cbFalse);
+            var perFieldCount = countFields.Count > 0;
+            if (includeCount) selectParts.Add("COUNT(*) AS _count");
+            foreach (var cf in countFields)
+            {
+                if (cf == "_all") continue;
+                var rc = An5ClientMetadata.ResolveColumn(ModelName, cf);
+                selectParts.Add($"COUNT({An5Provider.Quote(rc, Dialect)}) AS _count_{An5WhereBuilder.SanitizeIdentifier(cf)}");
+            }
+            foreach (var sf in sumFields)
+            {
+                var rc = An5ClientMetadata.ResolveColumn(ModelName, sf);
+                selectParts.Add($"SUM({An5Provider.Quote(rc, Dialect)}) AS _sum_{An5WhereBuilder.SanitizeIdentifier(sf)}");
+            }
+            foreach (var af in avgFields)
+            {
+                var rc = An5ClientMetadata.ResolveColumn(ModelName, af);
+                selectParts.Add($"AVG({An5Provider.Quote(rc, Dialect)}) AS _avg_{An5WhereBuilder.SanitizeIdentifier(af)}");
+            }
+            foreach (var nf in minFields)
+            {
+                var rc = An5ClientMetadata.ResolveColumn(ModelName, nf);
+                selectParts.Add($"MIN({An5Provider.Quote(rc, Dialect)}) AS _min_{An5WhereBuilder.SanitizeIdentifier(nf)}");
+            }
+            foreach (var xf in maxFields)
+            {
+                var rc = An5ClientMetadata.ResolveColumn(ModelName, xf);
+                selectParts.Add($"MAX({An5Provider.Quote(rc, Dialect)}) AS _max_{An5WhereBuilder.SanitizeIdentifier(xf)}");
+            }
+
+            var quotedTable = An5Provider.QuoteTable(TableName, Dialect);
+            var query = $"SELECT {string.Join(", ", selectParts)} FROM {quotedTable}";
+            if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+            query += $" GROUP BY {string.Join(", ", byCols)}";
+            if (!string.IsNullOrEmpty(havingSql)) query += $" HAVING {havingSql}";
+            if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+            else if (skip.HasValue || take.HasValue) query += $" ORDER BY {string.Join(", ", byCols)}";
+            if (skip.HasValue || take.HasValue)
+            {
+                if (Dialect == An5Dialect.Postgres || Dialect == An5Dialect.Sqlite)
+                {
+                    if (take.HasValue) query += $" LIMIT {take.Value}";
+                    else if (skip.HasValue) query += Dialect == An5Dialect.Sqlite ? " LIMIT -1" : " LIMIT ALL";
+                    if (skip.HasValue) query += $" OFFSET {skip.Value}";
+                }
+                else
+                {
+                    query += $" OFFSET {skip ?? 0} ROWS";
+                    if (take.HasValue) query += $" FETCH NEXT {take.Value} ROWS ONLY";
+                }
+            }
+
+            var rawRows = new List<Dictionary<string, object>>();
+            var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+            try
+            {
+                using var cmd = CreateCommand(conn, query);
+                foreach (var kvp in parameters) An5Provider.Bind(cmd, kvp.Key, kvp.Value);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var row = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        var val = reader[i];
+                        row[reader.GetName(i)] = val != DBNull.Value ? val : null;
+                    }
+                    rawRows.Add(row);
+                }
+            }
+            finally { if (!isTx) conn.Dispose(); }
+
+            var reshaped = new List<Dictionary<string, object>>(rawRows.Count);
+            foreach (var raw in rawRows)
+            {
+                var item = new Dictionary<string, object>();
+                for (int i = 0; i < byFields.Count; i++)
+                    item[byFields[i]] = raw.TryGetValue(resolvedByCols[i], out var bv) ? bv : null;
+                if (perFieldCount)
+                {
+                    var cmap = new Dictionary<string, object>();
+                    cmap["_all"] = raw.TryGetValue("_count", out var ac) && ac != null ? Convert.ToInt64(ac) : 0L;
+                    foreach (var cf in countFields)
+                    {
+                        if (cf == "_all") continue;
+                        cmap[cf] = raw.TryGetValue("_count_" + An5WhereBuilder.SanitizeIdentifier(cf), out var fc) && fc != null ? Convert.ToInt64(fc) : 0L;
+                    }
+                    item["_count"] = cmap;
+                }
+                else if (includeCount)
+                {
+                    item["_count"] = raw.TryGetValue("_count", out var ac) && ac != null ? Convert.ToInt64(ac) : 0L;
+                }
+                AddAggSectionResult(item, raw, "sum", sumFields);
+                AddAggSectionResult(item, raw, "avg", avgFields);
+                AddAggSectionResult(item, raw, "min", minFields);
+                AddAggSectionResult(item, raw, "max", maxFields);
+                reshaped.Add(item);
+            }
+            return reshaped;
+        }
+
+        private static void AddAggSectionResult(Dictionary<string, object> item, Dictionary<string, object> raw, string opKey, List<string> fields)
+        {
+            if (fields == null || fields.Count == 0) return;
+            var sub = new Dictionary<string, object>();
+            foreach (var f in fields)
+            {
+                var key = "_" + opKey + "_" + An5WhereBuilder.SanitizeIdentifier(f);
+                sub[f] = raw.TryGetValue(key, out var val) ? val : null;
+            }
+            item["_" + opKey] = sub;
+        }
+
+        private List<string> ExtractAggFields(object spec, string section, bool validateModel)
+        {
+            var result = new List<string>();
+            if (spec == null || spec is bool) return result;
+
+            var candidates = new List<string>();
+            if (spec is string single && !string.IsNullOrEmpty(single))
+            {
+                candidates.Add(single);
+            }
+            else if (spec is IDictionary<string, bool> bdict)
+            {
+                foreach (var kv in bdict) if (kv.Value) candidates.Add(kv.Key);
+            }
+            else if (spec is IDictionary<string, object> odict)
+            {
+                foreach (var kv in odict) if (kv.Value is bool b && b) candidates.Add(kv.Key);
+            }
+            else if (spec is System.Collections.IEnumerable seq)
+            {
+                foreach (var item in seq) if (item is string s && !string.IsNullOrEmpty(s)) candidates.Add(s);
+            }
+            else
+            {
+                var props = spec.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                if (props.Length == 0)
+                    throw new ArgumentException($"Unsupported '{section}' specification type '{spec.GetType().Name}'.");
+                foreach (var p in props)
+                    if (p.GetValue(spec) is bool pb && pb) candidates.Add(p.Name);
+            }
+
+            foreach (var f in candidates)
+            {
+                if (f == "_all")
+                {
+                    if (section != "_count")
+                        throw new ArgumentException($"'_all' is only valid inside '_count' aggregate, not '{section}'.");
+                    result.Add(f);
+                    continue;
+                }
+                if (validateModel && An5ClientMetadata.ModelHasFields(ModelName) && !An5ClientMetadata.ModelHasField(ModelName, f))
+                    throw new ArgumentException($"Unknown field '{f}' on model '{ModelName}' in '{section}'.");
+                result.Add(f);
+            }
+            return result;
         }
 
         private static List<double> ParseDoubleArray(string json)
@@ -2381,8 +3021,16 @@ ${(() => {
             List<string> sum = null,
             List<string> avg = null,
             List<string> min = null,
-            List<string> max = null)
-            => _table.GroupBy(by, whereClause, parameters, sum, avg, min, max);
+            List<string> max = null,
+            string havingClause = null,
+            string orderByClause = null,
+            int? skip = null,
+            int? take = null,
+            object count = null)
+            => _table.GroupBy(by, whereClause, parameters, sum, avg, min, max, havingClause, orderByClause, skip, take, count);
+
+        public List<Dictionary<string, object>> GroupBy(object args)
+            => _table.GroupBy(args);
     }
 }
 `;
