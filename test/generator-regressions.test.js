@@ -463,13 +463,20 @@ view WidgetLabel {
   new RustGenerator(rustDir).generate(models);
   const rustClient = fs.readFileSync(path.join(rustDir, 'src', 'client.rs'), 'utf8');
   assertIncludes(rustClient, 'self.db.adapter().view("WidgetLabel")');
+  assertEq((rustClient.match(/pub async fn aggregate\(/g) || []).length, 2, 'both table and view get aggregate()');
   assertEq((rustClient.match(/pub async fn create\(/g) || []).length, 1, 'only the table gets create()');
+  assertEq((rustClient.match(/pub async fn create_many\(/g) || []).length, 1, 'only the table gets create_many()');
   assertEq((rustClient.match(/pub async fn update\(/g) || []).length, 1, 'only the table gets update()');
+  assertEq((rustClient.match(/pub async fn update_many\(/g) || []).length, 1, 'only the table gets update_many()');
   assertEq((rustClient.match(/pub async fn delete\(/g) || []).length, 1, 'only the table gets delete()');
+  assertEq((rustClient.match(/pub async fn delete_many\(/g) || []).length, 1, 'only the table gets delete_many()');
+  assertEq((rustClient.match(/pub async fn upsert\(/g) || []).length, 1, 'only the table gets upsert()');
   const rustModels = fs.readFileSync(path.join(rustDir, 'src', 'models.rs'), 'utf8');
   assert.ok(!rustModels.includes('pub struct WidgetLabelCreateInput'));
   assert.ok(!rustModels.includes('pub struct WidgetLabelUpdateInput'));
   assert.ok(!rustModels.includes('pub struct WidgetLabelUpdateArgs'));
+  assert.ok(!rustModels.includes('pub struct WidgetLabelUpsertArgs'));
+  assertIncludes(rustModels, 'pub struct WidgetLabelAggregateArgs');
   assertIncludes(rustModels, 'pub struct WidgetLabelAggregateHavingInput');
   assertIncludes(rustModels, 'pub struct WidgetLabelGroupByArgs');
 
@@ -695,12 +702,18 @@ model Post {
   const filters = fs.readFileSync(path.join(outDir, 'src', 'filters.rs'), 'utf8');
   assertIncludes(filters, '#[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]');
   assertIncludes(filters, 'pub mode: Option<String>,');
+  assertIncludes(filters, 'pub not: Option<bool>,');
+  assertIncludes(filters, 'pub in_list: Vec<DateTime<Utc>>,');
+  assertIncludes(filters, 'pub not_in: Vec<DateTime<Utc>>,');
   assertIncludes(filters, 'pub struct ListRelationFilter<T>');
   assertIncludes(filters, 'pub struct RelationFilter<T>');
 
   const modelSrc = fs.readFileSync(path.join(outDir, 'src', 'models.rs'), 'utf8');
   assertIncludes(modelSrc, 'pub posts: Option<ListRelationFilter<PostWhereInput>>');
   assertIncludes(modelSrc, 'pub author: Option<RelationFilter<AuthorWhereInput>>');
+  assertIncludes(modelSrc, 'pub include: Option<serde_json::Value>,');
+  assertIncludes(modelSrc, 'pub struct AuthorAggregateArgs');
+  assertIncludes(modelSrc, 'pub struct AuthorUpsertArgs');
   assertIncludes(modelSrc, 'pub struct AuthorCountAggregateFilter');
   assertIncludes(modelSrc, 'pub struct AuthorAggregateHavingInput');
   assertIncludes(modelSrc, 'pub struct AuthorGroupByArgs');
@@ -712,6 +725,11 @@ model Post {
 
   const client = fs.readFileSync(path.join(outDir, 'src', 'client.rs'), 'utf8');
   assertIncludes(client, 'relation_map: relations');
+  assertIncludes(client, 'pub async fn aggregate(&self, args: &AuthorAggregateArgs)');
+  assertIncludes(client, 'pub async fn create_many(&self, data: &[AuthorCreateInput])');
+  assertIncludes(client, 'pub async fn update_many(&self, args: &AuthorUpdateArgs)');
+  assertIncludes(client, 'pub async fn delete_many(&self, args: &AuthorFindUniqueArgs)');
+  assertIncludes(client, 'pub async fn upsert(&self, args: &AuthorUpsertArgs)');
   assertIncludes(client, 'pub async fn group_by(&self, args: &AuthorGroupByArgs)');
 });
 

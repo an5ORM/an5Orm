@@ -238,7 +238,8 @@ testIf(hasAn5Client, 'an5Client/typescript groupBy args are model-aware', () => 
   assertExists(orderPath);
   const content = fs.readFileSync(orderPath, 'utf8');
   assertIncludes(content, "export type OrderScalarFieldEnum = 'id' | 'userId' | 'total' | 'createdAt'");
-  assertIncludes(content, 'export type OrderAggregateHavingInput = { _count?: { _all?: An5.NumberFilter | number');
+  assertIncludes(content, 'export type OrderAggregateHavingInput = { AND?: OrderAggregateHavingInput | OrderAggregateHavingInput[]');
+  assertIncludes(content, '_count?: { _all?: An5.NumberFilter | number');
   assertIncludes(content, 'export type OrderGroupByArgs = { by: OrderScalarFieldEnum | OrderScalarFieldEnum[]');
   assertIncludes(content, 'having?: OrderAggregateHavingInput');
   assertIncludes(content, '_sum?: { total?: true }');
@@ -368,7 +369,9 @@ testIf(hasAn5Client, 'an5Client/rust crate exists with models and client builder
   assertIncludes(modelsContent, 'pub struct User');
   assertIncludes(modelsContent, 'UserWhereInput');
   assertIncludes(modelsContent, 'UserFindManyArgs');
+  assertIncludes(modelsContent, 'UserAggregateArgs');
   assertIncludes(modelsContent, 'UserUpdateArgs');
+  assertIncludes(modelsContent, 'UserUpsertArgs');
   assertIncludes(modelsContent, 'UserVectorSearchArgs');
 
   // Typed, executing handles replace the old SQL-only builders.
@@ -380,7 +383,12 @@ testIf(hasAn5Client, 'an5Client/rust crate exists with models and client builder
   assertIncludes(clientContent, 'pub struct UserTable');
   assertIncludes(clientContent, 'pub async fn find_many(&self, args: &UserFindManyArgs)');
   assertIncludes(clientContent, 'pub async fn vector_search(&self, args: &UserVectorSearchArgs)');
+  assertIncludes(clientContent, 'pub async fn aggregate(&self, args: &UserAggregateArgs)');
   assertIncludes(clientContent, 'pub async fn create(&self, data: &UserCreateInput)');
+  assertIncludes(clientContent, 'pub async fn create_many(&self, data: &[UserCreateInput])');
+  assertIncludes(clientContent, 'pub async fn update_many(&self, args: &UserUpdateArgs)');
+  assertIncludes(clientContent, 'pub async fn delete_many(&self, args: &UserFindUniqueArgs)');
+  assertIncludes(clientContent, 'pub async fn upsert(&self, args: &UserUpsertArgs)');
   assertIncludes(clientContent, '.table("User")');
   assertIncludes(clientContent, 'pub fn table(&self, name: &str) -> TableClient');
 

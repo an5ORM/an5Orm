@@ -330,6 +330,12 @@ pub struct BoolFilter {
         skip_serializing_if = "Option::is_none"
     )]
     pub equals: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_option_bool_flexible",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub not: Option<bool>,
 }
 
 /// Type-safe filter for datetime fields.
@@ -348,6 +354,10 @@ pub struct DateTimeFilter {
     pub lt: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lte: Option<DateTime<Utc>>,
+    #[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]
+    pub in_list: Vec<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_in: Vec<DateTime<Utc>>,
 }
 
 /// Type-safe filter for to-many relations (\`some\` / \`none\` / \`every\`).
@@ -445,7 +455,11 @@ impl<T> Default for RelationFilter<T> {
         const relType = rel.isArray
           ? `Vec<super::models::${this.capitalize(rel.type)}>`
           : `Option<Box<super::models::${this.capitalize(rel.type)}>>`;
-        s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+        if (rel.name !== relSnake) {
+          s.push(`    #[serde(default, rename = "${rel.name}", alias = "${relSnake}", skip_serializing_if = "Option::is_none")]`);
+        } else {
+          s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+        }
         // Optional relations are always Option-wrapped for ergonomics.
         if (rel.isArray) {
           s.push(`    pub ${relSnake}: Option<${relType}>,`);
@@ -527,7 +541,7 @@ impl<T> Default for RelationFilter<T> {
         s.push(`}\n`);
       }
 
-      // FindManyArgs / FindFirstArgs / FindUniqueArgs / CountArgs
+      // FindManyArgs / FindFirstArgs / FindUniqueArgs / CountArgs / AggregateArgs
       s.push(`/// ORM-style args for ${name}.find_many().`);
       s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
       s.push(`pub struct ${name}FindManyArgs {`);
@@ -541,6 +555,8 @@ impl<T> Default for RelationFilter<T> {
       s.push(`    pub skip: i64,`);
       s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
       s.push(`    pub select: Option<Vec<String>>,`);
+      s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub include: Option<serde_json::Value>,`);
       s.push(`}\n`);
 
       s.push(`/// ORM-style args for ${name}.find_first().`);
@@ -550,13 +566,34 @@ impl<T> Default for RelationFilter<T> {
       s.push(`    pub where_: Option<${name}WhereInput>,`);
       s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
       s.push(`    pub order_by: Option<${name}OrderByInput>,`);
+      s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub select: Option<Vec<String>>,`);
+      s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub include: Option<serde_json::Value>,`);
       s.push(`}\n`);
 
-      s.push(`/// ORM-style args for ${name}.find_unique() / count() / delete().`);
+      s.push(`/// ORM-style args for ${name}.find_unique() / count() / delete() / delete_many().`);
       s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
       s.push(`pub struct ${name}FindUniqueArgs {`);
       s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
       s.push(`    pub where_: Option<${name}WhereInput>,`);
+      s.push(`}\n`);
+
+      s.push(`/// ORM-style args for ${name}.aggregate().`);
+      s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+      s.push(`pub struct ${name}AggregateArgs {`);
+      s.push(`    #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub where_: Option<${name}WhereInput>,`);
+      s.push(`    #[serde(default, rename = "_count", skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub count: Option<serde_json::Value>,`);
+      s.push(`    #[serde(default, rename = "_sum", skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub sum: Option<Vec<String>>,`);
+      s.push(`    #[serde(default, rename = "_avg", skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub avg: Option<Vec<String>>,`);
+      s.push(`    #[serde(default, rename = "_min", skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub min: Option<Vec<String>>,`);
+      s.push(`    #[serde(default, rename = "_max", skip_serializing_if = "Option::is_none")]`);
+      s.push(`    pub max: Option<Vec<String>>,`);
       s.push(`}\n`);
 
       // VectorSearchArgs mirrors the runtime's, so a caller can narrow the search.
@@ -574,15 +611,25 @@ impl<T> Default for RelationFilter<T> {
       s.push(`    pub distance_metric: String,`);
       s.push(`}\n`);
 
-      // UpdateArgs carries the typed input alongside the where clause.
+      // UpdateArgs / UpsertArgs carry the typed inputs alongside the where clause.
       if (!model.isView) {
-        s.push(`/// ORM-style args for ${name}.update().`);
+        s.push(`/// ORM-style args for ${name}.update() / update_many().`);
         s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
         s.push(`pub struct ${name}UpdateArgs {`);
         s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
         s.push(`    pub where_: Option<${name}WhereInput>,`);
         s.push(`    #[serde(default)]`);
         s.push(`    pub data: ${name}UpdateInput,`);
+        s.push(`}\n`);
+
+        s.push(`/// ORM-style args for ${name}.upsert().`);
+        s.push(`#[derive(Debug, Clone, Serialize, Deserialize)]`);
+        s.push(`pub struct ${name}UpsertArgs {`);
+        s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+        s.push(`    pub where_: Option<${name}WhereInput>,`);
+        s.push(`    pub create: ${name}CreateInput,`);
+        s.push(`    #[serde(default)]`);
+        s.push(`    pub update: ${name}UpdateInput,`);
         s.push(`}\n`);
       }
 
@@ -785,12 +832,25 @@ impl<T> Default for RelationFilter<T> {
   // ─── src/client.rs ─────────────────────────────────────────────────────────
 
   private generateClientRs(models: Model[]) {
+    const hasModels = models.length > 0;
+    const hasTables = models.some((model) => !model.isView);
+    const hasViews = models.some((model) => model.isView);
+    const adapterImports = [
+      'AdapterMetadata',
+      'An5Adapter',
+      ...(hasModels ? ['AggregateArgs', 'CountArgs', 'FindManyArgs', 'GroupByArgs'] : []),
+      ...(hasTables ? ['DeleteManyArgs', 'UpdateArgs', 'UpdateManyArgs', 'UpsertArgs'] : []),
+      'RelationDef',
+      'RowMap',
+      'TableClient',
+      ...(hasModels ? ['VectorSearchArgs'] : []),
+      ...(hasViews ? ['ViewClient'] : []),
+    ].join(', ');
     let content = `//! Typed model handles, SQL builders and vector math for the AN5 Rust client.
 //! Code generated by an5ORM. DO NOT EDIT.
 
 use an5_adapters::{
-    AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, GroupByArgs,
-    RelationDef, RowMap, TableClient, UpdateArgs, VectorSearchArgs${models.some((model) => model.isView) ? ', ViewClient' : ''},
+    ${adapterImports},
 };
 use serde::de::DeserializeOwned;
 
@@ -1028,7 +1088,7 @@ impl SqlBuilder {
     lines.push(`                take: args.take.unwrap_or(0),`);
     lines.push(`                skip: args.skip,`);
     lines.push(`                select: args.select.as_ref().map(|s| serde_json::json!(s)),`);
-    lines.push(`                ..Default::default()`);
+    lines.push(`                include: args.include.clone(),`);
     lines.push(`            })`);
     lines.push(`            .await?;`);
     lines.push(`        deserialize_rows(rows)`);
@@ -1043,7 +1103,6 @@ impl SqlBuilder {
     lines.push(`                r#where: to_value(&args.where_)?,`);
     lines.push(`                vector_field: args.vector_field.clone(),`);
     lines.push(`                distance_metric: args.distance_metric.clone(),`);
-    lines.push(`                ..Default::default()`);
     lines.push(`            })`);
     lines.push(`            .await?;`);
     lines.push(`        rows.into_iter().map(|row| {`);
@@ -1058,6 +1117,8 @@ impl SqlBuilder {
     lines.push(`            .find_first(&FindManyArgs {`);
     lines.push(`                r#where: to_value(&args.where_)?,`);
     lines.push(`                order_by: to_value(&args.order_by)?,`);
+    lines.push(`                select: args.select.as_ref().map(|s| serde_json::json!(s)),`);
+    lines.push(`                include: args.include.clone(),`);
     lines.push(`                ..Default::default()`);
     lines.push(`            })`);
     lines.push(`            .await?;`);
@@ -1083,6 +1144,19 @@ impl SqlBuilder {
     lines.push(`    pub async fn count(&self, args: &${name}FindUniqueArgs) -> Result<i64> {`);
     lines.push(`        ${reader}`);
     lines.push(`            .count(&CountArgs { r#where: to_value(&args.where_)? })`);
+    lines.push(`            .await`);
+    lines.push(`    }`);
+    lines.push(``);
+    lines.push(`    pub async fn aggregate(&self, args: &${name}AggregateArgs) -> Result<RowMap> {`);
+    lines.push(`        ${reader}`);
+    lines.push(`            .aggregate(&AggregateArgs {`);
+    lines.push(`                r#where: to_value(&args.where_)?,`);
+    lines.push(`                count: args.count.clone(),`);
+    lines.push(`                sum: args.sum.as_ref().map(|v| serde_json::json!(v)),`);
+    lines.push(`                avg: args.avg.as_ref().map(|v| serde_json::json!(v)),`);
+    lines.push(`                min: args.min.as_ref().map(|v| serde_json::json!(v)),`);
+    lines.push(`                max: args.max.as_ref().map(|v| serde_json::json!(v)),`);
+    lines.push(`            })`);
     lines.push(`            .await`);
     lines.push(`    }`);
     lines.push(``);
@@ -1117,10 +1191,28 @@ impl SqlBuilder {
       lines.push(`        deserialize_row(row)`);
       lines.push(`    }`);
       lines.push(``);
+      lines.push(`    pub async fn create_many(&self, data: &[${name}CreateInput]) -> Result<u64> {`);
+      lines.push(`        let rows = data.iter().map(to_map).collect::<Result<Vec<_>>>()?;`);
+      lines.push(`        self.db`);
+      lines.push(`            .table("${model.name}")`);
+      lines.push(`            .create_many(&rows)`);
+      lines.push(`            .await`);
+      lines.push(`    }`);
+      lines.push(``);
       lines.push(`    pub async fn update(&self, args: &${name}UpdateArgs) -> Result<u64> {`);
       lines.push(`        self.db`);
       lines.push(`            .table("${model.name}")`);
       lines.push(`            .update(&UpdateArgs {`);
+      lines.push(`                r#where: to_value(&args.where_)?,`);
+      lines.push(`                data: serde_json::to_value(&args.data)?,`);
+      lines.push(`            })`);
+      lines.push(`            .await`);
+      lines.push(`    }`);
+      lines.push(``);
+      lines.push(`    pub async fn update_many(&self, args: &${name}UpdateArgs) -> Result<u64> {`);
+      lines.push(`        self.db`);
+      lines.push(`            .table("${model.name}")`);
+      lines.push(`            .update_many(&UpdateManyArgs {`);
       lines.push(`                r#where: to_value(&args.where_)?,`);
       lines.push(`                data: serde_json::to_value(&args.data)?,`);
       lines.push(`            })`);
@@ -1132,6 +1224,26 @@ impl SqlBuilder {
       lines.push(`            .table("${model.name}")`);
       lines.push(`            .delete_many(&DeleteManyArgs { r#where: to_value(&args.where_)? })`);
       lines.push(`            .await`);
+      lines.push(`    }`);
+      lines.push(``);
+      lines.push(`    pub async fn delete_many(&self, args: &${name}FindUniqueArgs) -> Result<u64> {`);
+      lines.push(`        self.db`);
+      lines.push(`            .table("${model.name}")`);
+      lines.push(`            .delete_many(&DeleteManyArgs { r#where: to_value(&args.where_)? })`);
+      lines.push(`            .await`);
+      lines.push(`    }`);
+      lines.push(``);
+      lines.push(`    pub async fn upsert(&self, args: &${name}UpsertArgs) -> Result<${name}> {`);
+      lines.push(`        let row = self`);
+      lines.push(`            .db`);
+      lines.push(`            .table("${model.name}")`);
+      lines.push(`            .upsert(&UpsertArgs {`);
+      lines.push(`                r#where: to_value(&args.where_)?,`);
+      lines.push(`                create: to_map(&args.create)?,`);
+      lines.push(`                update: serde_json::to_value(&args.update)?,`);
+      lines.push(`            })`);
+      lines.push(`            .await?;`);
+      lines.push(`        deserialize_row(row)`);
       lines.push(`    }`);
     }
     lines.push(`}`);
