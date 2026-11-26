@@ -73,7 +73,7 @@ class PythonGenerator {
         content += 'from datetime import datetime\n\n';
         // Base filter types
         content += '# ─── Base filter types ────────────────────────────────────────────────────────\n\n';
-        content += `@dataclass\nclass StringFilter:\n    """Type-safe filter for string fields."""\n    equals: Optional[str] = None\n    not_: Optional[str] = None\n    contains: Optional[str] = None\n    starts_with: Optional[str] = None\n    ends_with: Optional[str] = None\n    in_: Optional[List[str]] = None\n    not_in: Optional[List[str]] = None\n    gt: Optional[str] = None\n    gte: Optional[str] = None\n    lt: Optional[str] = None\n    lte: Optional[str] = None\n\n`;
+        content += `@dataclass\nclass StringFilter:\n    """Type-safe filter for string fields."""\n    equals: Optional[str] = None\n    not_: Optional[str] = None\n    contains: Optional[str] = None\n    starts_with: Optional[str] = None\n    ends_with: Optional[str] = None\n    in_: Optional[List[str]] = None\n    not_in: Optional[List[str]] = None\n    gt: Optional[str] = None\n    gte: Optional[str] = None\n    lt: Optional[str] = None\n    lte: Optional[str] = None\n    mode: Optional[str] = None\n\n`;
         content += `@dataclass\nclass IntFilter:\n    """Type-safe filter for integer fields."""\n    equals: Optional[int] = None\n    not_: Optional[int] = None\n    in_: Optional[List[int]] = None\n    not_in: Optional[List[int]] = None\n    gt: Optional[int] = None\n    gte: Optional[int] = None\n    lt: Optional[int] = None\n    lte: Optional[int] = None\n\n`;
         content += `@dataclass\nclass NumberFilter:\n    """Type-safe filter for float/decimal fields."""\n    equals: Optional[float] = None\n    not_: Optional[float] = None\n    in_: Optional[List[float]] = None\n    not_in: Optional[List[float]] = None\n    gt: Optional[float] = None\n    gte: Optional[float] = None\n    lt: Optional[float] = None\n    lte: Optional[float] = None\n\n`;
         content += `@dataclass\nclass BoolFilter:\n    """Type-safe filter for boolean fields."""\n    equals: Optional[bool] = None\n    not_: Optional[bool] = None\n\n`;
@@ -142,6 +142,33 @@ class PythonGenerator {
             content += `    order_by: Optional[${name}OrderByInput] = None\n`;
             content += `    select: Optional[Union[List[str], Dict[str, Any]]] = None\n`;
             content += `    include: Optional[Dict[str, Any]] = None\n\n`;
+            // AggregateHavingInput
+            content += `@dataclass\nclass ${name}AggregateHavingInput:\n    """Type-safe HAVING filter for ${name}.group_by() queries."""\n`;
+            content += `    AND: Optional[Union['${name}AggregateHavingInput', List['${name}AggregateHavingInput']]] = None\n`;
+            content += `    OR: Optional[List['${name}AggregateHavingInput']] = None\n`;
+            content += `    NOT: Optional[Union['${name}AggregateHavingInput', List['${name}AggregateHavingInput']]] = None\n`;
+            for (const f of model.fields) {
+                const ft = this.getPyWhereFieldType(f);
+                content += `    ${this.toSnakeCase(f.name)}: Optional[${ft}] = None\n`;
+            }
+            content += `    _count: Optional[Dict[str, Union[int, IntFilter, NumberFilter, Dict[str, Any]]]] = None\n`;
+            content += `    _sum: Optional[Dict[str, Union[int, float, IntFilter, NumberFilter, Dict[str, Any]]]] = None\n`;
+            content += `    _avg: Optional[Dict[str, Union[int, float, IntFilter, NumberFilter, Dict[str, Any]]]] = None\n`;
+            content += `    _min: Optional[Dict[str, Any]] = None\n`;
+            content += `    _max: Optional[Dict[str, Any]] = None\n\n`;
+            // GroupByArgs
+            content += `@dataclass\nclass ${name}GroupByArgs:\n    """ORM-style args for ${name}.group_by()."""\n`;
+            content += `    by: Union[str, List[str]]\n`;
+            content += `    where: Optional[${name}WhereInput] = None\n`;
+            content += `    having: Optional[${name}AggregateHavingInput] = None\n`;
+            content += `    order_by: Optional[Union[${name}OrderByInput, List[${name}OrderByInput]]] = None\n`;
+            content += `    skip: int = 0\n`;
+            content += `    take: Optional[int] = None\n`;
+            content += `    _count: Optional[Union[bool, str, List[str], Dict[str, bool]]] = None\n`;
+            content += `    _sum: Optional[Union[str, List[str], Dict[str, bool]]] = None\n`;
+            content += `    _avg: Optional[Union[str, List[str], Dict[str, bool]]] = None\n`;
+            content += `    _min: Optional[Union[str, List[str], Dict[str, bool]]] = None\n`;
+            content += `    _max: Optional[Union[str, List[str], Dict[str, bool]]] = None\n\n`;
         }
         fs_1.default.writeFileSync(path_1.default.join(outputDir, 'an5_orm_types.py'), content);
     }
@@ -390,7 +417,10 @@ class PythonGenerator {
         for (const m of models) {
             const name = this.capitalize(m.name);
             content += `    ${name}WhereInput, ${name}OrderByInput,\n`;
-            content += `    ${name}CreateInput, ${name}UpdateInput,\n`;
+            if (!m.isView) {
+                content += `    ${name}CreateInput, ${name}UpdateInput,\n`;
+            }
+            content += `    ${name}AggregateHavingInput, ${name}GroupByArgs,\n`;
             content += `    ${name}FindManyArgs, ${name}FindFirstArgs,\n`;
         }
         content += ')\n';
@@ -406,7 +436,10 @@ class PythonGenerator {
             const name = this.capitalize(m.name);
             content += `    "${m.name}",\n`;
             content += `    "${name}WhereInput", "${name}OrderByInput",\n`;
-            content += `    "${name}CreateInput", "${name}UpdateInput",\n`;
+            if (!m.isView) {
+                content += `    "${name}CreateInput", "${name}UpdateInput",\n`;
+            }
+            content += `    "${name}AggregateHavingInput", "${name}GroupByArgs",\n`;
             content += `    "${name}FindManyArgs", "${name}FindFirstArgs",\n`;
         }
         content += ']\n';

@@ -373,6 +373,12 @@ view WidgetLabel {
     !client.includes('AdapterTableClient(self.adapter, "WidgetLabel")'),
     'a view must not be wired to the writable table client',
   );
+  const viewInit = fs.readFileSync(path.join(outDir, '__init__.py'), 'utf8');
+  assert.ok(
+    !viewInit.includes('WidgetLabelCreateInput'),
+    'a view must not import missing CreateInput from an5_orm_types',
+  );
+  assertIncludes(viewInit, 'WidgetLabelAggregateHavingInput, WidgetLabelGroupByArgs');
 
   const types = fs.readFileSync(path.join(outDir, 'an5_orm_types.py'), 'utf8');
   assert.ok(!types.includes('class WidgetLabelCreateInput'), 'a view must not expose a create input');
@@ -625,15 +631,21 @@ model Post {
   const types = fs.readFileSync(path.join(outDir, 'an5_orm_types.py'), 'utf8');
   assertIncludes(types, 'from typing import Dict, List, Optional, Any, Union');
   assertIncludes(types, 'class BoolFilter:');
+  assertIncludes(types, '    mode: Optional[str] = None');
   assertIncludes(types, '    not_: Optional[bool] = None');
   assertIncludes(types, '    NOT: Optional[Union[\'AuthorWhereInput\', List[\'AuthorWhereInput\']]] = None');
   assertIncludes(types, '    email: Optional[Union[str, StringFilter]] = None');
   assertIncludes(types, '    is_active: Optional[Union[bool, BoolFilter]] = None');
   assertIncludes(types, '    created_at: Optional[Union[datetime, str, DateTimeFilter]] = None');
   assertIncludes(types, '    posts: Optional[Dict[str, Any]] = None');
+  assertIncludes(types, 'class AuthorAggregateHavingInput:');
+  assertIncludes(types, 'class AuthorGroupByArgs:');
   assertIncludes(types, '    select: Optional[Union[List[str], Dict[str, Any]]] = None');
   assertIncludes(types, '    include: Optional[Dict[str, Any]] = None');
   assertIncludes(types, 'UserWhereInput(name=StringFilter(contains="John"))');
+
+  const initPy = fs.readFileSync(path.join(outDir, '__init__.py'), 'utf8');
+  assertIncludes(initPy, 'AuthorAggregateHavingInput, AuthorGroupByArgs');
 
   const client = fs.readFileSync(path.join(outDir, 'an5_client.py'), 'utf8');
   assertIncludes(client, 'snake_case aliases');
