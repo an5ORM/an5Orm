@@ -877,6 +877,8 @@ model Post {
   assertIncludes(indexTs, 'export type QueryMode = BaseAn5.QueryMode;');
   assertIncludes(indexTs, 'export type ListRelationFilter<T> = BaseAn5.ListRelationFilter<T>;');
   assertIncludes(indexTs, 'export type RelationFilter<T> = BaseAn5.RelationFilter<T>;');
+  assertIncludes(authorTs, 'export type AuthorAggregateHavingInput = { AND?: AuthorAggregateHavingInput | AuthorAggregateHavingInput[]; OR?: AuthorAggregateHavingInput[]; NOT?: AuthorAggregateHavingInput | AuthorAggregateHavingInput[];');
+  assertIncludes(postTs, 'authorId?: string | An5.StringFilter;');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
