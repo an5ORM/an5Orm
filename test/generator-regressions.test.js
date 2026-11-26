@@ -495,6 +495,10 @@ view WidgetLabel {
   assertIncludes(kotlinDb, 'val widgetLabel: ViewClient<WidgetLabel> =');
   assertIncludes(kotlinDb, 'ViewClient(an5.view("WidgetLabel"), WidgetLabel::fromRow)');
   assert.ok(!kotlinDb.includes('ModelClient(an5.table("WidgetLabel")'));
+  assertIncludes(kotlinDb, 'fun groupBy(builder: An5Orm.GroupByBuilder): List<Row> = delegate.groupBy(builder.build())');
+  const kotlinViewTypes = fs.readFileSync(path.join(kotlinDir, 'An5OrmTypes.kt'), 'utf8');
+  assertIncludes(kotlinViewTypes, 'data class WidgetLabelAggregateHaving(');
+  assertIncludes(kotlinViewTypes, 'class WidgetLabelGroupBy : GroupByBuilder');
 
   // Swift: SwiftPM sees the runtime's ViewClient, so the typed wrapper has another name.
   const swiftDir = path.join(tmpRoot, 'swift-view');
@@ -811,10 +815,21 @@ model Post {
   new KotlinGenerator(kotlinDir).generate(models);
   const kotlinTypes = fs.readFileSync(path.join(kotlinDir, 'An5OrmTypes.kt'), 'utf8');
   assertIncludes(kotlinTypes, 'interface WhereBuilder');
+  assertIncludes(kotlinTypes, 'interface HavingBuilder');
+  assertIncludes(kotlinTypes, 'interface GroupByBuilder');
+  assertIncludes(kotlinTypes, 'val mode: String? = null');
+  assertIncludes(kotlinTypes, 'fun insensitive() = copy(mode = "insensitive")');
   assertIncludes(kotlinTypes, 'class ListRelationFilter<T : WhereBuilder>');
   assertIncludes(kotlinTypes, 'class RelationFilter<T : WhereBuilder>');
   assertIncludes(kotlinTypes, 'val posts: ListRelationFilter<PostWhere>? = null');
   assertIncludes(kotlinTypes, 'val author: RelationFilter<AuthorWhere>? = null');
+  assertIncludes(kotlinTypes, 'data class AuthorCountAggregateFilter(');
+  assertIncludes(kotlinTypes, 'class AuthorNumericAggregateFilter');
+  assertIncludes(kotlinTypes, 'data class AuthorScalarAggregateFilter(');
+  assertIncludes(kotlinTypes, 'data class AuthorAggregateHaving(');
+  assertIncludes(kotlinTypes, 'class AuthorGroupBy : GroupByBuilder');
+  const kotlinDb = fs.readFileSync(path.join(kotlinDir, 'An5Db.kt'), 'utf8');
+  assertIncludes(kotlinDb, 'fun groupBy(builder: An5Orm.GroupByBuilder): List<Row> = delegate.groupBy(builder.build())');
   const kotlinMeta = fs.readFileSync(path.join(kotlinDir, 'An5Metadata.kt'), 'utf8');
   assertIncludes(kotlinMeta, '"posts" to relation("Post", "many", "authorId", "id")');
   assertIncludes(kotlinMeta, '"author" to relation("Author", "one", "authorId", "id")');

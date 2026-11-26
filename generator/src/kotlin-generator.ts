@@ -308,7 +308,9 @@ private inline fun buildValues(block: MutableMap<String, Any?>.() -> Unit): Valu
 
 package an5.client
 
+import an5.adapters.AggregateBuilder
 import an5.adapters.QueryBuilder
+import an5.adapters.Sort
 import an5.adapters.Where
 import an5.adapters.andOf
 import an5.adapters.notOf
@@ -332,7 +334,18 @@ object An5Orm {
         val contains: String? = null,
         val startsWith: String? = null,
         val endsWith: String? = null,
+        val mode: String? = null,
     ) {
+        /** Sets the match mode (\`"default"\` or \`"insensitive"\`). */
+        fun mode(value: String) = copy(mode = value)
+
+        /** Marks this string filter case-insensitive (\`mode = "insensitive"\`). */
+        fun insensitive() = copy(mode = "insensitive")
+
+        fun inList(values: List<String>) = copy(\`in\` = values)
+
+        fun notInList(values: List<String>) = copy(notIn = values)
+
         /** The filter as the runtime reads it, with every unset operator left out. */
         fun build(): Where = operatorMap {
             equals?.let { put("equals", it) }
@@ -342,6 +355,7 @@ object An5Orm {
             contains?.let { put("contains", it) }
             startsWith?.let { put("startsWith", it) }
             endsWith?.let { put("endsWith", it) }
+            mode?.let { put("mode", it) }
         }
 
         companion object {
@@ -353,6 +367,18 @@ object An5Orm {
 
             /** The column contains [value]. */
             fun has(value: String) = StringFilter(contains = value)
+
+            /** The column starts with [value]. */
+            fun starts(value: String) = StringFilter(startsWith = value)
+
+            /** The column ends with [value]. */
+            fun ends(value: String) = StringFilter(endsWith = value)
+
+            /** The column matches any value in [values]. */
+            fun inList(values: List<String>) = StringFilter(\`in\` = values)
+
+            /** The column matches no value in [values]. */
+            fun notInList(values: List<String>) = StringFilter(notIn = values)
         }
     }
 
@@ -367,6 +393,10 @@ object An5Orm {
         val lt: Number? = null,
         val lte: Number? = null,
     ) {
+        fun inList(values: List<Number>) = copy(\`in\` = values)
+
+        fun notInList(values: List<Number>) = copy(notIn = values)
+
         fun build(): Where = operatorMap {
             equals?.let { put("equals", it) }
             not?.let { put("not", it) }
@@ -383,6 +413,10 @@ object An5Orm {
             fun isNot(value: Number) = NumberFilter(not = value)
             fun atLeast(value: Number) = NumberFilter(gte = value)
             fun atMost(value: Number) = NumberFilter(lte = value)
+            fun greater(value: Number) = NumberFilter(gt = value)
+            fun less(value: Number) = NumberFilter(lt = value)
+            fun inList(values: List<Number>) = NumberFilter(\`in\` = values)
+            fun notInList(values: List<Number>) = NumberFilter(notIn = values)
         }
     }
 
@@ -395,6 +429,7 @@ object An5Orm {
 
         companion object {
             fun \`is\`(value: Boolean) = BoolFilter(equals = value)
+            fun isNot(value: Boolean) = BoolFilter(not = value)
         }
     }
 
@@ -436,6 +471,16 @@ object An5Orm {
     /** Common interface implemented by generated model \`WHERE\` builders. */
     interface WhereBuilder {
         fun build(): Where
+    }
+
+    /** Common interface implemented by generated model \`HAVING\` builders. */
+    interface HavingBuilder {
+        fun build(): Where
+    }
+
+    /** Common interface implemented by generated model \`groupBy\` builders. */
+    interface GroupByBuilder {
+        fun build(): AggregateBuilder
     }
 
     /** A filter on a to-many relation (\`some\`, \`none\`, \`every\`). */
@@ -484,6 +529,59 @@ object An5Orm {
         ...model.fields.map((field) => `            ${this.property(field.name)}?.let { put("${field.name}", it.build()) }`),
         ...model.relations.map((rel) => `            ${this.property(rel.name)}?.let { put("${rel.name}", it.build()) }`),
       ];
+      const countFilterParams = [
+        `        val _all: NumberFilter? = null,`,
+        ...model.fields.map((field) => `        val ${this.property(field.name)}: NumberFilter? = null,`),
+      ];
+      const countFilterLines = [
+        `            _all?.let { put("_all", it.build()) }`,
+        ...model.fields.map((field) => `            ${this.property(field.name)}?.let { put("${field.name}", it.build()) }`),
+      ];
+      const numericFields = model.fields.filter((field) => {
+        const kind = fieldKind(field, this.provider);
+        return kind === 'int' || kind === 'bigint' || kind === 'float';
+      });
+      const numericParams = numericFields.map((field) => `        val ${this.property(field.name)}: NumberFilter? = null,`);
+      const numericBuildLines = numericFields.map(
+        (field) => `            ${this.property(field.name)}?.let { put("${field.name}", it.build()) }`
+      );
+      const scalarParams = model.fields.map(
+        (field) => `        val ${this.property(field.name)}: ${this.filterType(field)}? = null,`
+      );
+      const scalarBuildLines = model.fields.map(
+        (field) => `            ${this.property(field.name)}?.let { put("${field.name}", it.build()) }`
+      );
+      const numericAggregateClass =
+        numericParams.length > 0
+          ? `    /** Numeric aggregate filter (\`_sum\`/\`_avg\`) for ${name}.groupBy() HAVING clauses. */
+    data class ${name}NumericAggregateFilter(
+${numericParams.join('\n')}
+    ) {
+        fun build(): Where = operatorMap {
+${numericBuildLines.join('\n')}
+        }
+    }`
+          : `    /** Numeric aggregate filter (\`_sum\`/\`_avg\`) for ${name}.groupBy() HAVING clauses. */
+    class ${name}NumericAggregateFilter {
+        fun build(): Where = emptyMap()
+    }`;
+      const scalarAggregateClass =
+        scalarParams.length > 0
+          ? `    /** Scalar aggregate filter (\`_min\`/\`_max\`) for ${name}.groupBy() HAVING clauses. */
+    data class ${name}ScalarAggregateFilter(
+${scalarParams.join('\n')}
+    ) {
+        fun build(): Where = operatorMap {
+${scalarBuildLines.join('\n')}
+        }
+    }`
+          : `    /** Scalar aggregate filter (\`_min\`/\`_max\`) for ${name}.groupBy() HAVING clauses. */
+    class ${name}ScalarAggregateFilter {
+        fun build(): Where = emptyMap()
+    }`;
+      const havingScalarParams = scalarParams.length > 0 ? `\n${scalarParams.join('\n')}` : '';
+      const havingScalarBuild = scalarBuildLines.length > 0 ? `\n${scalarBuildLines.join('\n')}` : '';
+
       content += `
     /** A \`WHERE\` for ${name}. Unset filters are left out. */
     data class ${name}Where(
@@ -522,6 +620,91 @@ ${buildLines.join('\n')}
 
         /** The sort as the runtime reads it. */
         fun build(): List<Map<String, String>> = entries
+    }
+
+    /** Count aggregate filter for ${name}.groupBy() HAVING clauses. */
+    data class ${name}CountAggregateFilter(
+${countFilterParams.join('\n')}
+    ) {
+        fun build(): Where = operatorMap {
+${countFilterLines.join('\n')}
+        }
+    }
+
+${numericAggregateClass}
+
+${scalarAggregateClass}
+
+    /** Type-safe \`HAVING\` builder for ${name}.groupBy() queries. */
+    data class ${name}AggregateHaving(
+        val and: List<${name}AggregateHaving>? = null,
+        val or: List<${name}AggregateHaving>? = null,
+        val not: List<${name}AggregateHaving>? = null,
+        val _count: ${name}CountAggregateFilter? = null,
+        val _sum: ${name}NumericAggregateFilter? = null,
+        val _avg: ${name}NumericAggregateFilter? = null,
+        val _min: ${name}ScalarAggregateFilter? = null,
+        val _max: ${name}ScalarAggregateFilter? = null,${havingScalarParams}
+    ) : HavingBuilder {
+        override fun build(): Where = operatorMap {
+            and?.let { put("AND", it.map { clause -> clause.build() }) }
+            or?.let { put("OR", it.map { clause -> clause.build() }) }
+            not?.let { put("NOT", it.map { clause -> clause.build() }) }
+            _count?.let { put("_count", it.build()) }
+            _sum?.let { put("_sum", it.build()) }
+            _avg?.let { put("_avg", it.build()) }
+            _min?.let { put("_min", it.build()) }
+            _max?.let { put("_max", it.build()) }${havingScalarBuild}
+        }
+
+        companion object {
+            /** All of [clauses]; an empty list matches everything. */
+            fun andOf(vararg clauses: ${name}AggregateHaving) = ${name}AggregateHaving(and = clauses.toList())
+
+            /** Any of [clauses]; an empty list matches nothing. */
+            fun orOf(vararg clauses: ${name}AggregateHaving) = ${name}AggregateHaving(or = clauses.toList())
+
+            /** None of [clauses]; an empty list matches everything. */
+            fun notOf(vararg clauses: ${name}AggregateHaving) = ${name}AggregateHaving(not = clauses.toList())
+        }
+    }
+
+    /** Type-safe \`groupBy\` builder for ${name}. */
+    class ${name}GroupBy : GroupByBuilder {
+        private val builder = AggregateBuilder()
+
+        fun by(vararg columns: String): ${name}GroupBy = apply { builder.groupedBy(*columns) }
+
+        fun where(filter: ${name}Where): ${name}GroupBy = apply { builder.where(filter.build()) }
+
+        fun where(filter: Where): ${name}GroupBy = apply { builder.where(filter) }
+
+        fun having(filter: ${name}AggregateHaving): ${name}GroupBy = apply { builder.having(filter.build()) }
+
+        fun having(filter: Where): ${name}GroupBy = apply { builder.having(filter) }
+
+        fun orderBy(order: ${name}OrderBy): ${name}GroupBy = apply { builder.orderBy(order.build()) }
+
+        fun orderBy(column: String, direction: Sort = Sort.ASC): ${name}GroupBy =
+            apply { builder.orderBy(column, direction) }
+
+        fun skip(count: Int): ${name}GroupBy = apply { builder.skip(count) }
+
+        fun take(count: Int?): ${name}GroupBy = apply { builder.take(count) }
+
+        fun count(): ${name}GroupBy = apply { builder.count() }
+
+        fun count(vararg columns: String): ${name}GroupBy = apply { builder.count(*columns) }
+
+        fun sum(vararg columns: String): ${name}GroupBy = apply { builder.sum(*columns) }
+
+        fun avg(vararg columns: String): ${name}GroupBy = apply { builder.avg(*columns) }
+
+        fun min(vararg columns: String): ${name}GroupBy = apply { builder.min(*columns) }
+
+        fun max(vararg columns: String): ${name}GroupBy = apply { builder.max(*columns) }
+
+        override fun build(): AggregateBuilder = builder
     }
 `;
     }
@@ -742,6 +925,9 @@ class ModelClient<T : Any>(
     fun groupBy(vararg by: String, block: AggregateBuilder.() -> Unit = {}): List<Row> =
         delegate.groupBy(*by, block = block)
 
+    /** One row per group built through a typed [An5Orm.GroupByBuilder]. */
+    fun groupBy(builder: An5Orm.GroupByBuilder): List<Row> = delegate.groupBy(builder.build())
+
     /** The rows nearest [vector]. */
     fun vectorSearch(
         vector: DoubleArray,
@@ -782,6 +968,9 @@ class ViewClient<T : Any>(
     /** One row per group, each carrying the group's count and aggregates. */
     fun groupBy(vararg by: String, block: AggregateBuilder.() -> Unit = {}): List<Row> =
         delegate.groupBy(*by, block = block)
+
+    /** One row per group built through a typed [An5Orm.GroupByBuilder]. */
+    fun groupBy(builder: An5Orm.GroupByBuilder): List<Row> = delegate.groupBy(builder.build())
 
     /** The rows nearest [vector]. */
     fun vectorSearch(
