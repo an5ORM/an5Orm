@@ -467,6 +467,8 @@ view WidgetLabel {
   assert.ok(!rustModels.includes('pub struct WidgetLabelCreateInput'));
   assert.ok(!rustModels.includes('pub struct WidgetLabelUpdateInput'));
   assert.ok(!rustModels.includes('pub struct WidgetLabelUpdateArgs'));
+  assertIncludes(rustModels, 'pub struct WidgetLabelAggregateHavingInput');
+  assertIncludes(rustModels, 'pub struct WidgetLabelGroupByArgs');
 
   // Java: a separate typed ViewClient.
   const javaDir = path.join(tmpRoot, 'java-view');
@@ -677,12 +679,16 @@ model Post {
 
   const filters = fs.readFileSync(path.join(outDir, 'src', 'filters.rs'), 'utf8');
   assertIncludes(filters, '#[serde(default, rename = "in", skip_serializing_if = "Vec::is_empty")]');
+  assertIncludes(filters, 'pub mode: Option<String>,');
   assertIncludes(filters, 'pub struct ListRelationFilter<T>');
   assertIncludes(filters, 'pub struct RelationFilter<T>');
 
   const modelSrc = fs.readFileSync(path.join(outDir, 'src', 'models.rs'), 'utf8');
   assertIncludes(modelSrc, 'pub posts: Option<ListRelationFilter<PostWhereInput>>');
   assertIncludes(modelSrc, 'pub author: Option<RelationFilter<AuthorWhereInput>>');
+  assertIncludes(modelSrc, 'pub struct AuthorCountAggregateFilter');
+  assertIncludes(modelSrc, 'pub struct AuthorAggregateHavingInput');
+  assertIncludes(modelSrc, 'pub struct AuthorGroupByArgs');
 
   const meta = fs.readFileSync(path.join(outDir, 'src', 'metadata.rs'), 'utf8');
   assertIncludes(meta, 'pub fn relation_map()');
@@ -691,6 +697,7 @@ model Post {
 
   const client = fs.readFileSync(path.join(outDir, 'src', 'client.rs'), 'utf8');
   assertIncludes(client, 'relation_map: relations');
+  assertIncludes(client, 'pub async fn group_by(&self, args: &AuthorGroupByArgs)');
 });
 
 test("Swift generator emits ListRelationFilter, RelationFilter, relationType metadata, and NSNull equality", async () => {

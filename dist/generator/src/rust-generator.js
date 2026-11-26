@@ -221,6 +221,8 @@ pub struct StringFilter {
     pub in_list: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_in: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 /// Type-safe filter for integer fields.
@@ -571,6 +573,96 @@ impl<T> Default for RelationFilter<T> {
                 s.push(`    pub data: ${name}UpdateInput,`);
                 s.push(`}\n`);
             }
+            // AggregateHavingInput filter structs + GroupByArgs
+            s.push(`/// Filters COUNT aggregates in ${name}.group_by() HAVING clauses.`);
+            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+            s.push(`pub struct ${name}CountAggregateFilter {`);
+            s.push(`    #[serde(default, rename = "_all", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub all: Option<IntFilter>,`);
+            for (const f of model.fields) {
+                const snake = this.toSnakeCase(f.name);
+                if (snake !== 'all') {
+                    s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                    s.push(`    pub ${snake}: Option<IntFilter>,`);
+                }
+            }
+            s.push(`}\n`);
+            s.push(`/// Filters SUM/AVG aggregates in ${name}.group_by() HAVING clauses.`);
+            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+            s.push(`pub struct ${name}NumericAggregateFilter {`);
+            for (const f of model.fields) {
+                const kind = (0, type_kinds_1.fieldKind)(f, this.provider);
+                if (kind === 'int' || kind === 'bigint' || kind === 'float') {
+                    const snake = this.toSnakeCase(f.name);
+                    s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                    s.push(`    pub ${snake}: Option<NumberFilter>,`);
+                }
+            }
+            s.push(`}\n`);
+            s.push(`/// Filters MIN/MAX aggregates in ${name}.group_by() HAVING clauses.`);
+            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+            s.push(`pub struct ${name}ScalarAggregateFilter {`);
+            for (const f of model.fields) {
+                const snake = this.toSnakeCase(f.name);
+                const ft = this.getRustFilterType(f);
+                s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                s.push(`    pub ${snake}: Option<${ft}>,`);
+            }
+            s.push(`}\n`);
+            const reservedHaving = new Set(['and', 'or', 'not', 'count', 'sum', 'avg', 'min', 'max']);
+            s.push(`/// Type-safe HAVING filter for ${name}.group_by() queries.`);
+            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+            s.push(`pub struct ${name}AggregateHavingInput {`);
+            s.push(`    #[serde(default, rename = "AND", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub and: Option<Vec<${name}AggregateHavingInput>>,`);
+            s.push(`    #[serde(default, rename = "OR", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub or: Option<Vec<${name}AggregateHavingInput>>,`);
+            s.push(`    #[serde(default, rename = "NOT", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub not: Option<Box<${name}AggregateHavingInput>>,`);
+            for (const f of model.fields) {
+                const snake = this.toSnakeCase(f.name);
+                if (!reservedHaving.has(snake)) {
+                    const ft = this.getRustFilterType(f);
+                    s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+                    s.push(`    pub ${snake}: Option<${ft}>,`);
+                }
+            }
+            s.push(`    #[serde(default, rename = "_count", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub count: Option<${name}CountAggregateFilter>,`);
+            s.push(`    #[serde(default, rename = "_sum", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub sum: Option<${name}NumericAggregateFilter>,`);
+            s.push(`    #[serde(default, rename = "_avg", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub avg: Option<${name}NumericAggregateFilter>,`);
+            s.push(`    #[serde(default, rename = "_min", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub min: Option<${name}ScalarAggregateFilter>,`);
+            s.push(`    #[serde(default, rename = "_max", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub max: Option<${name}ScalarAggregateFilter>,`);
+            s.push(`}\n`);
+            s.push(`/// ORM-style args for ${name}.group_by().`);
+            s.push(`#[derive(Debug, Clone, Default, Serialize, Deserialize)]`);
+            s.push(`pub struct ${name}GroupByArgs {`);
+            s.push(`    pub by: Vec<String>,`);
+            s.push(`    #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub where_: Option<${name}WhereInput>,`);
+            s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub having: Option<${name}AggregateHavingInput>,`);
+            s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub order_by: Option<${name}OrderByInput>,`);
+            s.push(`    #[serde(default, skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub take: Option<i64>,`);
+            s.push(`    #[serde(default)]`);
+            s.push(`    pub skip: i64,`);
+            s.push(`    #[serde(default, rename = "_count", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub count: Option<serde_json::Value>,`);
+            s.push(`    #[serde(default, rename = "_sum", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub sum: Option<Vec<String>>,`);
+            s.push(`    #[serde(default, rename = "_avg", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub avg: Option<Vec<String>>,`);
+            s.push(`    #[serde(default, rename = "_min", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub min: Option<Vec<String>>,`);
+            s.push(`    #[serde(default, rename = "_max", skip_serializing_if = "Option::is_none")]`);
+            s.push(`    pub max: Option<Vec<String>>,`);
+            s.push(`}\n`);
         }
         return s.join('\n') + '\n';
     }
@@ -677,8 +769,8 @@ impl<T> Default for RelationFilter<T> {
 //! Code generated by an5ORM. DO NOT EDIT.
 
 use an5_adapters::{
-    AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, RelationDef, RowMap,
-    TableClient, UpdateArgs, VectorSearchArgs${models.some((model) => model.isView) ? ', ViewClient' : ''},
+    AdapterMetadata, An5Adapter, CountArgs, DeleteManyArgs, FindManyArgs, GroupByArgs,
+    RelationDef, RowMap, TableClient, UpdateArgs, VectorSearchArgs${models.some((model) => model.isView) ? ', ViewClient' : ''},
 };
 use serde::de::DeserializeOwned;
 
@@ -969,6 +1061,24 @@ impl SqlBuilder {
         lines.push(`    pub async fn count(&self, args: &${name}FindUniqueArgs) -> Result<i64> {`);
         lines.push(`        ${reader}`);
         lines.push(`            .count(&CountArgs { r#where: to_value(&args.where_)? })`);
+        lines.push(`            .await`);
+        lines.push(`    }`);
+        lines.push(``);
+        lines.push(`    pub async fn group_by(&self, args: &${name}GroupByArgs) -> Result<Vec<RowMap>> {`);
+        lines.push(`        ${reader}`);
+        lines.push(`            .group_by(&GroupByArgs {`);
+        lines.push(`                by: Some(serde_json::json!(args.by)),`);
+        lines.push(`                r#where: to_value(&args.where_)?,`);
+        lines.push(`                having: to_value(&args.having)?,`);
+        lines.push(`                order_by: to_value(&args.order_by)?,`);
+        lines.push(`                take: args.take.unwrap_or(0),`);
+        lines.push(`                skip: args.skip,`);
+        lines.push(`                count: args.count.clone(),`);
+        lines.push(`                sum: args.sum.as_ref().map(|v| serde_json::json!(v)),`);
+        lines.push(`                avg: args.avg.as_ref().map(|v| serde_json::json!(v)),`);
+        lines.push(`                min: args.min.as_ref().map(|v| serde_json::json!(v)),`);
+        lines.push(`                max: args.max.as_ref().map(|v| serde_json::json!(v)),`);
+        lines.push(`            })`);
         lines.push(`            .await`);
         lines.push(`    }`);
         lines.push(``);
