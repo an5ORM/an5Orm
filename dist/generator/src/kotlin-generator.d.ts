@@ -24,6 +24,7 @@ export declare class KotlinGenerator {
     private readAccessor;
     private filterType;
     private generateModels;
+    private countPropertyName;
     private modelSource;
     private defaultFor;
     private generateOrmTypes;

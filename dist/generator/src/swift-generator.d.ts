@@ -33,6 +33,7 @@ export declare class SwiftGenerator {
     private readExpression;
     private filterType;
     private generateModels;
+    private countPropertyName;
     private modelSource;
     private generateOrmTypes;
     private generateMetadata;

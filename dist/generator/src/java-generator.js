@@ -164,8 +164,21 @@ class JavaGenerator {
             fs_1.default.writeFileSync(path_1.default.join(this.outputDir, `${model.name}.java`), this.modelSource(model));
         }
     }
+    countPropertyName(model) {
+        const taken = new Set([
+            ...model.fields.map((field) => JavaGenerator.toLowerCamelCase(field.name).toLowerCase()),
+            ...model.relations.map((rel) => JavaGenerator.toLowerCamelCase(rel.name).toLowerCase()),
+        ]);
+        if (!taken.has('count'))
+            return 'count';
+        if (!taken.has('relationcounts'))
+            return 'relationCounts';
+        return 'an5RelationCounts';
+    }
     modelSource(model) {
         const name = model.name;
+        const countProp = this.countPropertyName(model);
+        const countAccessor = this.fieldName(countProp);
         // Only the imports this model's columns can reach: an unused import in a generated file
         // reads as something the generator forgot rather than as what it is.
         const types = new Set(model.fields.map((field) => this.mapType(field)));
@@ -211,6 +224,8 @@ public class ${name} {
         for (const field of model.fields) {
             content += `  private ${this.mapNullableType(field)} ${JavaGenerator.toLowerCamelCase(field.name)};\n`;
         }
+        content += `\n  /** Relation counts populated when the query asks for {@code _count}, or {@code null}. */\n`;
+        content += `  private Map<String, Integer> ${countProp};\n`;
         content += `\n`;
         for (const field of model.fields) {
             const property = JavaGenerator.toLowerCamelCase(field.name);
@@ -230,6 +245,9 @@ public class ${name} {
                 content += `  public void set${accessor}(${type} value) {\n    this.${property} = value;\n  }\n\n`;
             }
         }
+        content += `  /** Relation counts populated when the query asks for {@code _count}, or {@code null}. */\n`;
+        content += `  public Map<String, Integer> get${countAccessor}() {\n    return this.${countProp};\n  }\n\n`;
+        content += `  public void set${countAccessor}(Map<String, Integer> value) {\n    this.${countProp} = value;\n  }\n\n`;
         content += `  /**
    * Reads \`${name}\` from a database row.
    *
@@ -273,7 +291,17 @@ public class ${name} {
 `;
             }
         }
-        content += `    return value;\n  }\n\n`;
+        content += `    if (row.get("_count") instanceof Map) {
+      Map<String, Integer> counts = new LinkedHashMap<String, Integer>();
+      for (Map.Entry<?, ?> entry : ((Map<?, ?>) row.get("_count")).entrySet()) {
+        if (entry.getKey() instanceof String && entry.getValue() instanceof Number) {
+          counts.put((String) entry.getKey(), Integer.valueOf(((Number) entry.getValue()).intValue()));
+        }
+      }
+      value.${countProp} = counts;
+    }
+    return value;
+  }\n\n`;
         content += `  /**
    * The columns to write, in declaration order, with \`null\` left out.
    *
@@ -1485,6 +1513,10 @@ public final class ModelClient<T> {
     return one(table.findFirst(where));
   }
 
+  public T findUnique(An5Query query) throws SQLException {
+    return one(table.findUnique(query));
+  }
+
   public T findUnique(Map<String, Object> where) throws SQLException {
     return one(table.findUnique(where));
   }
@@ -1638,6 +1670,10 @@ public final class ViewClient<T> {
 
   public T findFirst(Map<String, Object> where) throws SQLException {
     return one(view.findFirst(where));
+  }
+
+  public T findUnique(An5Query query) throws SQLException {
+    return one(view.findUnique(query));
   }
 
   public T findUnique(Map<String, Object> where) throws SQLException {

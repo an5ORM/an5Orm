@@ -784,8 +784,17 @@ model Post {
   assertIncludes(types, 'public struct AuthorGroupBy: GroupByBuilder');
   assertIncludes(types, 'filter.operators["equals"] = value.map { $0 as Any } ?? NSNull()');
 
+  const authorSwift = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'Author.swift'), 'utf8');
+  assertIncludes(authorSwift, 'public var count: [String: Int]? = nil');
+  assertIncludes(authorSwift, 'self.count = row.relationCounts');
+
   const dbSwift = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5Db.swift'), 'utf8');
   assertIncludes(dbSwift, 'public func groupBy(_ builder: An5Orm.GroupByBuilder) throws -> [Row] { try table.groupBy(builder.build()) }');
+  assertIncludes(dbSwift, 'public func findUnique(_ query: Query) throws -> T? { try table.findUnique(query).map { read($0) } }');
+  assertIncludes(dbSwift, 'public func findUnique(filter: Where, _ query: Query) throws -> T? { try table.findUnique(filter: filter, query).map { read($0) } }');
+  assertIncludes(dbSwift, 'public func update(filter: Where, data: T, query: Query) throws -> T? { try table.update(filter: filter, data: write(data), query: query).map { read($0) } }');
+  assertIncludes(dbSwift, 'public func findFirst(_ query: Query = Query()) throws -> T? { try client.findFirst(query).map { read($0) } }');
+  assertIncludes(dbSwift, 'public func findUnique(_ query: Query) throws -> T? { try client.findUnique(query).map { read($0) } }');
 
   const meta = fs.readFileSync(path.join(outDir, 'Sources', 'An5Client', 'An5Metadata.swift'), 'utf8');
   assertIncludes(meta, '"posts": ["modelName": "Post", "relationType": "many", "foreignKey": "authorId", "localKey": "id"]');
@@ -828,8 +837,16 @@ model Post {
   assertIncludes(javaTypes, 'public static final class AuthorScalarAggregateFilter');
   assertIncludes(javaTypes, 'public static final class AuthorAggregateHaving implements HavingBuilder');
   assertIncludes(javaTypes, 'public static final class AuthorGroupBy implements GroupByBuilder');
+  const javaAuthor = fs.readFileSync(path.join(javaDir, 'Author.java'), 'utf8');
+  assertIncludes(javaAuthor, 'private Map<String, Integer> count;');
+  assertIncludes(javaAuthor, 'public Map<String, Integer> getCount()');
+  assertIncludes(javaAuthor, 'if (row.get("_count") instanceof Map)');
+
   const javaModelClient = fs.readFileSync(path.join(javaDir, 'ModelClient.java'), 'utf8');
+  assertIncludes(javaModelClient, 'public T findUnique(An5Query query) throws SQLException');
   assertIncludes(javaModelClient, 'public List<Map<String, Object>> groupBy(An5OrmTypes.GroupByBuilder group)');
+  const javaViewClient = fs.readFileSync(path.join(javaDir, 'ViewClient.java'), 'utf8');
+  assertIncludes(javaViewClient, 'public T findUnique(An5Query query) throws SQLException');
   const javaMeta = fs.readFileSync(path.join(javaDir, 'An5Metadata.java'), 'utf8');
   assertIncludes(javaMeta, 'relation("Post", "many", "authorId", "id")');
   assertIncludes(javaMeta, 'relation("Author", "one", "authorId", "id")');
@@ -851,11 +868,56 @@ model Post {
   assertIncludes(kotlinTypes, 'data class AuthorScalarAggregateFilter(');
   assertIncludes(kotlinTypes, 'data class AuthorAggregateHaving(');
   assertIncludes(kotlinTypes, 'class AuthorGroupBy : GroupByBuilder');
+  const kotlinAuthor = fs.readFileSync(path.join(kotlinDir, 'Author.kt'), 'utf8');
+  assertIncludes(kotlinAuthor, 'import an5.adapters.relationCounts');
+  assertIncludes(kotlinAuthor, 'val count: Map<String, Int>? = null');
+  assertIncludes(kotlinAuthor, 'count = row.relationCounts(),');
   const kotlinDb = fs.readFileSync(path.join(kotlinDir, 'An5Db.kt'), 'utf8');
+  assertIncludes(kotlinDb, 'fun findUnique(block: QueryBuilder.() -> Unit): T? = delegate.findUnique(block)?.let(read)');
+  assertIncludes(kotlinDb, 'fun update(filter: Where, value: T, block: QueryBuilder.() -> Unit): T? = delegate.update(filter, write(value), block)?.let(read)');
+  assertIncludes(kotlinDb, 'fun findFirst(block: QueryBuilder.() -> Unit = {}): T? = delegate.findFirst(block)?.let(read)');
   assertIncludes(kotlinDb, 'fun groupBy(builder: An5Orm.GroupByBuilder): List<Row> = delegate.groupBy(builder.build())');
   const kotlinMeta = fs.readFileSync(path.join(kotlinDir, 'An5Metadata.kt'), 'utf8');
   assertIncludes(kotlinMeta, '"posts" to relation("Post", "many", "authorId", "id")');
   assertIncludes(kotlinMeta, '"author" to relation("Author", "one", "authorId", "id")');
+});
+
+test("Java, Kotlin, and Swift generators avoid _count property collision when model declares count", async () => {
+  const models = await parse('count-collision', `
+model Metric {
+  id    NVARCHAR(64) @id @default(uuid())
+  count INT
+  items MetricItem[]
+}
+
+model MetricItem {
+  id       NVARCHAR(64) @id @default(uuid())
+  metricId NVARCHAR(64)
+  metric   Metric @relation(fields: [metricId], references: [id])
+}
+`, 'sqlite');
+
+  const javaDir = path.join(tmpRoot, 'java-collision');
+  new JavaGenerator(javaDir).generate(models);
+  const javaMetric = fs.readFileSync(path.join(javaDir, 'Metric.java'), 'utf8');
+  assertIncludes(javaMetric, 'private Integer count;');
+  assertIncludes(javaMetric, 'private Map<String, Integer> relationCounts;');
+  assertIncludes(javaMetric, 'public Map<String, Integer> getRelationCounts()');
+  assertIncludes(javaMetric, 'value.relationCounts = counts;');
+
+  const kotlinDir = path.join(tmpRoot, 'kotlin-collision');
+  new KotlinGenerator(kotlinDir).generate(models);
+  const kotlinMetric = fs.readFileSync(path.join(kotlinDir, 'Metric.kt'), 'utf8');
+  assertIncludes(kotlinMetric, 'val count: Int? = null,');
+  assertIncludes(kotlinMetric, 'val relationCounts: Map<String, Int>? = null');
+  assertIncludes(kotlinMetric, 'relationCounts = row.relationCounts(),');
+
+  const swiftDir = path.join(tmpRoot, 'swift-collision');
+  new SwiftGenerator(swiftDir).generate(models);
+  const swiftMetric = fs.readFileSync(path.join(swiftDir, 'Sources', 'An5Client', 'Metric.swift'), 'utf8');
+  assertIncludes(swiftMetric, 'public let count: Int?');
+  assertIncludes(swiftMetric, 'public var relationCounts: [String: Int]? = nil');
+  assertIncludes(swiftMetric, 'self.relationCounts = row.relationCounts');
 });
 
 test("Go generator emits ListRelationFilter, RelationFilter, BoolFilter.Not, and RelationMap metadata", async () => {

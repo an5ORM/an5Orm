@@ -214,8 +214,19 @@ let package = Package(
     }
   }
 
+  private countPropertyName(model: Model): string {
+    const taken = new Set<string>([
+      ...model.fields.map((field) => this.property(field.name).replace(/`/g, '')),
+      ...model.relations.map((rel) => this.property(rel.name).replace(/`/g, '')),
+    ]);
+    if (!taken.has('count')) return 'count';
+    if (!taken.has('relationCounts')) return 'relationCounts';
+    return 'an5RelationCounts';
+  }
+
   private modelSource(model: Model): string {
     const name = model.name;
+    const countProp = this.countPropertyName(model);
     let content = `// This file is auto-generated. Do not edit deliberately.
 import Foundation
 import An5Adapters
@@ -237,6 +248,9 @@ public struct ${name} {
       content += `\n    /// Eager-loaded with \`include: ["${rel.name}": true]\`.\n`;
       content += `    public var ${property}: ${type} = ${rel.isArray ? '[]' : 'nil'}\n`;
     }
+
+    content += `\n    /// Relation counts populated when the query asks for \`_count\`, or \`nil\`.\n`;
+    content += `    public var ${countProp}: [String: Int]? = nil\n`;
 
     content += `\n    public init(\n`;
     content += model.fields
@@ -275,7 +289,7 @@ public struct ${name} {
         }
       }
     }
-    content += `\n    }\n\n`;
+    content += `${model.relations.length > 0 ? '' : '\n'}        self.${countProp} = row.relationCounts\n    }\n\n`;
 
     content += `    /// The columns to write, in declaration order, with \`nil\` left out.\n`;
     content += `    ///\n`;
@@ -1043,11 +1057,19 @@ public struct ModelClient<T> {
 
     public func findMany(filter: Where) throws -> [T] { try table.findMany(filter: filter).map { read($0) } }
 
+    public func findMany(filter: Where, _ query: Query) throws -> [T] { try table.findMany(filter: filter, query).map { read($0) } }
+
     public func findFirst(_ query: Query = Query()) throws -> T? { try table.findFirst(query).map { read($0) } }
 
     public func findFirst(filter: Where) throws -> T? { try table.findFirst(filter: filter).map { read($0) } }
 
+    public func findFirst(filter: Where, _ query: Query) throws -> T? { try table.findFirst(filter: filter, query).map { read($0) } }
+
+    public func findUnique(_ query: Query) throws -> T? { try table.findUnique(query).map { read($0) } }
+
     public func findUnique(filter: Where) throws -> T? { try table.findUnique(filter: filter).map { read($0) } }
+
+    public func findUnique(filter: Where, _ query: Query) throws -> T? { try table.findUnique(filter: filter, query).map { read($0) } }
 
     public func count(_ filter: Where? = nil) throws -> Int { try table.count(filter) }
 
@@ -1068,6 +1090,10 @@ public struct ModelClient<T> {
     /// Updates the matching rows and returns the first of them re-read.
     @discardableResult
     public func update(filter: Where, data: T) throws -> T? { try table.update(filter: filter, data: write(data)).map { read($0) } }
+
+    /// Updates the matching rows and returns the first of them re-read with \`query\` options.
+    @discardableResult
+    public func update(filter: Where, data: T, query: Query) throws -> T? { try table.update(filter: filter, data: write(data), query: query).map { read($0) } }
 
     /// Updates every matching row and gives back how many changed.
     @discardableResult
@@ -1132,9 +1158,19 @@ public struct ViewModelClient<T> {
 
     public func findMany(filter: Where) throws -> [T] { try client.findMany(filter: filter).map { read($0) } }
 
+    public func findMany(filter: Where, _ query: Query) throws -> [T] { try client.findMany(filter: filter, query).map { read($0) } }
+
+    public func findFirst(_ query: Query = Query()) throws -> T? { try client.findFirst(query).map { read($0) } }
+
     public func findFirst(filter: Where) throws -> T? { try client.findFirst(filter: filter).map { read($0) } }
 
+    public func findFirst(filter: Where, _ query: Query) throws -> T? { try client.findFirst(filter: filter, query).map { read($0) } }
+
+    public func findUnique(_ query: Query) throws -> T? { try client.findUnique(query).map { read($0) } }
+
     public func findUnique(filter: Where) throws -> T? { try client.findUnique(filter: filter).map { read($0) } }
+
+    public func findUnique(filter: Where, _ query: Query) throws -> T? { try client.findUnique(filter: filter, query).map { read($0) } }
 
     public func count(_ filter: Where? = nil) throws -> Int { try client.count(filter) }
 

@@ -184,8 +184,19 @@ export class KotlinGenerator {
     }
   }
 
+  private countPropertyName(model: Model): string {
+    const taken = new Set<string>([
+      ...model.fields.map((field) => this.property(field.name).replace(/`/g, '')),
+      ...model.relations.map((rel) => this.property(rel.name).replace(/`/g, '')),
+    ]);
+    if (!taken.has('count')) return 'count';
+    if (!taken.has('relationCounts')) return 'relationCounts';
+    return 'an5RelationCounts';
+  }
+
   private modelSource(model: Model): string {
     const name = model.name;
+    const countProp = this.countPropertyName(model);
     let content = `// This file is auto-generated. Do not edit directly.
 @file:Suppress("RedundantVisibilityModifier", "unused")
 
@@ -207,6 +218,7 @@ ${[
   'an5.adapters.Data as Values',
   'an5.adapters.Row',
   ...new Set(model.fields.map((field) => `an5.adapters.${this.readAccessor(field)}`)),
+  'an5.adapters.relationCounts',
   ...(model.relations.some((rel) => rel.isArray) ? ['an5.adapters.related'] : []),
   ...(model.relations.some((rel) => !rel.isArray) ? ['an5.adapters.relatedOne'] : []),
 ]
@@ -225,6 +237,7 @@ data class ${name}(
     const properties = [
       ...model.relations.map((rel) => ({ name: rel.name, type: rel.isArray ? `List<${rel.type}>` : `${rel.type}?` })),
       ...model.fields.map((field) => ({ name: field.name, type: this.mapNullableType(field) })),
+      { name: countProp, type: 'Map<String, Int>?' },
     ];
 
     if (properties.length === 0) {
@@ -278,6 +291,7 @@ data class ${name}(
         content += `            ${property} = row.relatedOne("${rel.name}")?.let { ${rel.type}.fromRow(it) },\n`;
       }
     }
+    content += `            ${countProp} = row.relationCounts(),\n`;
     content += `        )
     }
 }
@@ -887,16 +901,27 @@ class ModelClient<T : Any>(
 
     fun findMany(filter: Where): List<T> = delegate.findMany(filter).map(read)
 
+    fun findMany(filter: Where, block: QueryBuilder.() -> Unit): List<T> = delegate.findMany(filter, block).map(read)
+
     fun findFirst(block: QueryBuilder.() -> Unit = {}): T? = delegate.findFirst(block)?.let(read)
 
     fun findFirst(filter: Where): T? = delegate.findFirst(filter)?.let(read)
 
+    fun findFirst(filter: Where, block: QueryBuilder.() -> Unit): T? = delegate.findFirst(filter, block)?.let(read)
+
+    fun findUnique(block: QueryBuilder.() -> Unit): T? = delegate.findUnique(block)?.let(read)
+
     fun findUnique(filter: Where): T? = delegate.findUnique(filter)?.let(read)
+
+    fun findUnique(filter: Where, block: QueryBuilder.() -> Unit): T? = delegate.findUnique(filter, block)?.let(read)
 
     fun count(filter: Where? = null): Long = delegate.count(filter)
 
     /** Inserts a value and returns it as stored. */
     fun create(value: T): T = delegate.create(write(value)).let(read)
+
+    /** Inserts a value and returns it with the relations [block] asked for. */
+    fun create(value: T, block: QueryBuilder.() -> Unit): T = delegate.create(write(value), block).let(read)
 
     /** Inserts many values, one statement each. */
     fun createMany(values: List<T>, skipDuplicates: Boolean = false): Int =
@@ -904,6 +929,9 @@ class ModelClient<T : Any>(
 
     /** Updates the matching rows and returns the first of them re-read. */
     fun update(filter: Where, value: T): T? = delegate.update(filter, write(value))?.let(read)
+
+    /** Updates the matching rows and returns the first of them re-read with [block] options. */
+    fun update(filter: Where, value: T, block: QueryBuilder.() -> Unit): T? = delegate.update(filter, write(value), block)?.let(read)
 
     /** Updates every matching row and gives back how many changed. */
     fun updateMany(filter: Where?, value: T): Int = delegate.updateMany(filter, write(value))
@@ -956,9 +984,21 @@ class ViewClient<T : Any>(
 
     fun findMany(block: QueryBuilder.() -> Unit): List<T> = delegate.findMany(block).map(read)
 
+    fun findMany(filter: Where): List<T> = delegate.findMany(filter).map(read)
+
+    fun findMany(filter: Where, block: QueryBuilder.() -> Unit): List<T> = delegate.findMany(filter, block).map(read)
+
+    fun findFirst(block: QueryBuilder.() -> Unit = {}): T? = delegate.findFirst(block)?.let(read)
+
     fun findFirst(filter: Where): T? = delegate.findFirst(filter)?.let(read)
 
+    fun findFirst(filter: Where, block: QueryBuilder.() -> Unit): T? = delegate.findFirst(filter, block)?.let(read)
+
+    fun findUnique(block: QueryBuilder.() -> Unit): T? = delegate.findUnique(block)?.let(read)
+
     fun findUnique(filter: Where): T? = delegate.findUnique(filter)?.let(read)
+
+    fun findUnique(filter: Where, block: QueryBuilder.() -> Unit): T? = delegate.findUnique(filter, block)?.let(read)
 
     fun count(filter: Where? = null): Long = delegate.count(filter)
 

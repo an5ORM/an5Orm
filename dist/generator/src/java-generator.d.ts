@@ -43,6 +43,7 @@ export declare class JavaGenerator {
     private mapNullableType;
     private getFilterType;
     private generateModels;
+    private countPropertyName;
     private modelSource;
     /** The expression that reads one column into its field. */
     private readExpression;
