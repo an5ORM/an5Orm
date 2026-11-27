@@ -78,7 +78,7 @@ export class PythonGenerator {
     content += '"""\nAN5 ORM typed filter/args dataclasses.\n\nThe Python adapter accepts both these dataclasses (`UserWhereInput`, `StringFilter`,\n`UserOrderByInput`, `UserFindManyArgs`, etc.) and plain dicts with either schema\nfield names (`createdAt`) or snake_case aliases (`created_at`):\n\n    db.user.find_many(where=UserWhereInput(name=StringFilter(contains="John")),\n                      order_by=UserOrderByInput(created_at="desc"),\n                      take=10)\n\n    db.user.find_many(where={"name": {"contains": "John"}},\n                      order_by={"created_at": "desc"},\n                      take=10)\n"""\n';
     content += 'from __future__ import annotations\n';
     content += 'from dataclasses import dataclass, field\n';
-    content += 'from typing import Dict, List, Optional, Any, Union\n';
+    content += 'from typing import Dict, List, Optional, Any, Union, ClassVar\n';
     content += 'from datetime import datetime\n\n';
 
     // Base filter types
@@ -146,6 +146,19 @@ export class PythonGenerator {
         content += '\n';
       }
 
+      // Include
+      content += `@dataclass\nclass ${name}Include:\n    """Type-safe eager relation loading and relation counts for ${name} queries."""\n`;
+      content += `    _an5_include: ClassVar[bool] = True\n`;
+      const includeFieldNames = new Set<string>(['_count']);
+      for (const rel of model.relations) {
+        const relSnake = this.toSnakeCase(rel.name);
+        if (includeFieldNames.has(relSnake)) continue;
+        includeFieldNames.add(relSnake);
+        const targetName = this.capitalize(rel.type);
+        content += `    ${relSnake}: Optional[Union[bool, '${targetName}FindManyArgs', '${targetName}Include', Dict[str, Any]]] = None\n`;
+      }
+      content += `    _count: Optional[Union[bool, Dict[str, Any]]] = None\n\n`;
+
       // FindManyArgs
       content += `@dataclass\nclass ${name}FindManyArgs:\n    """ORM-style args for ${name}.find_many()."""\n`;
       content += `    where: Optional[${name}WhereInput] = None\n`;
@@ -153,14 +166,20 @@ export class PythonGenerator {
       content += `    take: Optional[int] = None\n`;
       content += `    skip: int = 0\n`;
       content += `    select: Optional[Union[List[str], Dict[str, Any]]] = None\n`;
-      content += `    include: Optional[Dict[str, Any]] = None\n\n`;
+      content += `    include: Optional[Union['${name}Include', Dict[str, Any]]] = None\n\n`;
 
       // FindFirstArgs
       content += `@dataclass\nclass ${name}FindFirstArgs:\n    """ORM-style args for ${name}.find_first()."""\n`;
       content += `    where: Optional[${name}WhereInput] = None\n`;
       content += `    order_by: Optional[${name}OrderByInput] = None\n`;
       content += `    select: Optional[Union[List[str], Dict[str, Any]]] = None\n`;
-      content += `    include: Optional[Dict[str, Any]] = None\n\n`;
+      content += `    include: Optional[Union['${name}Include', Dict[str, Any]]] = None\n\n`;
+
+      // FindUniqueArgs
+      content += `@dataclass\nclass ${name}FindUniqueArgs:\n    """ORM-style args for ${name}.find_unique()."""\n`;
+      content += `    where: Optional[${name}WhereInput] = None\n`;
+      content += `    select: Optional[Union[List[str], Dict[str, Any]]] = None\n`;
+      content += `    include: Optional[Union['${name}Include', Dict[str, Any]]] = None\n\n`;
 
       // AggregateHavingInput
       content += `@dataclass\nclass ${name}AggregateHavingInput:\n    """Type-safe HAVING filter for ${name}.group_by() queries."""\n`;
@@ -468,7 +487,7 @@ export class PythonGenerator {
         content += `    ${name}CreateInput, ${name}UpdateInput,\n`;
       }
       content += `    ${name}AggregateHavingInput, ${name}GroupByArgs,\n`;
-      content += `    ${name}FindManyArgs, ${name}FindFirstArgs,\n`;
+      content += `    ${name}Include, ${name}FindManyArgs, ${name}FindFirstArgs, ${name}FindUniqueArgs,\n`;
     }
     content += ')\n';
     content += 'from .an5_client import An5Client\n\n';
@@ -488,7 +507,7 @@ export class PythonGenerator {
         content += `    "${name}CreateInput", "${name}UpdateInput",\n`;
       }
       content += `    "${name}AggregateHavingInput", "${name}GroupByArgs",\n`;
-      content += `    "${name}FindManyArgs", "${name}FindFirstArgs",\n`;
+      content += `    "${name}Include", "${name}FindManyArgs", "${name}FindFirstArgs", "${name}FindUniqueArgs",\n`;
     }
     content += ']\n';
 

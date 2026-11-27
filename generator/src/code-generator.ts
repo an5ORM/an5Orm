@@ -129,14 +129,16 @@ export interface ViewClient<T, WhereInput = any, _Select = any, Include = any, F
 
     const selectFields = model.fields.map(f => `${f.name}?: boolean`);
     const selectRels = model.relations.map(r => `${r.name}?: boolean | ${r.type}FindManyArgs`);
+    const countEntries = model.relations.map(r => `${r.name}?: boolean | { where?: ${r.type}WhereInput }`).join('; ');
+    const countType = `_count?: boolean | { select?: { ${countEntries} } } | { ${countEntries} }`;
     if (model.relations.length > 0) {
-      selectRels.push(`_count?: boolean | { select?: { ${model.relations.map(r => `${r.name}?: boolean`).join('; ')} } }`);
+      selectRels.push(countType);
     }
     content += `export type ${model.name}Select = { ${[...selectFields, ...selectRels].join('; ')}${[...selectFields, ...selectRels].length > 0 ? ';' : ''} };\n`;
-    
+
     const includeRels = model.relations.map(r => `${r.name}?: boolean | ${r.type}FindManyArgs`);
     if (model.relations.length > 0) {
-      includeRels.push(`_count?: boolean | { select?: { ${model.relations.map(r => `${r.name}?: boolean`).join('; ')} } }`);
+      includeRels.push(countType);
     }
     content += `export type ${model.name}Include = { ${includeRels.join('; ')}${includeRels.length > 0 ? ';' : ''} };\n`;
 

@@ -666,12 +666,17 @@ model Post {
   assertIncludes(types, '    posts: Optional[Dict[str, Any]] = None');
   assertIncludes(types, 'class AuthorAggregateHavingInput:');
   assertIncludes(types, 'class AuthorGroupByArgs:');
+  assertIncludes(types, 'class AuthorInclude:');
+  assertIncludes(types, '    _an5_include: ClassVar[bool] = True');
+  assertIncludes(types, "    posts: Optional[Union[bool, 'PostFindManyArgs', 'PostInclude', Dict[str, Any]]] = None");
+  assertIncludes(types, 'class AuthorFindUniqueArgs:');
   assertIncludes(types, '    select: Optional[Union[List[str], Dict[str, Any]]] = None');
-  assertIncludes(types, '    include: Optional[Dict[str, Any]] = None');
+  assertIncludes(types, "    include: Optional[Union['AuthorInclude', Dict[str, Any]]] = None");
   assertIncludes(types, 'UserWhereInput(name=StringFilter(contains="John"))');
 
   const initPy = fs.readFileSync(path.join(outDir, '__init__.py'), 'utf8');
   assertIncludes(initPy, 'AuthorAggregateHavingInput, AuthorGroupByArgs');
+  assertIncludes(initPy, 'AuthorInclude, AuthorFindManyArgs, AuthorFindFirstArgs, AuthorFindUniqueArgs');
 
   const client = fs.readFileSync(path.join(outDir, 'an5_client.py'), 'utf8');
   assertIncludes(client, 'snake_case aliases');
@@ -1005,6 +1010,7 @@ model Post {
 
   const authorTs = fs.readFileSync(path.join(tsDir, 'Author.ts'), 'utf8');
   assertIncludes(authorTs, 'posts?: An5.ListRelationFilter<PostWhereInput>;');
+  assertIncludes(authorTs, '_count?: boolean | { select?: { posts?: boolean | { where?: PostWhereInput } } } | { posts?: boolean | { where?: PostWhereInput } };');
 
   const postTs = fs.readFileSync(path.join(tsDir, 'Post.ts'), 'utf8');
   assertIncludes(postTs, 'author?: An5.RelationFilter<AuthorWhereInput>;');
