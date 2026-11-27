@@ -123,6 +123,8 @@ namespace An5Orm
 
     internal interface IAn5QueryArgs { }
 
+    internal interface IAn5Include { }
+
     internal interface IAn5GroupByArgs { }
 
     internal interface IListRelationFilter
@@ -224,6 +226,15 @@ namespace An5Orm
         content += `    }\n\n`;
       }
 
+      // Include
+      content += `    /// <summary>ORM-style eager relation include options for ${name}.</summary>\n`;
+      content += `    public class ${name}Include : IAn5Include\n    {\n`;
+      for (const rel of model.relations) {
+        content += `        public object ${this.capitalize(rel.name)} { get; set; }\n`;
+      }
+      content += `        public object _count { get; set; }\n`;
+      content += `    }\n\n`;
+
       // FindManyArgs
       content += `    /// <summary>ORM-style args for ${name}.FindMany().</summary>\n`;
       content += `    public class ${name}FindManyArgs : IAn5QueryArgs\n    {\n`;
@@ -232,6 +243,7 @@ namespace An5Orm
       content += `        public int? Take { get; set; }\n`;
       content += `        public int? Skip { get; set; }\n`;
       content += `        public List<string> Select { get; set; }\n`;
+      content += `        public object Include { get; set; }\n`;
       content += `    }\n\n`;
 
       // FindFirstArgs
@@ -240,12 +252,15 @@ namespace An5Orm
       content += `        public ${name}WhereInput Where { get; set; }\n`;
       content += `        public ${name}OrderByInput OrderBy { get; set; }\n`;
       content += `        public List<string> Select { get; set; }\n`;
+      content += `        public object Include { get; set; }\n`;
       content += `    }\n\n`;
 
       // FindUniqueArgs
       content += `    /// <summary>ORM-style args for ${name}.FindUnique().</summary>\n`;
       content += `    public class ${name}FindUniqueArgs : IAn5QueryArgs\n    {\n`;
       content += `        public ${name}WhereInput Where { get; set; }\n`;
+      content += `        public List<string> Select { get; set; }\n`;
+      content += `        public object Include { get; set; }\n`;
       content += `    }\n\n`;
 
       // DeleteManyArgs
@@ -410,6 +425,9 @@ namespace An5Orm.Entities
         }
       }
     }
+
+    content += `\n        // ── Relation counts (populated via Include._count) ───────────────────\n`;
+    content += `        public Dictionary<string, int> _count { get; set; }\n`;
 
     content += `    }
 }
@@ -740,22 +758,37 @@ ${(() => {
             return TryResolveColumn(modelName, col, out var resolved) ? resolved : col;
         }
 
-        public static bool ResolveRelation(string modelName, string relKey, out An5RelationDef relation)
+        public static bool ResolveRelationEntry(string modelName, string relKey, out string canonicalKey, out An5RelationDef relation)
         {
+            canonicalKey = null;
             relation = null;
             if (string.IsNullOrEmpty(modelName) || string.IsNullOrEmpty(relKey)) return false;
             if (!RelationMap.TryGetValue(modelName, out var rels) || rels.Count == 0) return false;
-            if (rels.TryGetValue(relKey, out relation)) return true;
+            foreach (var kv in rels)
+            {
+                if (string.Equals(kv.Key, relKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalKey = kv.Key;
+                    relation = kv.Value;
+                    return true;
+                }
+            }
             var snake = ToSnakeCase(relKey);
             foreach (var kv in rels)
             {
                 if (string.Equals(ToSnakeCase(kv.Key), snake, StringComparison.OrdinalIgnoreCase))
                 {
+                    canonicalKey = kv.Key;
                     relation = kv.Value;
                     return true;
                 }
             }
             return false;
+        }
+
+        public static bool ResolveRelation(string modelName, string relKey, out An5RelationDef relation)
+        {
+            return ResolveRelationEntry(modelName, relKey, out _, out relation);
         }
 
         public static (string ChildCol, string ParentCol) ResolveRelationKeys(string parentModel, An5RelationDef rel)
@@ -771,6 +804,62 @@ ${(() => {
                 return (ResolveColumn(rel.ModelName, rawFK), ResolveColumn(parentModel, rawLK));
             }
             return (ResolveColumn(rel.ModelName, rawLK), ResolveColumn(parentModel, rawFK));
+        }
+    }
+
+    internal sealed class An5IncludeEntry
+    {
+        public string CanonicalKey { get; set; }
+        public An5RelationDef Relation { get; set; }
+        public object SubWhere { get; set; }
+        public object SubOrderBy { get; set; }
+        public int? SubTake { get; set; }
+        public int? SubSkip { get; set; }
+        public List<string> SubSelect { get; set; }
+        public An5IncludeSpec SubInclude { get; set; }
+    }
+
+    internal sealed class An5IncludeSpec
+    {
+        public Dictionary<string, An5IncludeEntry> Entries { get; } = new Dictionary<string, An5IncludeEntry>(StringComparer.OrdinalIgnoreCase);
+        public bool IncludeCount { get; set; }
+        public bool CountAll { get; set; }
+        public Dictionary<string, object> CountRelations { get; } = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        public bool HasWork => IncludeCount || Entries.Count > 0;
+
+        public HashSet<string> GetRequiredParentCols(string modelName)
+        {
+            var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in Entries.Values)
+            {
+                var (_, parentCol) = An5ClientMetadata.ResolveRelationKeys(modelName, entry.Relation);
+                if (!string.IsNullOrEmpty(parentCol)) required.Add(parentCol);
+            }
+            if (IncludeCount && An5ClientMetadata.RelationMap.TryGetValue(modelName, out var rels))
+            {
+                if (CountAll)
+                {
+                    foreach (var kv in rels)
+                    {
+                        if (kv.Value.RelationType != "many") continue;
+                        var (_, parentCol) = An5ClientMetadata.ResolveRelationKeys(modelName, kv.Value);
+                        if (!string.IsNullOrEmpty(parentCol)) required.Add(parentCol);
+                    }
+                }
+                else
+                {
+                    foreach (var relName in CountRelations.Keys)
+                    {
+                        if (An5ClientMetadata.ResolveRelation(modelName, relName, out var rDef) && rDef != null)
+                        {
+                            var (_, parentCol) = An5ClientMetadata.ResolveRelationKeys(modelName, rDef);
+                            if (!string.IsNullOrEmpty(parentCol)) required.Add(parentCol);
+                        }
+                    }
+                }
+            }
+            return required;
         }
     }
 
@@ -891,6 +980,282 @@ ${(() => {
             throw new ArgumentException($"Unsupported Having payload type '{havingVal.GetType().Name}'.");
         }
 
+        private static readonly HashSet<string> QueryEnvelopeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "where", "orderBy", "take", "skip", "select", "include" };
+
+        private static bool IsPocoContainer(object val)
+        {
+            if (val == null || val is string || val is byte[] || val is ValueType) return false;
+            if (val is System.Collections.IEnumerable) return false;
+            if (val is IAn5QueryArgs || val is IAn5WhereInput || val is IAn5HavingInput || val is IAn5GroupByArgs) return false;
+            return true;
+        }
+
+        private static List<KeyValuePair<string, object>> ReadKeyValueEntries(object container, string errContext, bool skipNulls)
+        {
+            var entries = new List<KeyValuePair<string, object>>();
+            if (container is System.Collections.IDictionary dict)
+            {
+                foreach (System.Collections.DictionaryEntry de in dict)
+                {
+                    if (!(de.Key is string keyStr) || string.IsNullOrWhiteSpace(keyStr))
+                        throw new ArgumentException($"{errContext}: dictionary keys must be non-empty strings.");
+                    if (skipNulls && de.Value == null) continue;
+                    entries.Add(new KeyValuePair<string, object>(keyStr, de.Value));
+                }
+                return entries;
+            }
+            foreach (var prop in container.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (prop.GetIndexParameters().Length > 0) continue;
+                var v = prop.GetValue(container);
+                if (skipNulls && v == null) continue;
+                entries.Add(new KeyValuePair<string, object>(prop.Name, v));
+            }
+            return entries;
+        }
+
+        private static bool IsQueryEnvelopeDict(IDictionary<string, object> dict, string modelName)
+        {
+            if (dict == null || dict.Count == 0) return false;
+            foreach (var k in dict.Keys)
+            {
+                if (string.IsNullOrEmpty(k) || !QueryEnvelopeKeys.Contains(k)) return false;
+                if (!string.IsNullOrEmpty(modelName)
+                    && (An5ClientMetadata.ModelHasField(modelName, k) || An5ClientMetadata.ResolveRelation(modelName, k, out _)))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public static List<string> ExtractSelectCols(string modelName, object selectVal)
+        {
+            if (selectVal == null) return null;
+            if (selectVal is IEnumerable<string> selList)
+            {
+                var cols = new List<string>();
+                foreach (var col in selList)
+                    if (!string.IsNullOrEmpty(col))
+                        cols.Add(An5ClientMetadata.ResolveColumn(modelName, col));
+                return cols;
+            }
+            if (selectVal is System.Collections.IDictionary selDict)
+            {
+                var cols = new List<string>();
+                foreach (System.Collections.DictionaryEntry de in selDict)
+                {
+                    if (!(de.Key is string colKey) || string.IsNullOrWhiteSpace(colKey))
+                        throw new ArgumentException("Select dictionary keys must be non-empty strings.");
+                    if (de.Value != null && Convert.ToBoolean(de.Value))
+                        cols.Add(An5ClientMetadata.ResolveColumn(modelName, colKey));
+                }
+                return cols;
+            }
+            if (selectVal is System.Collections.IEnumerable selEnum && !(selectVal is string))
+            {
+                var cols = new List<string>();
+                foreach (var item in selEnum)
+                {
+                    var s = item?.ToString();
+                    if (!string.IsNullOrEmpty(s))
+                        cols.Add(An5ClientMetadata.ResolveColumn(modelName, s));
+                }
+                return cols;
+            }
+            throw new ArgumentException($"Unsupported Select payload type '{selectVal.GetType().Name}'.");
+        }
+
+        private static void ParseCountPayload(string modelName, object countVal, An5IncludeSpec spec)
+        {
+            if (countVal == null) return;
+            if (countVal is bool cb)
+            {
+                if (cb)
+                {
+                    spec.IncludeCount = true;
+                    spec.CountAll = true;
+                }
+                return;
+            }
+            if (!(countVal is System.Collections.IDictionary) && !IsPocoContainer(countVal))
+                throw new ArgumentException($"Unsupported _count payload type '{countVal.GetType().Name}' for model '{modelName}'.");
+
+            var rawEntries = ReadKeyValueEntries(countVal, $"_count on '{modelName}'", false);
+            List<KeyValuePair<string, object>> targetEntries = rawEntries;
+
+            foreach (var kv in rawEntries)
+            {
+                if (string.Equals(kv.Key, "select", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (rawEntries.Count > 1)
+                        throw new ArgumentException($"Unknown option alongside 'select' in _count for model '{modelName}'.");
+                    if (kv.Value == null || (!(kv.Value is System.Collections.IDictionary) && !IsPocoContainer(kv.Value)))
+                        throw new ArgumentException($"_count.select for model '{modelName}' must be a map of relation names.");
+                    targetEntries = ReadKeyValueEntries(kv.Value, $"_count.select on '{modelName}'", false);
+                    break;
+                }
+            }
+
+            spec.IncludeCount = true;
+            spec.CountAll = false;
+
+            foreach (var kv in targetEntries)
+            {
+                if (!An5ClientMetadata.ResolveRelationEntry(modelName, kv.Key, out var canonRel, out var rDef))
+                    throw new ArgumentException($"Unknown relation '{kv.Key}' in _count for model '{modelName}'.");
+                if (kv.Value == null) continue;
+                if (kv.Value is bool rb)
+                {
+                    if (rb) spec.CountRelations[canonRel] = null;
+                    continue;
+                }
+                if (!(kv.Value is System.Collections.IDictionary) && !IsPocoContainer(kv.Value))
+                    throw new ArgumentException($"Unsupported _count option type '{kv.Value.GetType().Name}' for relation '{kv.Key}' on '{modelName}'.");
+
+                object countWhere = null;
+                foreach (var opt in ReadKeyValueEntries(kv.Value, $"_count.{kv.Key} on '{modelName}'", true))
+                {
+                    if (!string.Equals(opt.Key, "where", StringComparison.OrdinalIgnoreCase))
+                        throw new ArgumentException($"Unknown _count option '{opt.Key}' for relation '{kv.Key}' on '{modelName}'.");
+                    countWhere = opt.Value;
+                }
+                if (countWhere != null)
+                {
+                    int dummyIdx = 0;
+                    BuildWhere(countWhere, rDef.ModelName, An5Dialect.Sqlite, new Dictionary<string, object>(), ref dummyIdx);
+                }
+                spec.CountRelations[canonRel] = countWhere;
+            }
+        }
+
+        private static An5IncludeEntry ParseRelationIncludeOption(string parentModel, string canonKey, An5RelationDef rel, object val)
+        {
+            if (val is bool rb)
+            {
+                if (!rb) return null;
+                return new An5IncludeEntry { CanonicalKey = canonKey, Relation = rel };
+            }
+            if (val is IAn5Include)
+            {
+                return new An5IncludeEntry
+                {
+                    CanonicalKey = canonKey,
+                    Relation = rel,
+                    SubInclude = ParseIncludeSpec(rel.ModelName, val),
+                };
+            }
+            if (!(val is System.Collections.IDictionary) && !(val is IAn5QueryArgs) && !IsPocoContainer(val))
+                throw new ArgumentException($"Unsupported Include option type '{val.GetType().Name}' for relation '{canonKey}' on '{parentModel}'.");
+
+            object subWhere = null;
+            object subOrderBy = null;
+            int? subTake = null;
+            int? subSkip = null;
+            List<string> subSelect = null;
+            object subIncludeRaw = null;
+
+            bool isDict = val is System.Collections.IDictionary;
+            var optEntries = ReadKeyValueEntries(val, $"Include.{canonKey} on '{parentModel}'", true);
+            foreach (var opt in optEntries)
+            {
+                var k = opt.Key;
+                var ov = opt.Value;
+                if (string.Equals(k, "where", StringComparison.OrdinalIgnoreCase))
+                {
+                    subWhere = ov;
+                }
+                else if (string.Equals(k, "orderBy", StringComparison.OrdinalIgnoreCase))
+                {
+                    subOrderBy = ov;
+                }
+                else if (string.Equals(k, "take", StringComparison.OrdinalIgnoreCase))
+                {
+                    int t = Convert.ToInt32(ov);
+                    if (t < 0) throw new ArgumentException($"Include.take for relation '{canonKey}' on '{parentModel}' cannot be negative.");
+                    subTake = t;
+                }
+                else if (string.Equals(k, "skip", StringComparison.OrdinalIgnoreCase))
+                {
+                    int s = Convert.ToInt32(ov);
+                    if (s < 0) throw new ArgumentException($"Include.skip for relation '{canonKey}' on '{parentModel}' cannot be negative.");
+                    subSkip = s;
+                }
+                else if (string.Equals(k, "select", StringComparison.OrdinalIgnoreCase))
+                {
+                    subSelect = ExtractSelectCols(rel.ModelName, ov);
+                }
+                else if (string.Equals(k, "include", StringComparison.OrdinalIgnoreCase))
+                {
+                    subIncludeRaw = ov;
+                }
+                else if (isDict || !(val is IAn5QueryArgs))
+                {
+                    throw new ArgumentException($"Unknown Include option '{k}' for relation '{canonKey}' on '{parentModel}'.");
+                }
+            }
+
+            if (subWhere != null)
+            {
+                int dummyIdx = 0;
+                BuildWhere(subWhere, rel.ModelName, An5Dialect.Sqlite, new Dictionary<string, object>(), ref dummyIdx);
+            }
+
+            return new An5IncludeEntry
+            {
+                CanonicalKey = canonKey,
+                Relation = rel,
+                SubWhere = subWhere,
+                SubOrderBy = subOrderBy,
+                SubTake = subTake,
+                SubSkip = subSkip,
+                SubSelect = subSelect,
+                SubInclude = ParseIncludeSpec(rel.ModelName, subIncludeRaw),
+            };
+        }
+
+        internal static An5IncludeSpec ParseIncludeSpec(string modelName, object includeVal)
+        {
+            if (includeVal == null) return null;
+            if (!(includeVal is IAn5Include) && !(includeVal is System.Collections.IDictionary) && !IsPocoContainer(includeVal))
+                throw new ArgumentException($"Unsupported Include payload type '{includeVal.GetType().Name}' for model '{modelName}'.");
+
+            var spec = new An5IncludeSpec();
+            var skipNulls = !(includeVal is System.Collections.IDictionary);
+            foreach (var kv in ReadKeyValueEntries(includeVal, $"Include on '{modelName}'", skipNulls))
+            {
+                if (string.Equals(kv.Key, "_count", StringComparison.OrdinalIgnoreCase))
+                {
+                    ParseCountPayload(modelName, kv.Value, spec);
+                    continue;
+                }
+                if (!An5ClientMetadata.ResolveRelationEntry(modelName, kv.Key, out var canonKey, out var rel))
+                    throw new ArgumentException($"Unknown relation '{kv.Key}' in Include for model '{modelName}'.");
+                if (kv.Value == null) continue;
+                var entry = ParseRelationIncludeOption(modelName, canonKey, rel, kv.Value);
+                if (entry != null) spec.Entries[canonKey] = entry;
+                else spec.Entries.Remove(canonKey);
+            }
+            return spec;
+        }
+
+        public static string BuildColumnInCondition(
+            string modelName,
+            string colName,
+            List<object> values,
+            An5Dialect dialect,
+            Dictionary<string, object> parameters,
+            ref int paramIdx)
+        {
+            if (values == null || values.Count == 0) return "1=0";
+            var quotedCol = An5Provider.Quote(An5ClientMetadata.ResolveColumn(modelName, colName), dialect);
+            var phs = new List<string>(values.Count);
+            foreach (var v in values)
+                phs.Add(AddParam(parameters, ref paramIdx, v));
+            return $"{quotedCol} IN ({string.Join(", ", phs)})";
+        }
+
         public static void ParseArgs(
             object args,
             string modelName,
@@ -902,11 +1267,27 @@ ${(() => {
             out List<string> selectCols,
             out Dictionary<string, object> parameters)
         {
+            ParseArgs(args, modelName, dialect, out whereSql, out orderBySql, out take, out skip, out selectCols, out _, out parameters);
+        }
+
+        public static void ParseArgs(
+            object args,
+            string modelName,
+            An5Dialect dialect,
+            out string whereSql,
+            out string orderBySql,
+            out int? take,
+            out int? skip,
+            out List<string> selectCols,
+            out object includeVal,
+            out Dictionary<string, object> parameters)
+        {
             whereSql = "";
             orderBySql = "";
             take = null;
             skip = null;
             selectCols = null;
+            includeVal = null;
             parameters = new Dictionary<string, object>();
             if (args == null) return;
 
@@ -918,6 +1299,26 @@ ${(() => {
             }
             if (args is IDictionary<string, object> rawDict)
             {
+                if (IsQueryEnvelopeDict(rawDict, modelName))
+                {
+                    foreach (var kv in rawDict)
+                    {
+                        if (kv.Value == null) continue;
+                        if (string.Equals(kv.Key, "where", StringComparison.OrdinalIgnoreCase))
+                            whereSql = BuildWhere(kv.Value, modelName, dialect, parameters, ref paramIdx);
+                        else if (string.Equals(kv.Key, "orderBy", StringComparison.OrdinalIgnoreCase))
+                            orderBySql = BuildOrderBy(kv.Value, modelName, dialect);
+                        else if (string.Equals(kv.Key, "take", StringComparison.OrdinalIgnoreCase))
+                            take = Convert.ToInt32(kv.Value);
+                        else if (string.Equals(kv.Key, "skip", StringComparison.OrdinalIgnoreCase))
+                            skip = Convert.ToInt32(kv.Value);
+                        else if (string.Equals(kv.Key, "select", StringComparison.OrdinalIgnoreCase))
+                            selectCols = ExtractSelectCols(modelName, kv.Value);
+                        else if (string.Equals(kv.Key, "include", StringComparison.OrdinalIgnoreCase))
+                            includeVal = kv.Value;
+                    }
+                    return;
+                }
                 whereSql = BuildWhereFromDict(rawDict, modelName, dialect, parameters, ref paramIdx, "", "", "");
                 return;
             }
@@ -928,7 +1329,8 @@ ${(() => {
             var hasTakeProp = argType.GetProperty("Take", BindingFlags.Public | BindingFlags.Instance) != null;
             var hasSkipProp = argType.GetProperty("Skip", BindingFlags.Public | BindingFlags.Instance) != null;
             var hasSelectProp = argType.GetProperty("Select", BindingFlags.Public | BindingFlags.Instance) != null;
-            if (!(args is IAn5QueryArgs) && !hasWhereProp && !hasOrderProp && !hasTakeProp && !hasSkipProp && !hasSelectProp)
+            var hasIncludeProp = argType.GetProperty("Include", BindingFlags.Public | BindingFlags.Instance) != null;
+            if (!(args is IAn5QueryArgs) && !hasWhereProp && !hasOrderProp && !hasTakeProp && !hasSkipProp && !hasSelectProp && !hasIncludeProp)
                 throw new ArgumentException($"Unsupported query args type '{argType.Name}'.");
 
             var whereVal = argType.GetProperty("Where", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
@@ -944,13 +1346,9 @@ ${(() => {
             if (skipVal != null) skip = Convert.ToInt32(skipVal);
 
             var selectVal = argType.GetProperty("Select", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
-            if (selectVal is IEnumerable<string> selList)
-            {
-                selectCols = new List<string>();
-                foreach (var col in selList)
-                    if (!string.IsNullOrEmpty(col))
-                        selectCols.Add(An5ClientMetadata.ResolveColumn(modelName, col));
-            }
+            if (selectVal != null) selectCols = ExtractSelectCols(modelName, selectVal);
+
+            includeVal = argType.GetProperty("Include", BindingFlags.Public | BindingFlags.Instance)?.GetValue(args);
         }
 
         private static string AddParam(Dictionary<string, object> parameters, ref int paramIdx, object value)
@@ -1806,7 +2204,24 @@ ${(() => {
         }
     }
 
-    public class TableClient<T> where T : new()
+    internal interface IAn5RelationTableClient
+    {
+        System.Collections.IList FetchForInclude(
+            string childJoinCol,
+            List<object> joinValues,
+            object subWhere,
+            object subOrderBy,
+            List<string> subSelectCols,
+            An5IncludeSpec subInclude,
+            out PropertyInfo childJoinProp,
+            out HashSet<string> tempClearedCols);
+
+        void HydrateIncludes(System.Collections.IList rows, An5IncludeSpec spec);
+
+        void ClearTempColumns(System.Collections.IList rows, HashSet<string> cols);
+    }
+
+    public class TableClient<T> : IAn5RelationTableClient where T : new()
     {
         public string ConnectionString { get; }
         public string TableName { get; }
@@ -1930,12 +2345,8 @@ ${(() => {
             return list;
         }
 
-        public List<T> FindMany(object args)
+        private string BuildFindSql(string whereSql, string orderBySql, int? take, int? skip, List<string> selectCols)
         {
-            if (args == null) return FindMany(null, null);
-            if (args is string sqlWhere) return FindMany(sqlWhere, null);
-
-            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out var orderBySql, out var take, out var skip, out var selectCols, out var parameters);
             var cols = selectCols != null && selectCols.Count > 0
                 ? string.Join(", ", selectCols.ConvertAll(c => An5Provider.Quote(c, Dialect)))
                 : "*";
@@ -1950,31 +2361,61 @@ ${(() => {
                 else if (skip.HasValue) query += Dialect == An5Dialect.Sqlite ? " LIMIT -1" : " LIMIT ALL";
                 if (skip.HasValue) query += $" OFFSET {skip.Value}";
             }
+            else if (skip.HasValue)
+            {
+                query = $"SELECT {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                query += !string.IsNullOrEmpty(orderBySql) ? $" {orderBySql}" : " ORDER BY (SELECT NULL)";
+                query += $" OFFSET {skip.Value} ROWS";
+                if (take.HasValue) query += $" FETCH NEXT {take.Value} ROWS ONLY";
+            }
+            else if (take.HasValue)
+            {
+                query = $"SELECT TOP ({take.Value}) {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+            }
             else
             {
-                if (take.HasValue && !skip.HasValue)
-                {
-                    query = $"SELECT TOP ({take.Value}) {cols} FROM {quotedTable}";
-                    if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
-                    if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
-                }
-                else
-                {
-                    query = $"SELECT {cols} FROM {quotedTable}";
-                    if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
-                    if (skip.HasValue)
-                    {
-                        query += !string.IsNullOrEmpty(orderBySql) ? $" {orderBySql}" : " ORDER BY (SELECT NULL)";
-                        query += $" OFFSET {skip.Value} ROWS";
-                        if (take.HasValue) query += $" FETCH NEXT {take.Value} ROWS ONLY";
-                    }
-                    else if (!string.IsNullOrEmpty(orderBySql))
-                    {
-                        query += $" {orderBySql}";
-                    }
-                }
+                query = $"SELECT {cols} FROM {quotedTable}";
+                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
+                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
             }
-            return QueryRaw(query, parameters);
+            return query;
+        }
+
+        private List<T> ExecuteFindQuery(object args, int? defaultTake)
+        {
+            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out var orderBySql, out var take, out var skip, out var selectCols, out var includeVal, out var parameters);
+            var includeSpec = An5WhereBuilder.ParseIncludeSpec(ModelName, includeVal);
+
+            List<string> effectiveSelectCols = selectCols != null ? new List<string>(selectCols) : null;
+            HashSet<string> tempAddedCols = null;
+            if (effectiveSelectCols != null && effectiveSelectCols.Count > 0 && includeSpec != null && includeSpec.HasWork)
+            {
+                EnsureJoinColumns(effectiveSelectCols, includeSpec.GetRequiredParentCols(ModelName), out tempAddedCols);
+            }
+
+            var effectiveTake = defaultTake.HasValue ? (take ?? defaultTake.Value) : take;
+            var query = BuildFindSql(whereSql, orderBySql, effectiveTake, skip, effectiveSelectCols);
+            var rows = QueryRaw(query, parameters);
+
+            if (includeSpec != null && includeSpec.HasWork && rows.Count > 0)
+            {
+                ResolveIncludes(rows, includeSpec);
+            }
+            if (tempAddedCols != null && tempAddedCols.Count > 0 && rows.Count > 0)
+            {
+                ClearColumnsOnRows(rows, tempAddedCols);
+            }
+            return rows;
+        }
+
+        public List<T> FindMany(object args)
+        {
+            if (args == null) return FindMany(null, null);
+            if (args is string sqlWhere) return FindMany(sqlWhere, null);
+            return ExecuteFindQuery(args, null);
         }
 
         public T FindFirst(string whereClause = null, Dictionary<string, object> parameters = null)
@@ -2039,37 +2480,368 @@ ${(() => {
         {
             if (args == null) return FindFirst(null, null);
             if (args is string sqlWhere) return FindFirst(sqlWhere, null);
+            var rows = ExecuteFindQuery(args, 1);
+            return rows.Count > 0 ? rows[0] : default;
+        }
 
-            An5WhereBuilder.ParseArgs(args, ModelName, Dialect, out var whereSql, out var orderBySql, out var take, out var skip, out var selectCols, out var parameters);
-            var cols = selectCols != null && selectCols.Count > 0
-                ? string.Join(", ", selectCols.ConvertAll(c => An5Provider.Quote(c, Dialect)))
-                : "*";
-            var quotedTable = An5Provider.QuoteTable(TableName, Dialect);
-            var effectiveTake = take ?? 1;
-            string query;
-            if (Dialect == An5Dialect.Postgres || Dialect == An5Dialect.Sqlite)
+        private static PropertyInfo FindEntityProp(Type entityType, string fieldOrColName)
+        {
+            if (entityType == null || string.IsNullOrEmpty(fieldOrColName)) return null;
+            var props = entityType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var p in props)
             {
-                query = $"SELECT {cols} FROM {quotedTable}";
-                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
-                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
-                query += $" LIMIT {effectiveTake}";
-                if (skip.HasValue) query += $" OFFSET {skip.Value}";
+                if (string.Equals(p.Name, fieldOrColName, StringComparison.OrdinalIgnoreCase))
+                    return p;
             }
-            else if (skip.HasValue)
+            var targetSnake = An5ClientMetadata.ToSnakeCase(fieldOrColName);
+            foreach (var p in props)
             {
-                query = $"SELECT {cols} FROM {quotedTable}";
-                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
-                query += !string.IsNullOrEmpty(orderBySql) ? $" {orderBySql}" : " ORDER BY (SELECT NULL)";
-                query += $" OFFSET {skip.Value} ROWS FETCH NEXT {effectiveTake} ROWS ONLY";
+                if (string.Equals(An5ClientMetadata.ToSnakeCase(p.Name), targetSnake, StringComparison.OrdinalIgnoreCase))
+                    return p;
+            }
+            return null;
+        }
+
+        private static object NormalizeJoinKey(object value, Type expectedType = null)
+        {
+            if (value == null || value == DBNull.Value) return null;
+            var underlying = expectedType != null ? (Nullable.GetUnderlyingType(expectedType) ?? expectedType) : null;
+            if (underlying == typeof(Guid) && value is string gs && Guid.TryParse(gs, out var parsedGuid))
+                return parsedGuid;
+            switch (value)
+            {
+                case sbyte _:
+                case byte _:
+                case short _:
+                case ushort _:
+                case int _:
+                case uint _:
+                case long _:
+                    return Convert.ToInt64(value);
+                default:
+                    return value;
+            }
+        }
+
+        private void EnsureJoinColumns(List<string> selectCols, IEnumerable<string> requiredCols, out HashSet<string> tempAddedCols)
+        {
+            tempAddedCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var req in requiredCols)
+            {
+                var resolved = An5ClientMetadata.ResolveColumn(ModelName, req);
+                var targetSnake = An5ClientMetadata.ToSnakeCase(resolved);
+                bool exists = selectCols.Exists(c =>
+                    string.Equals(c, resolved, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(An5ClientMetadata.ToSnakeCase(c), targetSnake, StringComparison.OrdinalIgnoreCase));
+                if (!exists)
+                {
+                    selectCols.Add(resolved);
+                    tempAddedCols.Add(resolved);
+                }
+            }
+        }
+
+        private static void ClearColumnsOnRows(System.Collections.IEnumerable rows, HashSet<string> cols)
+        {
+            if (rows == null || cols == null || cols.Count == 0) return;
+            var propsToClear = new List<PropertyInfo>();
+            foreach (var col in cols)
+            {
+                var prop = FindEntityProp(typeof(T), col);
+                if (prop != null && prop.CanWrite) propsToClear.Add(prop);
+            }
+            if (propsToClear.Count == 0) return;
+            foreach (var row in rows)
+            {
+                if (row == null) continue;
+                foreach (var prop in propsToClear)
+                {
+                    var defVal = prop.PropertyType.IsValueType ? Activator.CreateInstance(prop.PropertyType) : null;
+                    prop.SetValue(row, defVal);
+                }
+            }
+        }
+
+        private static Dictionary<string, int> GetOrInitCountDict(T row)
+        {
+            var countProp = typeof(T).GetProperty("_count", BindingFlags.Public | BindingFlags.Instance);
+            if (countProp == null || !countProp.CanWrite) return null;
+            var existing = countProp.GetValue(row) as Dictionary<string, int>;
+            if (existing == null)
+            {
+                existing = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                countProp.SetValue(row, existing);
+            }
+            return existing;
+        }
+
+        private void ResolveCountIncludes(List<T> rows, An5IncludeSpec spec)
+        {
+            var targets = new List<(string CanonKey, An5RelationDef Relation, object CountWhere)>();
+            if (spec.CountAll)
+            {
+                if (An5ClientMetadata.RelationMap.TryGetValue(ModelName, out var rels))
+                {
+                    foreach (var kv in rels)
+                    {
+                        if (kv.Value.RelationType == "many")
+                            targets.Add((kv.Key, kv.Value, null));
+                    }
+                }
             }
             else
             {
-                query = $"SELECT TOP ({effectiveTake}) {cols} FROM {quotedTable}";
-                if (!string.IsNullOrEmpty(whereSql)) query += $" WHERE {whereSql}";
-                if (!string.IsNullOrEmpty(orderBySql)) query += $" {orderBySql}";
+                foreach (var kv in spec.CountRelations)
+                {
+                    if (An5ClientMetadata.ResolveRelationEntry(ModelName, kv.Key, out var canonKey, out var rDef) && rDef != null)
+                        targets.Add((canonKey, rDef, kv.Value));
+                }
             }
-            var rows = QueryRaw(query, parameters);
-            return rows.Count > 0 ? rows[0] : default;
+
+            foreach (var row in rows)
+            {
+                var dict = GetOrInitCountDict(row);
+                if (dict != null)
+                {
+                    foreach (var t in targets)
+                        dict[t.CanonKey] = 0;
+                }
+            }
+
+            foreach (var t in targets)
+            {
+                var (childCol, parentCol) = An5ClientMetadata.ResolveRelationKeys(ModelName, t.Relation);
+                var parentProp = FindEntityProp(typeof(T), parentCol);
+                if (parentProp == null) continue;
+
+                var uniqueRawByNorm = new Dictionary<object, object>();
+                foreach (var row in rows)
+                {
+                    var rawVal = parentProp.GetValue(row);
+                    var norm = NormalizeJoinKey(rawVal, parentProp.PropertyType);
+                    if (norm != null && !uniqueRawByNorm.ContainsKey(norm))
+                        uniqueRawByNorm[norm] = rawVal;
+                }
+                if (uniqueRawByNorm.Count == 0) continue;
+
+                var parameters = new Dictionary<string, object>();
+                int paramIdx = 0;
+                var quotedChildCol = An5Provider.Quote(An5ClientMetadata.ResolveColumn(t.Relation.ModelName, childCol), Dialect);
+                var childTable = An5Provider.QuoteTable(An5ClientMetadata.ResolveTable(t.Relation.ModelName), Dialect);
+                var inSql = An5WhereBuilder.BuildColumnInCondition(t.Relation.ModelName, childCol, new List<object>(uniqueRawByNorm.Values), Dialect, parameters, ref paramIdx);
+                var whereSql = inSql;
+                if (t.CountWhere != null)
+                {
+                    var subWhereSql = An5WhereBuilder.BuildWhere(t.CountWhere, t.Relation.ModelName, Dialect, parameters, ref paramIdx);
+                    if (!string.IsNullOrEmpty(subWhereSql))
+                        whereSql = $"({inSql}) AND ({subWhereSql})";
+                }
+
+                var countQuery = $"SELECT {quotedChildCol}, COUNT(*) FROM {childTable} WHERE {whereSql} GROUP BY {quotedChildCol}";
+                var countsByKey = new Dictionary<object, int>();
+
+                var conn = An5DbContext.GetActiveConnection(ConnectionString, out bool isTx);
+                try
+                {
+                    using var cmd = CreateCommand(conn, countQuery);
+                    foreach (var kvp in parameters) An5Provider.Bind(cmd, kvp.Key, kvp.Value);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var normKey = NormalizeJoinKey(reader.IsDBNull(0) ? null : reader.GetValue(0), parentProp.PropertyType);
+                        if (normKey != null)
+                            countsByKey[normKey] = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1));
+                    }
+                }
+                finally
+                {
+                    if (!isTx) conn.Dispose();
+                }
+
+                foreach (var row in rows)
+                {
+                    var norm = NormalizeJoinKey(parentProp.GetValue(row), parentProp.PropertyType);
+                    var count = norm != null && countsByKey.TryGetValue(norm, out var c) ? c : 0;
+                    var dict = GetOrInitCountDict(row);
+                    if (dict != null) dict[t.CanonKey] = count;
+                }
+            }
+        }
+
+        private void ResolveIncludes(List<T> rows, An5IncludeSpec spec)
+        {
+            if (rows == null || rows.Count == 0 || spec == null || !spec.HasWork) return;
+
+            if (spec.IncludeCount)
+                ResolveCountIncludes(rows, spec);
+
+            foreach (var entry in spec.Entries.Values)
+            {
+                var relProp = FindEntityProp(typeof(T), entry.CanonicalKey);
+                if (relProp == null || !relProp.CanWrite) continue;
+
+                var isMany = entry.Relation.RelationType == "many";
+                Type childClrType = null;
+                if (relProp.PropertyType.IsGenericType && typeof(System.Collections.IList).IsAssignableFrom(relProp.PropertyType))
+                    childClrType = relProp.PropertyType.GetGenericArguments()[0];
+                else
+                    childClrType = relProp.PropertyType;
+                if (childClrType == null) continue;
+
+                var (childCol, parentCol) = An5ClientMetadata.ResolveRelationKeys(ModelName, entry.Relation);
+                var parentProp = FindEntityProp(typeof(T), parentCol);
+
+                var uniqueRawByNorm = new Dictionary<object, object>();
+                if (parentProp != null)
+                {
+                    foreach (var row in rows)
+                    {
+                        var rawVal = parentProp.GetValue(row);
+                        var norm = NormalizeJoinKey(rawVal, parentProp.PropertyType);
+                        if (norm != null && !uniqueRawByNorm.ContainsKey(norm))
+                            uniqueRawByNorm[norm] = rawVal;
+                    }
+                }
+
+                if (uniqueRawByNorm.Count == 0 || parentProp == null)
+                {
+                    foreach (var row in rows)
+                    {
+                        relProp.SetValue(row, isMany ? Activator.CreateInstance(relProp.PropertyType) : null);
+                    }
+                    continue;
+                }
+
+                var childTable = An5ClientMetadata.ResolveTable(entry.Relation.ModelName);
+                var childClientObj = Activator.CreateInstance(typeof(TableClient<>).MakeGenericType(childClrType), ConnectionString, childTable);
+                var childClient = childClientObj as IAn5RelationTableClient;
+                if (childClient == null) continue;
+
+                var children = childClient.FetchForInclude(
+                    childCol,
+                    new List<object>(uniqueRawByNorm.Values),
+                    entry.SubWhere,
+                    entry.SubOrderBy,
+                    entry.SubSelect,
+                    entry.SubInclude,
+                    out var childJoinProp,
+                    out var childTempCols);
+
+                var grouped = new Dictionary<object, List<object>>();
+                if (childJoinProp != null)
+                {
+                    foreach (var child in children)
+                    {
+                        var gk = NormalizeJoinKey(childJoinProp.GetValue(child), parentProp.PropertyType);
+                        if (gk == null) continue;
+                        if (!grouped.TryGetValue(gk, out var bucket))
+                        {
+                            bucket = new List<object>();
+                            grouped[gk] = bucket;
+                        }
+                        bucket.Add(child);
+                    }
+                }
+
+                var slicedByKey = new Dictionary<object, List<object>>();
+                var survivingType = typeof(List<>).MakeGenericType(childClrType);
+                var survivingChildren = Activator.CreateInstance(survivingType) as System.Collections.IList;
+                foreach (var kv in grouped)
+                {
+                    var items = kv.Value;
+                    int skipCount = entry.SubSkip ?? 0;
+                    var sliced = new List<object>();
+                    for (int i = skipCount; i < items.Count; i++)
+                    {
+                        if (entry.SubTake.HasValue && sliced.Count >= entry.SubTake.Value) break;
+                        sliced.Add(items[i]);
+                        survivingChildren.Add(items[i]);
+                    }
+                    slicedByKey[kv.Key] = sliced;
+                }
+
+                if (entry.SubInclude != null && entry.SubInclude.HasWork && survivingChildren.Count > 0)
+                {
+                    childClient.HydrateIncludes(survivingChildren, entry.SubInclude);
+                }
+                if (childTempCols != null && childTempCols.Count > 0 && survivingChildren.Count > 0)
+                {
+                    childClient.ClearTempColumns(survivingChildren, childTempCols);
+                }
+
+                foreach (var row in rows)
+                {
+                    var pk = NormalizeJoinKey(parentProp.GetValue(row), parentProp.PropertyType);
+                    List<object> matched = null;
+                    if (pk != null) slicedByKey.TryGetValue(pk, out matched);
+                    if (isMany)
+                    {
+                        var typedList = Activator.CreateInstance(relProp.PropertyType) as System.Collections.IList;
+                        if (matched != null)
+                        {
+                            foreach (var m in matched) typedList.Add(m);
+                        }
+                        relProp.SetValue(row, typedList);
+                    }
+                    else
+                    {
+                        relProp.SetValue(row, matched != null && matched.Count > 0 ? matched[0] : null);
+                    }
+                }
+            }
+        }
+
+        System.Collections.IList IAn5RelationTableClient.FetchForInclude(
+            string childJoinCol,
+            List<object> joinValues,
+            object subWhere,
+            object subOrderBy,
+            List<string> subSelectCols,
+            An5IncludeSpec subInclude,
+            out PropertyInfo childJoinProp,
+            out HashSet<string> tempClearedCols)
+        {
+            childJoinProp = FindEntityProp(typeof(T), childJoinCol);
+            tempClearedCols = null;
+            if (joinValues == null || joinValues.Count == 0) return new List<T>();
+
+            var parameters = new Dictionary<string, object>();
+            int paramIdx = 0;
+            var inSql = An5WhereBuilder.BuildColumnInCondition(ModelName, childJoinCol, joinValues, Dialect, parameters, ref paramIdx);
+            var subWhereSql = An5WhereBuilder.BuildWhere(subWhere, ModelName, Dialect, parameters, ref paramIdx);
+            var whereSql = string.IsNullOrEmpty(subWhereSql) ? inSql : $"({inSql}) AND ({subWhereSql})";
+            var orderBySql = An5WhereBuilder.BuildOrderBy(subOrderBy, ModelName, Dialect);
+
+            List<string> effectiveSelectCols = subSelectCols != null && subSelectCols.Count > 0 ? new List<string>(subSelectCols) : null;
+            if (effectiveSelectCols != null)
+            {
+                var reqCols = subInclude != null && subInclude.HasWork
+                    ? subInclude.GetRequiredParentCols(ModelName)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var resolvedJoinCol = An5ClientMetadata.ResolveColumn(ModelName, childJoinCol);
+                if (!string.IsNullOrEmpty(resolvedJoinCol)) reqCols.Add(resolvedJoinCol);
+                EnsureJoinColumns(effectiveSelectCols, reqCols, out tempClearedCols);
+            }
+
+            var query = BuildFindSql(whereSql, orderBySql, null, null, effectiveSelectCols);
+            return QueryRaw(query, parameters);
+        }
+
+        void IAn5RelationTableClient.HydrateIncludes(System.Collections.IList rows, An5IncludeSpec spec)
+        {
+            if (rows == null || rows.Count == 0 || spec == null || !spec.HasWork) return;
+            var typed = rows as List<T>;
+            if (typed == null)
+            {
+                typed = new List<T>(rows.Count);
+                foreach (var r in rows) if (r is T tr) typed.Add(tr);
+            }
+            ResolveIncludes(typed, spec);
+        }
+
+        void IAn5RelationTableClient.ClearTempColumns(System.Collections.IList rows, HashSet<string> cols)
+        {
+            ClearColumnsOnRows(rows, cols);
         }
 
         public T FindUnique(object id)

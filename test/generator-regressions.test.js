@@ -934,6 +934,17 @@ model Post {
   assertIncludes(typesCs, 'public class AuthorScalarAggregateFilter');
   assertIncludes(typesCs, 'public class AuthorAggregateHavingInput : IAn5HavingInput');
   assertIncludes(typesCs, 'public class AuthorGroupByArgs : IAn5GroupByArgs');
+  assertIncludes(typesCs, 'internal interface IAn5Include { }');
+  assertIncludes(typesCs, 'public class AuthorInclude : IAn5Include');
+  assertIncludes(typesCs, 'public object Posts { get; set; }');
+  assertIncludes(typesCs, 'public class PostInclude : IAn5Include');
+  assertIncludes(typesCs, 'public object Author { get; set; }');
+  assertIncludes(typesCs, 'public object _count { get; set; }');
+  assertIncludes(typesCs, 'public object Include { get; set; }');
+
+  const authorCs = fs.readFileSync(path.join(dotnetDir, 'Author.cs'), 'utf8');
+  assertIncludes(authorCs, 'public List<Post> Posts { get; set; } = new List<Post>();');
+  assertIncludes(authorCs, 'public Dictionary<string, int> _count { get; set; }');
 
   const ctxCs = fs.readFileSync(path.join(dotnetDir, 'An5DbContext.cs'), 'utf8');
   assertIncludes(ctxCs, 'public static class An5ClientMetadata');
@@ -941,6 +952,9 @@ model Post {
   assertIncludes(ctxCs, '{ "posts", new An5RelationDef { ModelName = "Post", RelationType = "many", ForeignKey = "authorId", LocalKey = "id" } }');
   assertIncludes(ctxCs, '{ "author", new An5RelationDef { ModelName = "Author", RelationType = "one", ForeignKey = "authorId", LocalKey = "id" } }');
   assertIncludes(ctxCs, 'internal static class An5WhereBuilder');
+  assertIncludes(ctxCs, 'internal static An5IncludeSpec ParseIncludeSpec(');
+  assertIncludes(ctxCs, 'internal interface IAn5RelationTableClient');
+  assertIncludes(ctxCs, 'private void ResolveIncludes(List<T> rows, An5IncludeSpec spec)');
   assertIncludes(ctxCs, 'public static string BuildHaving(');
   assertIncludes(ctxCs, 'public List<T> FindMany(object args)');
   assertIncludes(ctxCs, 'public List<Dictionary<string, object>> GroupBy(object args)');
