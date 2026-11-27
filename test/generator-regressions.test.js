@@ -881,18 +881,33 @@ model Post {
   assertIncludes(clientGo, 'type BoolFilter struct {\n\tEquals *bool\n\tNot    *bool\n}');
   assertIncludes(clientGo, 'Mode       string // "default" or "insensitive"');
   assertIncludes(clientGo, 'buildWhereFromStructWithContext');
+  assertIncludes(clientGo, 'buildWhereFromMapWithContext');
   assertIncludes(clientGo, 'buildHavingFromStruct');
   assertIncludes(clientGo, 'resolveModelRelation(modelName, name)');
+  assertIncludes(clientGo, 'type IncludeOptions struct');
+  assertIncludes(clientGo, 'type CountIncludeOptions struct');
+  assertIncludes(clientGo, 'var ModelTypes = map[string]reflect.Type');
+  assertIncludes(clientGo, 'func (c *TableClient[T]) parseIncludeSpec(');
+  assertIncludes(clientGo, 'func (c *TableClient[T]) hydrateIncludes(');
 
   const authorGo = fs.readFileSync(path.join(goDir, 'Author.go'), 'utf8');
+  assertIncludes(authorGo, 'Count map[string]int `json:"_count,omitempty"`');
+  assertIncludes(authorGo, 'type AuthorInclude struct');
+  assertIncludes(authorGo, 'Posts interface{}');
+  assertIncludes(authorGo, 'type AuthorFindManyArgs struct {\n\tWhere   *AuthorWhereInput\n\tOrderBy *AuthorOrderByInput\n\tTake    *int\n\tSkip    *int\n\tSelect  []string\n\tInclude interface{}\n}');
+  assertIncludes(authorGo, 'type AuthorFindFirstArgs struct {\n\tWhere   *AuthorWhereInput\n\tOrderBy *AuthorOrderByInput\n\tSelect  []string\n\tInclude interface{}\n}');
+  assertIncludes(authorGo, 'type AuthorFindUniqueArgs struct {\n\tWhere   *AuthorWhereInput\n\tSelect  []string\n\tInclude interface{}\n}');
   assertIncludes(authorGo, 'Posts *ListRelationFilter[PostWhereInput]');
   assertIncludes(authorGo, 'IsActive *BoolFilter');
   assertIncludes(authorGo, 'type AuthorCountAggregateFilter struct');
   assertIncludes(authorGo, 'type AuthorAggregateHavingInput struct');
   assertIncludes(authorGo, 'type AuthorGroupByArgs struct');
+  assertIncludes(authorGo, 'func (AuthorInclude) isAn5Include()');
 
   const postGo = fs.readFileSync(path.join(goDir, 'Post.go'), 'utf8');
   assertIncludes(postGo, 'Author *RelationFilter[AuthorWhereInput]');
+  assertIncludes(postGo, 'type PostInclude struct');
+  assertIncludes(postGo, 'Author interface{}');
 
   const metaGo = fs.readFileSync(path.join(goDir, 'metadata.go'), 'utf8');
   assertIncludes(metaGo, 'var RelationMap = map[string]map[string]RelationDef');
