@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **PostgreSQL migrations** — `db:migrate` now introspects PostgreSQL tables, columns, views and indexes, generates PostgreSQL-specific DDL and rollback SQL, and records migration checksums in `_an5_migrations`.
+- **Concurrent migration safety** — SQL Server and PostgreSQL migration operations use transaction-scoped locks; each migration's DDL and history update commit together.
+
+### Changed
+- **Preview and history safeguards** — migration previews do not create the history table, applied migration drift is rejected, and new migration files are created without overwriting existing files.
+- **Provider scope is explicit** — PostgreSQL joins SQL Server for `db:migrate`; MySQL, SQLite and Google Sheets remain explicitly unsupported until their migration semantics are implemented.
+
 ## [1.4.0] - 2026-11-28
 
 ### Added

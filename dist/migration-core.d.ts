@@ -34,9 +34,11 @@ export interface SchemaModel {
 export interface DbColumn {
     columnName: string;
     dataType: string;
+    provider?: Provider;
     maxLength?: number;
     precision?: number;
     scale?: number;
+    datetimePrecision?: number;
     isNullable: boolean;
     isPrimaryKey: boolean;
     isIdentity: boolean;
@@ -84,20 +86,22 @@ export interface AppliedMigrationDrift {
  * migration is applied, where it can still be fixed without a partial history.
  */
 export declare function verifyAppliedMigrations(applied: readonly AppliedMigrationRef[], readMigration: (id: string) => string | null, checksum: (content: string) => string): AppliedMigrationDrift;
+export declare function isValidMigrationId(id: string): boolean;
+export declare function migrationFileName(timestamp: string, attempt: number): string;
 export interface MigrationCommandOptions {
     preview: boolean;
     rest: string[];
 }
 export declare function parseSqlType(raw: string): string;
-export declare function formatDbColumnSqlType(column: DbColumn): string;
+export declare function formatDbColumnSqlType(column: DbColumn, provider?: Provider): string;
 export declare function mapDefault(val: string): string;
 export declare function safeIdentifierName(raw: string): string;
-export declare function quoteTableName(raw: string): string;
-export declare function tableIdentityName(raw: string): string;
+export declare function quoteTableName(raw: string, provider?: Provider): string;
+export declare function tableIdentityName(raw: string, defaultSchema?: string): string;
 export declare function buildAlterColumnWarnings(previousSqlType: string, nextSqlType: string, previousNullable: boolean, nextNullable: boolean): string[];
-export declare function buildAlterColumnPreflightSql(tableName: string, columnName: string, previousSqlType: string, nextSqlType: string, previousNullable: boolean, nextNullable: boolean): string[];
-export declare function buildAddColumnPreflightSql(tableName: string, field: SchemaField): string[];
-export declare function buildUniqueConstraintPreflightSql(tableName: string, fields: string[]): string[];
+export declare function buildAlterColumnPreflightSql(tableName: string, columnName: string, previousSqlType: string, nextSqlType: string, previousNullable: boolean, nextNullable: boolean, provider?: Provider): string[];
+export declare function buildAddColumnPreflightSql(tableName: string, field: SchemaField, provider?: Provider): string[];
+export declare function buildUniqueConstraintPreflightSql(tableName: string, fields: string[], provider?: Provider): string[];
 /**
  * Reads a `.an5` schema into models to compare against the database.
  *
@@ -108,20 +112,19 @@ export declare function buildUniqueConstraintPreflightSql(tableName: string, fie
  * comparison waits until the whole schema has been read.
  */
 export declare function parseSchemaText(text: string, provider?: Provider): SchemaModel[];
-export declare function buildCreateTableSql(model: SchemaModel): string;
+export declare function buildCreateTableSql(model: SchemaModel, provider?: Provider): string;
 /**
  * The migration DDL for a view.
  *
- * `CREATE OR ALTER` is SQL Server's form; `db:migrate` is SQL Server-only today.
- * The body is expected to be a single `SELECT` (`@@sql`), so no batch splitting
- * is needed here — the caller isolates the statement with `GO`.
+ * The body is expected to be a single `SELECT` (`@@sql`); the provider dialect
+ * supplies the view statement that migration files can execute.
  */
-export declare function buildCreateViewSql(model: SchemaModel): string;
-export declare function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, ops: MigrationOp[]): void;
-export declare function generateColumnDiff(model: SchemaModel, dbColumns: DbColumn[], ops: MigrationOp[]): void;
-export declare function generateDiff(schemaModels: SchemaModel[], dbTables: string[], introspectTable: (tableName: string) => Promise<DbColumn[]>, introspectArtifacts?: (tableName: string) => Promise<TableArtifacts>, dbViews?: string[], introspectViewDefinition?: (viewName: string) => Promise<string | null>): Promise<MigrationOp[]>;
-export declare function buildMigrationFile(timestamp: string, ops: MigrationOp[]): string;
-export declare function buildDownMigrationSql(ops: MigrationOp[]): string;
+export declare function buildCreateViewSql(model: SchemaModel, provider?: Provider): string;
+export declare function buildIndexDiff(model: SchemaModel, artifacts: TableArtifacts, ops: MigrationOp[], provider?: Provider): void;
+export declare function generateColumnDiff(model: SchemaModel, dbColumns: DbColumn[], ops: MigrationOp[], provider?: Provider): void;
+export declare function generateDiff(schemaModels: SchemaModel[], dbTables: string[], introspectTable: (tableName: string) => Promise<DbColumn[]>, introspectArtifacts?: (tableName: string) => Promise<TableArtifacts>, dbViews?: string[], introspectViewDefinition?: (viewName: string) => Promise<string | null>, provider?: Provider, defaultSchema?: string): Promise<MigrationOp[]>;
+export declare function buildMigrationFile(timestamp: string, ops: MigrationOp[], provider?: Provider): string;
+export declare function buildDownMigrationSql(ops: MigrationOp[], provider?: Provider): string;
 export declare function parseMigrationSections(sql: string): MigrationSections;
 export declare function splitSqlBatches(sql: string): string[];
 export declare function parseRollbackSelection(args: string[], applied: AppliedMigrationRef[]): {

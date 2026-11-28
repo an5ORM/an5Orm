@@ -24,10 +24,9 @@ const suggest_1 = require("./suggest");
 /** Order used when printing issues and when suggesting a provider. */
 exports.PROVIDERS = ['mssql', 'postgres', 'mysql', 'sqlite', 'googlesheets'];
 /**
- * SQL Server is the default provider: it is the only one `db:push`, `db:pull`
- * and `db:migrate` actually support, and it is what existing `.an5` schemas
- * were written for. With no connection string, treat the schema as SQL Server —
- * the same fallback `an5Adapter` uses.
+ * SQL Server is the default provider and the fallback when there is no connection
+ * string. `db:migrate` also supports PostgreSQL; `db:pull` and `db:cleanup`
+ * remain SQL Server-only.
  */
 exports.DEFAULT_PROVIDER = 'mssql';
 /** Display name, used in error messages. */

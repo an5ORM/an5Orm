@@ -59,7 +59,8 @@
     "test:provider-types": "node --test test/provider-types.test.js",
     "test:provider-push": "node --test test/provider-push.test.js",
     "test:provider-push:sqlite": "node --test test/provider-push.sqlite.test.js",
-    "test:integration:live": "node test/live-db.integration.test.js",
+    "test:integration:live": "node test/live-db.integration.test.js && node test/postgres-migrate.integration.test.js",
+    "test:integration:postgres": "node test/postgres-migrate.integration.test.js",
     "verify:pack": "node scripts/verify-pack.js",
     "normalize:eol": "node scripts/normalize-eol.js"
   },

@@ -6,6 +6,9 @@
  * Run: node test/unit.test.js
  */
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   quoteIdentifier,
@@ -30,6 +33,8 @@ const {
   formatDbColumnSqlType,
   generateColumnDiff,
   generateDiff,
+  isValidMigrationId,
+  migrationFileName,
   mapDefault,
   parseMigrationCommandOptions,
   parseMigrationSections,
@@ -50,6 +55,7 @@ const {
 } = require('../dist/generator/src/pull-schema.js');
 
 const { orderViewsByDependency } = require('../dist/generator/src/view-order.js');
+const { writeNewMigrationFile } = require('../dist/migrate.js');
 
 // ─── Test harness ────────────────────────────────────────────────────────────
 
@@ -1320,6 +1326,40 @@ test('verifyAppliedMigrations reports changed and missing files', () => {
   );
 });
 
+test('migration ids are plain SQL filenames safe to resolve inside the migrations folder', () => {
+  assert.equal(isValidMigrationId('2026-11-28_migration.sql'), true);
+  assert.equal(isValidMigrationId('legacy migration.sql'), true);
+  assert.equal(isValidMigrationId('../outside.sql'), false);
+  assert.equal(isValidMigrationId('..\\outside.sql'), false);
+  assert.equal(isValidMigrationId('C:outside.sql'), false);
+  assert.equal(isValidMigrationId('CON.sql'), false);
+  assert.equal(isValidMigrationId('migration\n.sql'), false);
+  assert.equal(isValidMigrationId(`${'x'.repeat(252)}.sql`), false);
+});
+
+test('migration filename collision suffixes remain ordered after the original migration', () => {
+  const timestamp = '2026-11-28T03-02-00-123';
+  assert.equal(migrationFileName(timestamp, 0), `${timestamp}_migration.sql`);
+  assert.equal(migrationFileName(timestamp, 1), `${timestamp}_migration_001.sql`);
+  assert.equal(migrationFileName(timestamp, 12), `${timestamp}_migration_012.sql`);
+  assert.throws(() => migrationFileName(timestamp, -1), /non-negative integer/);
+});
+
+test('migration generation never overwrites a file with the same timestamp', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-migrate-files-'));
+  try {
+    const timestamp = '2026-11-28T03-02-00-123';
+    const original = writeNewMigrationFile(directory, timestamp, 'first');
+    const collision = writeNewMigrationFile(directory, timestamp, 'second');
+    assert.equal(path.basename(original), `${timestamp}_migration.sql`);
+    assert.equal(path.basename(collision), `${timestamp}_migration_001.sql`);
+    assert.equal(fs.readFileSync(original, 'utf8'), 'first');
+    assert.equal(fs.readFileSync(collision, 'utf8'), 'second');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('generateDiff matches dbo-qualified schema tables with unqualified introspection names', async () => {
   const [model] = parseSchemaText(`
     model User {
@@ -1429,6 +1469,26 @@ test('parseMigrationSections splits up and down SQL', () => {
   assert.strictEqual(sections.hasDown, true);
 });
 
+test('parseMigrationSections ignores markers inside SQL block comments', () => {
+  const sections = parseMigrationSections(`
+    -- migrate:up
+    /*
+    -- migrate:down
+    */
+    SELECT 1
+    -- migrate:down
+    SELECT 2
+  `);
+  assert.match(sections.up, /SELECT 1/);
+  assert.doesNotMatch(sections.up, /SELECT 2/);
+  assert.match(sections.down, /SELECT 2/);
+});
+
+test('parseMigrationSections rejects duplicate and out-of-order markers', () => {
+  assert.throws(() => parseMigrationSections('-- migrate:up\nSELECT 1\n-- migrate:up\nSELECT 2'), /duplicate section markers/);
+  assert.throws(() => parseMigrationSections('-- migrate:down\nSELECT 1\n-- migrate:up\nSELECT 2'), /ordered as preflight, up, then down/);
+});
+
 test('splitSqlBatches splits GO and drops comment-only batches', () => {
   assert.deepStrictEqual(splitSqlBatches(`
     -- comment only
@@ -1439,6 +1499,36 @@ test('splitSqlBatches splits GO and drops comment-only batches', () => {
   `), [
     'CREATE TABLE [users] ([id] INT)',
     'INSERT INTO [users] ([id]) VALUES (1)',
+  ]);
+});
+
+test('splitSqlBatches ignores GO inside strings, quoted identifiers, and block comments', () => {
+  assert.deepStrictEqual(splitSqlBatches(`
+    SELECT 'text
+    GO
+    still text'
+    GO
+    /* outer
+      GO
+      /* nested
+      GO
+      */
+    */
+    SELECT [GO]]name]
+    GO
+    SELECT 2
+  `), [
+    `SELECT 'text
+    GO
+    still text'`,
+    `/* outer
+      GO
+      /* nested
+      GO
+      */
+    */
+    SELECT [GO]]name]`,
+    'SELECT 2',
   ]);
 });
 
@@ -1469,6 +1559,10 @@ test('parseRollbackSelection accepts --to applied migration target', () => {
 
 test('parseRollbackSelection rejects invalid target and steps', () => {
   assert.throws(() => parseRollbackSelection(['0'], [{ id: '001.sql' }]), /positive integer/);
+  assert.throws(() => parseRollbackSelection(['1tail'], [{ id: '001.sql' }]), /positive integer/);
+  assert.throws(() => parseRollbackSelection(['1', '2'], [{ id: '001.sql' }]), /positive integer/);
+  assert.throws(() => parseRollbackSelection(['--to', '001.sql', 'extra'], [{ id: '001.sql' }]), /exactly one target/);
+  assert.throws(() => parseRollbackSelection(['2'], [{ id: '001.sql' }]), /only 1 migration is applied/);
   assert.throws(() => parseRollbackSelection(['--to', 'missing.sql'], [{ id: '001.sql' }]), /not applied/);
 });
 
@@ -1483,6 +1577,100 @@ test('parseMigrationCommandOptions extracts preview flag', () => {
     preview: false,
     rest: ['--to', '001.sql'],
   });
+});
+
+test('PostgreSQL migration generation uses PostgreSQL DDL and valid statement separators', async () => {
+  const [model] = parseSchemaText(`
+    model Account {
+      id INTEGER @id @default(autoincrement())
+      code VARCHAR(100) @unique(map: "uq_accounts_code")
+      status VARCHAR(32)?
+      @@index([status], map: "ix_accounts_status")
+    }
+  `, 'postgres');
+  const createSql = buildCreateTableSql(model, 'postgres');
+  assert.match(createSql, /CREATE TABLE "accounts"/);
+  assert.match(createSql, /"id" INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY/);
+  assert.match(createSql, /CONSTRAINT "uq_accounts_code" UNIQUE/);
+  assert.doesNotMatch(createSql, /\[[^\]]+\]|IDENTITY\(1,1\)/);
+
+  const ops = await generateDiff([model], [], async () => [], undefined, [], undefined, 'postgres', 'public');
+  const migration = buildMigrationFile('2026-11-28T03-02-00-123', ops, 'postgres');
+  assert.match(migration, /CREATE INDEX "ix_accounts_status" ON "accounts" \("status"\);/);
+  assert.doesNotMatch(migration, /\bGO\b/);
+  assert.match(buildDownMigrationSql(ops, 'postgres'), /DROP INDEX "ix_accounts_status"/);
+  assert.match(buildDownMigrationSql(ops, 'postgres'), /DROP TABLE "accounts"/);
+});
+
+test('PostgreSQL migration alter and preflight SQL avoid T-SQL syntax', () => {
+  const [model] = parseSchemaText(`
+    model User {
+      name VARCHAR(100)
+    }
+  `, 'postgres');
+  const ops = [];
+  generateColumnDiff(model, [{
+    columnName: 'name',
+    dataType: 'character varying',
+    maxLength: 200,
+    isNullable: true,
+    isPrimaryKey: false,
+    isIdentity: false,
+  }], ops, 'postgres');
+
+  assert.match(ops[0].sql, /ALTER COLUMN "name" TYPE VARCHAR\(100\)/);
+  assert.match(ops[0].sql, /ALTER COLUMN "name" SET NOT NULL/);
+  assert.match(ops[0].preflightSql[0], /DO \$\$ BEGIN IF EXISTS/);
+  assert.match(ops[0].preflightSql[1], /char_length\("name"\) > 100/);
+  assert.doesNotMatch(ops[0].preflightSql.join('\n') + ops[0].sql, /THROW|TRY_CONVERT|LEN\(|\[[^\]]+\]/);
+  const uniquePreflight = buildUniqueConstraintPreflightSql('users', ['email'], 'postgres')[0];
+  assert.match(uniquePreflight, /"email" IS NOT NULL/);
+  assert.doesNotMatch(uniquePreflight, /COUNT_BIG/);
+  assert.deepStrictEqual(buildAddColumnPreflightSql('users', {
+    name: 'email',
+    sqlType: 'VARCHAR(100)',
+    isOptional: true,
+    isId: false,
+    isUnique: true,
+  }, 'postgres'), []);
+  assert.equal(formatDbColumnSqlType({ dataType: 'character varying', maxLength: 80 }, 'postgres'), 'VARCHAR(80)');
+  assert.equal(formatDbColumnSqlType({ dataType: 'timestamp with time zone' }, 'postgres'), 'TIMESTAMPTZ');
+  assert.equal(tableIdentityName('public.users', 'public'), 'users');
+  assert.equal(tableIdentityName('dbo.users', 'public'), 'dbo.users');
+  const [view] = parseSchemaText(`
+    view ActiveAccount {
+      id INTEGER
+      @@map("active_accounts")
+      @@sql("SELECT id FROM accounts")
+    }
+  `, 'postgres');
+  assert.match(buildCreateViewSql(view, 'postgres'), /CREATE OR REPLACE VIEW "active_accounts"/);
+  assert.match(buildDownMigrationSql([{
+    type: 'CREATE_VIEW',
+    table: 'active_accounts',
+    sql: 'CREATE OR REPLACE VIEW "active_accounts" AS SELECT id FROM accounts',
+  }], 'postgres'), /DROP VIEW IF EXISTS "active_accounts"/);
+});
+
+test('migration parser ignores markers and GO inside PostgreSQL dollar-quoted bodies', () => {
+  const sql = `
+    -- migrate:preflight
+    DO $check$ BEGIN
+      -- migrate:down
+      SELECT 'GO';
+      GO
+    END $check$;
+    -- migrate:up
+    CREATE TABLE users (id INTEGER);
+    -- migrate:down
+    DROP TABLE users;
+  `;
+  const sections = parseMigrationSections(sql);
+  assert.match(sections.preflight, /-- migrate:down/);
+  assert.match(sections.preflight, /^\s*DO \$check\$/);
+  assert.match(sections.up, /CREATE TABLE users/);
+  assert.match(sections.down, /DROP TABLE users/);
+  assert.equal(splitSqlBatches(sections.preflight).length, 1);
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

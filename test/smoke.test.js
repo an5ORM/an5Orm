@@ -10,7 +10,11 @@ assert.ok(packageJson.scripts && packageJson.scripts.generate, 'Expected generat
 assert.ok(packageJson.scripts && packageJson.scripts['db:push'], 'Expected db:push script');
 assert.ok(packageJson.scripts && packageJson.scripts['db:migrate:apply'], 'Expected db:migrate:apply script');
 assert.ok(packageJson.scripts && packageJson.scripts['db:migrate:rollback'], 'Expected db:migrate:rollback script');
-assert.strictEqual(packageJson.scripts && packageJson.scripts['test:integration:live'], 'node test/live-db.integration.test.js');
+assert.strictEqual(
+  packageJson.scripts && packageJson.scripts['test:integration:live'],
+  'node test/live-db.integration.test.js && node test/postgres-migrate.integration.test.js',
+);
+assert.strictEqual(packageJson.scripts && packageJson.scripts['test:integration:postgres'], 'node test/postgres-migrate.integration.test.js');
 assert.ok(fs.existsSync(path.join(root, 'generator', 'src', 'index.ts')), 'Expected generator entrypoint');
 
 if (fs.existsSync(path.join(root, '..', 'an5Schema'))) {

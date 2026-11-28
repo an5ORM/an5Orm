@@ -33,7 +33,11 @@ const {
 const { SchemaParser, sqlTypeToTs } = require(path.join(distSrc, 'parser.js'));
 const { detectProvider, providerFromConfig, providerForProject } = require(path.join(distSrc, 'config.js'));
 const { parseSchemaText } = require(path.join(__dirname, '..', 'dist', 'migration-core.js'));
-const { SQL_SERVER_ONLY_COMMANDS, sqlServerOnlyError } = require(path.join(__dirname, '..', 'dist', 'provider-support.js'));
+const {
+  SQL_SERVER_ONLY_COMMANDS,
+  migrationProviderError,
+  sqlServerOnlyError,
+} = require(path.join(__dirname, '..', 'dist', 'provider-support.js'));
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-field-types-'));
 let dirCounter = 0;
@@ -65,7 +69,7 @@ test('every provider has its own type table', () => {
   }
 });
 
-test('the default provider is SQL Server, the only one push/pull/migrate support', () => {
+test('SQL Server remains the default provider', () => {
   assert.equal(DEFAULT_PROVIDER, 'mssql');
 });
 
@@ -405,15 +409,11 @@ test('parseSchemaText still accepts a relation and defaults to SQL Server', () =
 
 // ─── Commands that only speak SQL Server ─────────────────────────────────────
 
-test('every command that issues SQL itself is listed as SQL Server only', () => {
+test('SQL Server-only commands list their supported commands', () => {
   // `db:push` and `db:seed` are deliberately absent. db:push goes through the
   // dialect layer and writes each provider's own DDL; db:seed only runs the
   // project's own script and emits no SQL. Both must keep working elsewhere.
-  const expected = [
-    'db:pull', 'db:cleanup',
-    'db:migrate', 'db:migrate:diff', 'db:migrate:generate',
-    'db:migrate:apply', 'db:migrate:rollback', 'db:migrate:status',
-  ];
+  const expected = ['db:pull', 'db:cleanup'];
   const listed = Object.keys(SQL_SERVER_ONLY_COMMANDS);
   for (const command of expected) {
     assert.ok(listed.includes(command), `${command} should be listed as SQL Server only`);
@@ -436,14 +436,21 @@ test('the refusal says which command, which provider and what to do', () => {
   // A plain function, so the message it exists to deliver can finally be asserted.
   assert.equal(sqlServerOnlyError('mssql', 'db:push'), null, 'SQL Server is allowed');
 
-  const message = sqlServerOnlyError('postgres', 'db:migrate:apply');
-  assert.match(message, /db:migrate:apply only supports SQL Server/);
-  assert.match(message, /the connection string selects PostgreSQL/);
-  assert.match(message, /apply pending migrations/, 'says what the command was going to do');
-  assert.match(message, /Use a SQL Server connection string/, 'says what to do instead');
+  const pullMessage = sqlServerOnlyError('postgres', 'db:pull');
+  assert.match(pullMessage, /db:pull only supports SQL Server/);
+  assert.match(pullMessage, /the connection string selects PostgreSQL/);
+  assert.match(pullMessage, /read the catalog and write schema files/, 'says what the command was going to do');
+  assert.match(pullMessage, /Use a SQL Server connection string/, 'says what to do instead');
 
   // An unknown command still reads as a sentence rather than falling apart.
   assert.match(sqlServerOnlyError('sqlite', 'db:whatever'), /db:whatever run using sys\.\*/);
+
+  assert.equal(migrationProviderError('mssql', 'db:migrate:apply'), null);
+  assert.equal(migrationProviderError('postgres', 'db:migrate:apply'), null);
+  const unsupported = migrationProviderError('mysql', 'db:migrate:apply');
+  assert.match(unsupported, /currently supports SQL Server and PostgreSQL/);
+  assert.match(unsupported, /MySQL is not supported by the migration engine yet/);
+  assert.match(migrationProviderError('googlesheets', 'db:migrate'), /requires relational DDL/);
 });
 
 test('the detected provider decides what the schema is checked against', async () => {

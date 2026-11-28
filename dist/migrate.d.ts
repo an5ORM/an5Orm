@@ -10,3 +10,4 @@
  *   npx tsx migrate.ts status     # Show migration status
  */
 import 'dotenv/config';
+export declare function writeNewMigrationFile(directory: string, timestamp: string, content: string): string;

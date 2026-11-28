@@ -19,10 +19,9 @@ export type Provider = 'mssql' | 'postgres' | 'mysql' | 'sqlite' | 'googlesheets
 export const PROVIDERS: readonly Provider[] = ['mssql', 'postgres', 'mysql', 'sqlite', 'googlesheets'];
 
 /**
- * SQL Server is the default provider: it is the only one `db:push`, `db:pull`
- * and `db:migrate` actually support, and it is what existing `.an5` schemas
- * were written for. With no connection string, treat the schema as SQL Server —
- * the same fallback `an5Adapter` uses.
+ * SQL Server is the default provider and the fallback when there is no connection
+ * string. `db:migrate` also supports PostgreSQL; `db:pull` and `db:cleanup`
+ * remain SQL Server-only.
  */
 export const DEFAULT_PROVIDER: Provider = 'mssql';
 

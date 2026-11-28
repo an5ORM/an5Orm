@@ -92,8 +92,14 @@ npx @an5/orm db:migrate generate
 # Apply pending migrations
 npx @an5/orm db:migrate apply
 
+# Preview pending migrations without applying them
+npx @an5/orm db:migrate apply --preview
+
 # Rollback last migration
 npx @an5/orm db:migrate rollback
+
+# Preview the latest rollback
+npx @an5/orm db:migrate rollback --preview
 
 # View migration status
 npx @an5/orm db:migrate status
@@ -121,6 +127,31 @@ You can also add these commands to your project's `package.json` scripts:
 ```
 
 Then run them with `npm run generate`, `npm run db:push`, etc.
+
+### Migration safety and provider support
+
+`db:migrate` supports SQL Server and PostgreSQL. MySQL, SQLite and Google Sheets
+are rejected explicitly until their DDL and concurrency semantics are implemented.
+`apply --preview` and `rollback --preview` display the SQL under a transaction-
+scoped migration lock; they do not create the migration history table or execute
+migration SQL.
+
+SQL Server uses an exclusive application lock; PostgreSQL uses a transaction-
+scoped advisory lock. Both re-read migration history while holding the lock and
+commit each migration's SQL and history/checksum update in the same transaction.
+If another process changes rollback history after a rollback is selected, the
+command stops and asks you to inspect status and retry rather than rolling back a
+different migration.
+
+Applied migration files are immutable: editing, renaming, or deleting one is
+reported as history drift. Migration IDs must be plain `.sql` filenames. New
+migrations are created exclusively, with a suffix if a timestamped filename
+already exists, so generation never overwrites an existing file. `GO` is treated
+as a batch separator only when it is on a line by itself outside SQL strings,
+quoted identifiers, block comments, and PostgreSQL dollar-quoted bodies.
+
+Generated destructive drop operations remain commented out; review generated
+SQL before applying and write any intended destructive change explicitly.
 
 ## Runtime Database Usage (via `@an5/adapters`)
 

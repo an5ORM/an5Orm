@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { buildMigrationFile } = require('../dist/migration-core.js');
 const { An5Adapter, createAn5Adapter, setAdapterMetadata } = require('@an5/adapters');
 
@@ -34,6 +34,29 @@ function runMigrationCli(workspace, command) {
     cwd: workspace,
     env: { ...process.env, DATABASE_URL: MSSQL_URL },
     stdio: 'pipe',
+    timeout: 90000,
+  });
+}
+
+function runMigrationCliAsync(workspace, command) {
+  const parts = Array.isArray(command) ? command : [command];
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, [
+      require.resolve('tsx/cli'),
+      path.join(__dirname, '..', 'migrate.ts'),
+      ...parts,
+    ], {
+      cwd: workspace,
+      env: { ...process.env, DATABASE_URL: MSSQL_URL },
+      encoding: 'utf8',
+      timeout: 90000,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`Migration CLI failed: ${error.message}\n${stdout || ''}\n${stderr || ''}`));
+        return;
+      }
+      resolve(`${stdout || ''}${stderr || ''}`);
+    });
   });
 }
 
@@ -60,10 +83,20 @@ async function main() {
   const orderTable = `an5_orm_live_orders_${suffix}`;
   const migrationTable = `an5_orm_migrate_${suffix}`;
   const migrationTableB = `an5_orm_migrate_b_${suffix}`;
+  const concurrentMigrationTables = [
+    `an5_orm_migrate_concurrent_a_${suffix}`,
+    `an5_orm_migrate_concurrent_b_${suffix}`,
+  ];
+  const concurrentMigrationIds = concurrentMigrationTables.map((table, index) => `zzzzzz_concurrent_${suffix}_${index}.sql`);
+  const migrationIds = [`9999_${migrationTable}.sql`, `9999_${migrationTableB}.sql`];
   const userTableSql = `[dbo].${q(userTable)}`;
   const orderTableSql = `[dbo].${q(orderTable)}`;
   const migrationTableSql = `[dbo].${q(migrationTable)}`;
   const migrationTableBSql = `[dbo].${q(migrationTableB)}`;
+  const concurrentMigrationWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-orm-migrate-concurrent-'));
+  const concurrentMigrationsDir = path.join(concurrentMigrationWorkspace, 'migrations');
+  fs.mkdirSync(concurrentMigrationsDir, { recursive: true });
+  fs.writeFileSync(path.join(concurrentMigrationWorkspace, 'an5Orm.config.js'), 'module.exports = { schemaDir: "schema" };\n');
 
   const setup = new An5Adapter({ connectionString: MSSQL_URL, connectionTimeout: 30000, requestTimeout: 60000 });
   let db;
@@ -281,7 +314,24 @@ async function main() {
 
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTable}', 'U') IS NOT NULL DROP TABLE ${migrationTableSql}`);
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTableB}', 'U') IS NOT NULL DROP TABLE ${migrationTableBSql}`);
+    const trackingTableExistedBeforePreview = await tableExists(setup, '_an5_migrations');
+    const trackingRowsBeforePreview = trackingTableExistedBeforePreview
+      ? await setup.$queryRawUnsafe(
+        `SELECT [id] FROM [dbo].[_an5_migrations] WHERE [id] IN (@p_0, @p_1)`,
+        ...migrationIds,
+      )
+      : [];
+    assert.deepStrictEqual(trackingRowsBeforePreview, []);
     runMigrationCli(migrationWorkspace, ['apply', '--preview']);
+    runMigrationCli(migrationWorkspace, ['rollback', '--preview', '2']);
+    assert.strictEqual(await tableExists(setup, '_an5_migrations'), trackingTableExistedBeforePreview);
+    if (trackingTableExistedBeforePreview) {
+      const trackingRowsAfterPreview = await setup.$queryRawUnsafe(
+        `SELECT [id] FROM [dbo].[_an5_migrations] WHERE [id] IN (@p_0, @p_1)`,
+        ...migrationIds,
+      );
+      assert.deepStrictEqual(trackingRowsAfterPreview, []);
+    }
     assert.strictEqual(await tableExists(setup, migrationTable), false);
     runMigrationCli(migrationWorkspace, 'apply');
     assert.strictEqual(await tableExists(setup, migrationTable), true);
@@ -291,6 +341,50 @@ async function main() {
     runMigrationCli(migrationWorkspace, ['rollback', '2']);
     assert.strictEqual(await tableExists(setup, migrationTable), false);
     assert.strictEqual(await tableExists(setup, migrationTableB), false);
+
+    for (let index = 0; index < concurrentMigrationTables.length; index++) {
+      const table = concurrentMigrationTables[index];
+      const migrationId = concurrentMigrationIds[index];
+      fs.writeFileSync(path.join(concurrentMigrationsDir, migrationId), buildMigrationFile(`concurrent-${index}`, [
+        {
+          type: 'CREATE_TABLE',
+          table: `dbo.${table}`,
+          sql: `CREATE TABLE [dbo].${q(table)} ([id] INT NOT NULL PRIMARY KEY)`,
+        },
+      ]));
+    }
+
+    const trackingTableExisted = await tableExists(setup, '_an5_migrations');
+    const concurrentRowsBeforePreview = trackingTableExisted
+      ? await setup.$queryRawUnsafe(
+        `SELECT [id] FROM [dbo].[_an5_migrations] WHERE [id] IN (@p_0, @p_1)`,
+        ...concurrentMigrationIds,
+      )
+      : [];
+    assert.deepStrictEqual(concurrentRowsBeforePreview, []);
+    runMigrationCli(concurrentMigrationWorkspace, ['apply', '--preview']);
+    runMigrationCli(concurrentMigrationWorkspace, ['rollback', '--preview']);
+    assert.strictEqual(await tableExists(setup, '_an5_migrations'), trackingTableExisted);
+    for (const table of concurrentMigrationTables) {
+      assert.strictEqual(await tableExists(setup, table), false, 'preview must not apply schema SQL');
+    }
+
+    await Promise.all([
+      runMigrationCliAsync(concurrentMigrationWorkspace, 'apply'),
+      runMigrationCliAsync(concurrentMigrationWorkspace, 'apply'),
+    ]);
+    for (const table of concurrentMigrationTables) {
+      assert.strictEqual(await tableExists(setup, table), true, 'concurrent apply must apply every migration');
+    }
+    const concurrentAppliedRows = await setup.$queryRawUnsafe(
+      `SELECT [id] FROM [dbo].[_an5_migrations] WHERE [id] IN (@p_0, @p_1) ORDER BY [id]`,
+      ...concurrentMigrationIds,
+    );
+    assert.deepStrictEqual(concurrentAppliedRows.map((row) => row.id), [...concurrentMigrationIds].sort());
+    runMigrationCli(concurrentMigrationWorkspace, ['rollback', '2']);
+    for (const table of concurrentMigrationTables) {
+      assert.strictEqual(await tableExists(setup, table), false, 'rollback must remove each migration table');
+    }
 
     // Mapped + advanced index metadata: schema diff generate → apply → rollback (live).
     // Covers @unique(map), @@index(map, include, filter) end to end against SQL Server.
@@ -360,6 +454,16 @@ async function main() {
     await setup._executeRaw(`IF OBJECT_ID('dbo.${orderTable}', 'U') IS NOT NULL DROP TABLE ${orderTableSql}`).catch(() => {});
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTable}', 'U') IS NOT NULL DROP TABLE ${migrationTableSql}`).catch(() => {});
     await setup._executeRaw(`IF OBJECT_ID('dbo.${migrationTableB}', 'U') IS NOT NULL DROP TABLE ${migrationTableBSql}`).catch(() => {});
+    for (const table of concurrentMigrationTables) {
+      await setup._executeRaw(`IF OBJECT_ID('dbo.${table}', 'U') IS NOT NULL DROP TABLE [dbo].${q(table)}`).catch(() => {});
+    }
+    if (await tableExists(setup, '_an5_migrations').catch(() => false)) {
+      await setup.$executeRawUnsafe(
+        `DELETE FROM [dbo].[_an5_migrations] WHERE [id] IN (@p_0, @p_1, @p_2, @p_3)`,
+        ...migrationIds,
+        ...concurrentMigrationIds,
+      ).catch(() => {});
+    }
     await setup._executeRaw(`IF OBJECT_ID('dbo.an5_orm_idx_${suffix}', 'U') IS NOT NULL DROP TABLE [dbo].[an5_orm_idx_${suffix}]`).catch(() => {});
     await setup._executeRaw(`IF OBJECT_ID('dbo.${userTable}', 'U') IS NOT NULL DROP TABLE ${userTableSql}`).catch(() => {});
     await setup.$disconnect().catch(() => {});
