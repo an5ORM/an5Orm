@@ -12,6 +12,7 @@ Runtime database connections, query building, transactions, and multi-database d
 
 - **Schema Definition:** Define models and relationships using concise `.an5` syntax with native database types.
 - **Multi-Language Generator:** Generate typed clients and entity models for TypeScript, Python, .NET (C#), Golang, Rust, Java, Kotlin, and Swift.
+- **Typed Query Surface:** Generated clients include relation filters (`some`/`none`/`every`, `is`/`isNot`), case-insensitive `mode`, `groupBy` HAVING filters, per-field `_count`, eager `include` pagination, and read-only view clients.
 - **Database Introspection (`db:pull`):** Inspect an existing database schema and generate matching `.an5` models.
 - **Direct Schema Push (`db:push`):** Synchronize `.an5` schema definitions directly to the database.
 - **Automated Migrations (`db:migrate`):** Diff schema against database, generate up/down migration SQL scripts, apply, rollback, and check migration status.

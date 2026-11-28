@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.4.0] - 2026-11-28
+
+### Added
+- **Typed relation filters in every generated client** — `ListRelationFilter` (`some`, `none`, `every`) for to-many relations and `RelationFilter` (`is`, `isNot`) for to-one relations in TypeScript, Python, .NET, Go, Rust, Java, Kotlin and Swift. Generated metadata now carries relation names, target models, foreign/local keys and `relationType`, so the runtime can build the correlated `EXISTS` query.
+- **Case-insensitive string filters** — generated string filters expose `mode: 'insensitive'` (TypeScript, Go, Rust, .NET, Java, Kotlin and Swift; Python accepts the same key in filter dictionaries). PostgreSQL uses `ILIKE`; the other dialects compare `LOWER(...)`.
+- **`groupBy` HAVING filters** — generated `GroupByArgs.having` and `<Model>AggregateHavingInput` accept aggregate filters (`_count`, `_sum`, `_avg`, `_min`, `_max`), grouped scalar fields, and `AND`/`OR`/`NOT`.
+- **Per-field and filtered `_count`** — generated `_count` types select individual fields and relations, and `include._count` accepts `where` filters in every client.
+- **Eager `include` parity for .NET, Go and Python** — nested relation selection, pagination and `_count`, plus `findUnique` query overloads in Java, Kotlin and Swift.
+- **Rust query parity** — `aggregate`, `upsert`, batch mutations, nested `include`/`_count`, and `rename = "in"` support on `in_list`.
+- **SQLite offset pagination** in the generated Go and Rust clients.
+
+### Changed
+- Generated TypeScript `_count` results keep their filtered types instead of widening to `number`.
+- Where validation rejects unknown fields, operators and invalid `mode` values instead of ignoring them. Python filter dataclasses and snake_case query keys are accepted; Swift compares `NSNull` explicitly.
+
+### Fixed
+- Nested `not` filters inherit the outer `mode: 'insensitive'` and can override it locally.
+- `select` is preserved when combined with `include`, and relation includes apply `take`/`skip` once per relation.
+- Java, Kotlin and Swift generators no longer collide with a model field named `_count`.
+
 ## [1.3.7] - 2026-11-15
 
 ### Added
