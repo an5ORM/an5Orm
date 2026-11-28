@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.0] - 2026-11-28
 
 ### Added
 - **PostgreSQL migrations** — `db:migrate` now introspects PostgreSQL tables, columns, views and indexes, generates PostgreSQL-specific DDL and rollback SQL, and records migration checksums in `_an5_migrations`.

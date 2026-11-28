@@ -346,14 +346,18 @@ test('providerForProject reads the provider from the project config', () => {
 test('providerForProject works from a relative directory too', () => {
   // `require` reads a bare specifier as a package name, so the loader has to
   // resolve the path itself or a relative `cwd` silently loses the config.
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'an5-relative-'));
-  fs.writeFileSync(
-    path.join(project, 'an5Orm.config.js'),
-    "module.exports = { schemaDir: 'schema', connectionString: 'sqlite://./local.db' };\n",
-  );
-  const relative = path.relative(process.cwd(), project);
-  assert.ok(!path.isAbsolute(relative));
-  assert.equal(providerForProject(relative, {}), 'sqlite');
+  const project = fs.mkdtempSync(path.join(process.cwd(), '.an5-relative-'));
+  try {
+    fs.writeFileSync(
+      path.join(project, 'an5Orm.config.js'),
+      "module.exports = { schemaDir: 'schema', connectionString: 'sqlite://./local.db' };\n",
+    );
+    const relative = path.relative(process.cwd(), project);
+    assert.ok(!path.isAbsolute(relative));
+    assert.equal(providerForProject(relative, {}), 'sqlite');
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
 });
 
 test('providerForProject falls back to SQL Server instead of throwing', () => {
